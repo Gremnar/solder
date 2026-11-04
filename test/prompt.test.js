@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "17dd2b77f71c5c3a";
+const PINNED = "eef03db9f6d8f7f5";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -19,7 +19,7 @@ const SAMPLES = {
 };
 const RESULT_SAMPLES = {
   error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
-  notText: [["a.bin"]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
+  notText: [["a.bin"]], outlineHead: [["a.js", 412], ["b.js", 1]], outlineCapped: [[52]], noOutline: [["a.txt", 3]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
   notFound: [["a.js", 0], ["a.js", 7]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
@@ -59,7 +59,7 @@ test("the model-facing texts match the pinned fingerprint", () => {
 test("the tools: a fixed order, every argument described and typed, required ones defined", () => {
   const definitions = toolDefinitions();
   assert.deepEqual(definitions.map((d) => d.function.name),
-    ["read_file", "search", "find_files", "edit_file", "write_file", "remove_item", "problems"]);
+    ["read_file", "outline", "search", "find_files", "edit_file", "write_file", "remove_item", "problems"]);
   assert.deepEqual(toolDefinitions(), definitions, "the same every time");
   for (const { type, function: fn } of definitions) {
     assert.equal(type, "function");

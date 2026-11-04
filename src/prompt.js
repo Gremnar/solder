@@ -17,8 +17,8 @@ something needs building, testing or running, say what to run and the user will.
 
 # How to work
 - If the question doesn't need the workspace, just answer.
-- Look with read_file, search and find_files; change files with edit_file and write_file; check your work \
-with problems (VS Code's errors and warnings). remove_item deletes a file or folder, and asks the user first.
+- Look with read_file, outline, search and find_files; change files with edit_file and write_file; check your \
+work with problems (VS Code's errors and warnings). remove_item deletes a file or folder, and asks the user first.
 - A working folder or open file named in the user's message tells you where they are, not what to do: read \
 it only when the request is about it.
 - Read only what the task needs. Start from what the user named, their selection or the active file.
@@ -29,8 +29,8 @@ and the user can undo them; after each edit you'll see any new problems in that 
 before moving on.
 - Calls in one reply run in order and stop at the first that fails or is declined (a failed read doesn't \
 stop later reads). Make several at once only when you already know everything each one needs.
-- Every result is sent again with each later step, so keep outputs small: search before reading, and read \
-ranges of big files.
+- Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
+big file you haven't seen, get its outline and read only the lines you need.
 - If a change could lose the user's work, or the request is unclear, ask first.
 
 # How to answer
@@ -63,10 +63,14 @@ const RELATIVE = "a path relative to the workspace folder, or a full path";
 /** name → [description, {argument: schema}, required[]] */
 const TOOLS = {
   read_file: ["Returns a text file with line numbers (unsaved changes in the editor included). Up to 2,000 \
-lines at a time: for a longer file, ask for a range.", {
+lines at a time: for a longer file, ask for a range (outline shows where things are).", {
     path: { type: "string", description: `The file: ${RELATIVE}.` },
     start_line: { type: "integer", description: "The first line to return (lines are numbered from 1)." },
     end_line: { type: "integer", description: "The last line to return." },
+  }, ["path"]],
+  outline: ["Returns a file's structure from VS Code's language support: its classes, functions, methods \
+and so on, nested, each with its line range. Much smaller than the file: use it to find the lines to read.", {
+    path: { type: "string", description: `The file: ${RELATIVE}.` },
   }, ["path"]],
   search: ["Searches file contents in the workspace (respecting .gitignore) and returns matching lines as \
 path:line: text, up to 200.", {
@@ -99,7 +103,7 @@ linters), for one file or the whole workspace.", {
 };
 
 /** Tools that only look: more of them fit in one reply, and one failing doesn't stop the rest. */
-const READ_ONLY = new Set(["read_file", "search", "find_files", "problems"]);
+const READ_ONLY = new Set(["read_file", "outline", "search", "find_files", "problems"]);
 
 /** The tools array, in a fixed order. */
 function toolDefinitions() {
@@ -161,6 +165,13 @@ const RESULTS = {
   readPart: (/** @type {number} */ start, /** @type {number} */ end, /** @type {number} */ total) =>
     `(lines ${start}–${end} of ${total}; ask for a range for more)`,
   readEmpty: "(the file is empty)",
+  outlineHead: (/** @type {string} */ file, /** @type {number} */ lines) =>
+    `${file}: ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}. Each entry: kind, name, lines.`,
+  outlineCapped: (/** @type {number} */ more) =>
+    `(${more.toLocaleString("en-US")} more entries left out; read a range to see the rest of that part)`,
+  noOutline: (/** @type {string} */ file, /** @type {number} */ lines) => `VS Code has no outline for ${file} (no \
+language support for this kind of file, or nothing in it to list). It has ${lines.toLocaleString("en-US")} \
+line${lines === 1 ? "" : "s"}: read it, or a range of it.`,
   longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
     `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown; use search to find text in it)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>

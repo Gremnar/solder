@@ -16,6 +16,9 @@ const MAX_OUTPUT_CHARS = 30_000;
 const MAX_SEARCH_LINES = 200;
 const MAX_FOUND = 300;
 const DIAGNOSTICS_WAIT_MS = 2500;
+const MAX_OUTLINE = 400;
+/** A language server that's still starting answers with nothing: how long to keep asking. */
+const OUTLINE_WAITS_MS = [500, 1000, 1500];
 const MAX_REMOVE_BACKUP_BYTES = 200 * 1024 * 1024;
 const MAX_REMOVE_BACKUP_FILES = 20_000;
 
@@ -27,6 +30,8 @@ class WorkspaceTools {
     this.context = context;
     /** @type {string | null | undefined} */
     this._rg = undefined;
+    /** Languages whose symbol provider has answered: an empty outline from them is real, not a slow start. */
+    this._outlined = new Set();
     /** The chat's working folder, relative to the workspace folder ("" for the workspace folder itself). */
     this.folder = "";
   }
@@ -87,6 +92,7 @@ class WorkspaceTools {
     try {
       switch (name) {
         case "read_file": return await this.readFile(args, ctx.chat);
+        case "outline": return await this.outline(args);
         case "search": return await this.search(args, ctx.signal);
         case "find_files": return await this.findFiles(args);
         case "edit_file": return await this.editFile(args, ctx.chat);
@@ -161,6 +167,47 @@ class WorkspaceTools {
       folder = path.dirname(folder);
     }
     return notes.join("\n\n");
+  }
+
+  // -------------------------------------------------------------------- outline --
+
+  async outline(/** @type {any} */ args) {
+    const file = this.resolve(args.path);
+    await this.mustBeFile(file);
+    let document;
+    try {
+      document = await vscode.workspace.openTextDocument(file.uri); // opening it wakes its language support
+    } catch {
+      throw new ToolError(RESULTS.notText(file.shown));
+    }
+    const symbols = await this.symbolsOf(document);
+    const entries = outlineEntries(symbols, (kind) => vscode.SymbolKind[kind] ?? "Symbol");
+    if (!entries.length) {
+      return { output: RESULTS.noOutline(file.shown, document.lineCount), summary: `Outline of ${file.shown} · none` };
+    }
+    const shown = entries.slice(0, MAX_OUTLINE);
+    const more = entries.length - shown.length;
+    return { output: RESULTS.outlineHead(file.shown, document.lineCount) + "\n" + shown.join("\n")
+      + (more > 0 ? "\n" + RESULTS.outlineCapped(more) : ""),
+      summary: `Outline of ${file.shown} · ${entries.length} entr${entries.length === 1 ? "y" : "ies"}` };
+  }
+
+  /** The document's symbols from VS Code's providers, giving a cold language server a few seconds. */
+  async symbolsOf(/** @type {vscode.TextDocument} */ document) {
+    const ready = this._outlined.has(document.languageId) || document.languageId === "plaintext";
+    for (let attempt = 0; ; attempt++) {
+      /** @type {any} */
+      let result;
+      try {
+        result = await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", document.uri);
+      } catch { result = undefined; }
+      if (Array.isArray(result) && result.length) {
+        this._outlined.add(document.languageId);
+        return result;
+      }
+      if (ready || attempt >= OUTLINE_WAITS_MS.length) return [];
+      await new Promise((resolve) => setTimeout(resolve, OUTLINE_WAITS_MS[attempt]));
+    }
   }
 
   // --------------------------------------------------------------------- search --
@@ -451,6 +498,35 @@ class WorkspaceTools {
   }
 }
 
+/**
+ * Outline lines from DocumentSymbol trees (nested, indented) or flat SymbolInformation lists, in file
+ * order: "  method start 20–45". A function's own variables are left out (noise); nesting stops at
+ * three levels. @param {any[]} symbols @param {(kind: number) => string} kindName @returns {string[]}
+ */
+function outlineEntries(symbols, kindName) {
+  /** @type {string[]} */
+  const out = [];
+  const rangeOf = (/** @type {any} */ symbol) => symbol.range ?? symbol.location?.range;
+  const LOCAL = new Set(["Variable", "Constant", "Property", "Field", "Key", "String", "Number", "Boolean", "Array", "Object", "Null"]);
+  const BODY = new Set(["Function", "Method", "Constructor"]);
+  const walk = (/** @type {any[]} */ list, /** @type {number} */ depth, /** @type {string} */ parent) => {
+    const sorted = list.filter((symbol) => symbol && rangeOf(symbol))
+      .sort((a, b) => rangeOf(a).start.line - rangeOf(b).start.line);
+    for (const symbol of sorted) {
+      const kind = String(kindName(symbol.kind));
+      if (BODY.has(parent) && LOCAL.has(kind)) continue;
+      const range = rangeOf(symbol);
+      const first = range.start.line + 1;
+      const last = range.end.line + 1;
+      const name = String(symbol.name ?? "").replace(/\s+/g, " ").trim().slice(0, 100) || "(unnamed)";
+      out.push(`${"  ".repeat(depth)}${kind.toLowerCase()} ${name} ${last > first ? `${first}–${last}` : first}`);
+      if (Array.isArray(symbol.children) && symbol.children.length && depth < 2) walk(symbol.children, depth + 1, kind);
+    }
+  };
+  walk(symbols, 0, "");
+  return out;
+}
+
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
 function within(full, folder) {
   const a = path.resolve(full).toLowerCase();
@@ -540,4 +616,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError };
+module.exports = { WorkspaceTools, ToolError, outlineEntries };

@@ -9,7 +9,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 6 tools: read, search, find, edit, write, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
+| 8 tools: read, outline, search, find, edit, write, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
@@ -34,7 +34,7 @@ VS Code extension host (Node)
 ├─ src/gateway.js       the HTTP client (done, tested)
 ├─ src/prompt.js        system prompt, tool definitions, every fixed text the model sees
 ├─ src/store.js         chats saved as JSON per workspace
-├─ src/tools.js         the 6 tools, on the vscode API (the Host the engine calls)
+├─ src/tools.js         the tools, on the vscode API (the Host the engine calls)
 └─ media/               panel.html / panel.css / panel.js: plain DOM, strict CSP, no frameworks
 ```
 
@@ -45,11 +45,12 @@ VS Code extension host (Node)
 - **The panel is a client of engine state.** The webview holds no truth: it renders what the extension posts, and it can be rebuilt from the saved chat at any time. VS Code's Agent Host Protocol uses the same split, which keeps a later AHP adapter possible (see [below](#vs-codes-agent-host-protocol-ahp)).
 - **Placement.** Contribute a view container to the activity bar. Users can drag it to the secondary side bar, where it stays, and the README says how.
 
-## The 6 tools
+## The tools
 
 | Tool | Arguments | Built on | Approval |
 |---|---|---|---|
 | `read_file` | path, start_line?, end_line? | `workspace.openTextDocument` (it sees **unsaved** edits), with line numbers. 2,000 lines or 30k characters at most per read | none |
+| `outline` | path | `vscode.executeDocumentSymbolProvider`: classes, functions and methods, nested, with line ranges (400 entries at most; a cold language server gets a few seconds). With no language support it says so, and the model reads instead | none |
 | `search` | query, regex?, glob? | VS Code's bundled ripgrep (see below), JS fallback | none |
 | `find_files` | glob | `workspace.findFiles`, which respects `files.exclude` and `.gitignore` | none |
 | `edit_file` | path, old_text, new_text | one `WorkspaceEdit`, then save. `old_text` must be unique. Keeps the file's line endings. Accepts a match that differs only in trailing whitespace | none (Undo kept) |
