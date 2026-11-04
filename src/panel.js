@@ -33,6 +33,7 @@ class SolderPanel {
     this.live = "";        // the answer streaming in
     this.status = "";      // "Thinking…", "Retrying…"
     this.running = "";     // the call that's running
+    this.runningSince = 0; // when it started
     /** @type {any[]} */
     this.approvals = [];
     /** @type {any} */
@@ -159,7 +160,8 @@ class SolderPanel {
       case "compacting": this.status = "Summarising the older part of this chat to save tokens…"; break;
       case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; break;
       case "message": this.live = ""; this.running = ""; break;
-      case "running": this.running = event.id; this.status = ""; break;
+      case "running": this.running = event.id; this.runningSince = Date.now(); this.status = ""; break;
+      case "titled": break; // the new title goes out with the state below
       case "approval": this.approvals.push(event); break;
       case "approval-done": this.approvals = this.approvals.filter((a) => a.id !== event.id); break;
       case "usage": this.answerTokens = event.answer; this.credits = event.credits || this.credits; this.updateStatusBar(); break;
@@ -184,6 +186,24 @@ class SolderPanel {
       case "stop": this.engine.stop(); return;
       case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
+      case "unsteer": {
+        // Taken back before it went: back into the box, to change or send later.
+        const text = this.engine.unsteer(Number(message.index));
+        this.post();
+        if (text) this.view?.webview.postMessage({ type: "restore", text });
+        return;
+      }
+      case "rename": {
+        if (this.chat.title === "New chat" && !this.chat.messages.length) return;
+        const title = await vscode.window.showInputBox({ title: "Rename this chat", value: this.chat.title,
+          validateInput: (value) => value.trim() ? null : "A chat needs a name." });
+        if (!title?.trim()) return;
+        this.chat.title = title.trim().slice(0, 120);
+        this.chat.titleSource = "user"; // never renamed automatically again
+        await this.store.save(this.chat);
+        this.post();
+        return;
+      }
       case "new":
         if (!this.engine.busy) {
           const folder = this.chat.folder || "";
@@ -341,7 +361,7 @@ class SolderPanel {
       error: this.error,
       answerTokens: this.answerTokens,
       credits: this.credits,
-      steers: this.engine.steers.length,
+      steers: [...this.engine.steers],
       workspace: !!this.tools.root(),
     });
   }
@@ -386,10 +406,15 @@ class SolderPanel {
         const meta = message.meta || {};
         Object.assign(step, { pending: false, summary: meta.summary, failed: !!meta.failed,
           output: message.content.length > SHOWN_OUTPUT_CHARS ? message.content.slice(0, SHOWN_OUTPUT_CHARS) + "\n…" : message.content,
-          change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, undone: !!meta.undone, steer: meta.steer || "" });
+          change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, undone: !!meta.undone, steer: meta.steer || "",
+          ms: typeof meta.ms === "number" ? meta.ms : null });
       }
     }
-    for (const step of steps.values()) if (step.pending) step.running = step.id === this.running;
+    for (const step of steps.values()) {
+      if (!step.pending) continue;
+      step.running = step.id === this.running;
+      if (step.running) step.since = this.runningSince; // the panel shows a clock on it
+    }
     return items;
   }
 

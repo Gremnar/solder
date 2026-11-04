@@ -168,6 +168,8 @@ full history. Keep my goals and preferences, key facts, decisions and conclusion
 file names, numbers or exact values that may matter later. Note which files were changed and how. Be concise but \
 complete, use short headings and bullet points, and reply with only the summary.",
   compactionTranscript: "Here's our conversation so far, as a transcript:",
+  titleRequest: (/** @type {string} */ excerpt) => "Give a short title, two to four words, for a chat that begins like \
+this. Reply with only the title, without quotes.\n\n" + excerpt,
   compactionSystem: "You write concise, complete summaries of coding conversations.",
 };
 

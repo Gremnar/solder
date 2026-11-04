@@ -30,7 +30,11 @@ const STUB_MIN_CHARS = 2_000;
 const MAX_BATCH = 5;
 const MAX_READ_BATCH = 8;
 const WRAP_UP_ROUNDS = 3;
-const RETRY_DELAYS_MS = [2000]; // before the one resend of a failure the model may have seen
+const RETRY_DELAYS_MS = [2000];
+/** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
+const TITLE_AFTER = [1, 3];
+const TITLE_EXCERPT_CHARS = 1_500;
+const TITLE_TIMEOUT_MS = 90_000; // before the one resend of a failure the model may have seen
 
 /** @param {string} text */
 function estimate(text) {
@@ -41,8 +45,9 @@ function estimate(text) {
  * @typedef {{role: string, content: string, tool_calls?: any[], tool_call_id?: string, meta?: any}} Stored
  * @typedef {{id: string, title: string, created: number, updated: number, messages: Stored[],
  *            compaction: {through: number, summary: string} | null, usage: {tokens: number},
- *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number}} Chat
- * @typedef {{output: string, summary: string, failed?: boolean, change?: any, keep?: string}} ToolResult
+ *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number,
+ *            titleSource?: "auto" | "user", titledAt?: number}} Chat
+ * @typedef {{output: string, summary: string, failed?: boolean, change?: any, keep?: string, ms?: number}} ToolResult
  *   keep: text that rides with the output but isn't output (a folder's AGENTS.md): never cut away
  * @typedef {{
  *   systemPrompt(chat: Chat): Promise<string>,
@@ -143,6 +148,11 @@ class Engine {
     if (text.trim()) this.steers.push(text.trim());
   }
 
+  /** Take back a queued message before it goes. @param {number} index @returns {string} its text, or "" */
+  unsteer(index) {
+    return this.steers.splice(index, 1)[0] ?? "";
+  }
+
   /** @param {Chat} chat @param {(signal: AbortSignal) => Promise<void>} start */
   async _run(chat, start) {
     if (this.busy) throw new Error("Solder is already working on a reply.");
@@ -212,6 +222,7 @@ class Engine {
       this.emit({ type: "message", chat: chat.id });
       if (!reply.calls.length) {
         this.emit({ type: "done", chat: chat.id });
+        this._title(chat);
         return;
       }
       rounds += 1;
@@ -266,6 +277,7 @@ class Engine {
       /** @type {Stored} */
       const message = { role: "tool", tool_call_id: call.id, content: result.keep ? output + "\n\n" + result.keep : output,
         meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.keep ? { keep: result.keep } : {}),
+          ...(result.ms !== undefined ? { ms: result.ms } : {}),
           ...(result.change ? { change: result.change } : {}) } };
       chat.messages.push(message);
       added.push(message);
@@ -312,12 +324,14 @@ class Engine {
       }
     }
     this.emit({ type: "running", chat: chat.id, id, label });
+    const began = Date.now();
     let result;
     try {
       result = await this.host.runTool(name, args, { chat, signal });
     } catch (error) {
       result = { output: "Error: " + (error instanceof Error ? error.message : String(error)), summary: label + " failed", failed: true };
     }
+    result = { ...result, ms: Date.now() - began };
     if (note) {
       result = { ...result, keep: [result.keep, TEXTS.userNote(note)].filter(Boolean).join("\n\n"),
         summary: result.summary + " · with your note" };
@@ -410,6 +424,37 @@ class Engine {
     chat.compaction = { through: cut, summary: reply.content.trim() };
     await this._save(chat);
     this.emit({ type: "compacted", chat: chat.id, through: cut });
+  }
+
+  /**
+   * Name the chat from what's been said, after its first and third answers: one request of its own,
+   * holding only an excerpt (no history, no tools; the model is stateless, so nothing else is needed).
+   * Not awaited, silent if it fails, and never once you've renamed the chat yourself.
+   * @param {Chat} chat
+   */
+  _title(chat) {
+    const answers = chat.messages.filter((m) => m.role === "assistant" && !m.tool_calls?.length && !m.meta?.incomplete
+      && m.content.trim()).length;
+    if (chat.titleSource === "user" || !TITLE_AFTER.includes(answers) || (chat.titledAt ?? 0) >= answers) return;
+    const excerpt = titleExcerpt(chat.messages);
+    if (!excerpt) return;
+    chat.titledAt = answers;
+    const settings = this.settings();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
+    Promise.resolve().then(() => this.client.reply({ model: chat.model || settings.model, signal: controller.signal,
+      messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
+      .then(async (/** @type {any} */ reply) => {
+        chat.usage.tokens += reply.usage?.total_tokens || 0;
+        const title = cleanTitle(reply.content || "");
+        if (!title || chat.titleSource === "user" || title === chat.title) return;
+        chat.title = title;
+        chat.titleSource = "auto";
+        await this._save(chat);
+        this.emit({ type: "titled", chat: chat.id, title });
+      })
+      .catch(() => {}) // a name isn't worth an error
+      .finally(() => clearTimeout(timer));
   }
 
   /** Answer every call still owed one (a reply that stopped mid-batch). @param {Chat} chat @param {string} why */
@@ -581,6 +626,39 @@ function labelOf(/** @type {string} */ name, /** @type {any} */ args) {
   return shown ? `${name} ${shown.length > 80 ? shown.slice(0, 79) + "…" : shown}` : name;
 }
 
+/** The start of a chat for naming it: what you typed and the start of each answer (no tools, no files). @param {Stored[]} messages */
+function titleExcerpt(messages) {
+  const lines = [];
+  let used = 0;
+  for (const message of messages) {
+    let text = "";
+    let speaker = "";
+    let cap = 0;
+    if (message.role === "user" && !message.meta?.resume) { text = message.meta?.typed ?? message.content; speaker = "Me"; cap = 600; }
+    else if (message.role === "assistant" && !message.tool_calls?.length && message.content.trim()) { text = message.content; speaker = "Assistant"; cap = 300; }
+    else continue;
+    text = text.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    if (text.length > cap) text = text.slice(0, cap) + "…";
+    const room = TITLE_EXCERPT_CHARS - used;
+    if (room <= 40) break;
+    const line = `${speaker}: ${text}`.slice(0, room);
+    lines.push(line);
+    used += line.length;
+  }
+  return lines.join("\n");
+}
+
+/** A usable title from the model's reply (two to eight words, no quotes or "Title:"), or "" to keep the old one. @param {string} reply */
+function cleanTitle(reply) {
+  let line = reply.split(/\r?\n/).find((l) => l.trim()) ?? "";
+  line = line.replace(/^\s*(?:(?:#+|\*+|_+)\s*|title\s*:\s*)+/i, "");
+  line = line.trim().replace(/^[*_`"'“”‘’]+|[*_`"'“”‘’]+$/g, "").trim();
+  line = line.replace(/[.!?:;,]+$/, "").replace(/\s+/g, " ").trim();
+  const words = line ? line.split(" ").length : 0;
+  return line && line.length <= 60 && words >= 1 && words <= 8 ? line : "";
+}
+
 function titleFrom(/** @type {string} */ text) {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > 60 ? line.slice(0, 59) + "…" : line || "New chat";
@@ -645,5 +723,5 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf,
+module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt,
   KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

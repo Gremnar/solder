@@ -147,8 +147,14 @@
       }
     }
     if (state.busy) {
+      const stepRunning = items.some((/** @type {any} */ i) => i.kind === "step" && i.running);
       if (reveal.shown) parts.push(`<div class="answer" id="live">${markdown(closeOpenMarks(reveal.shown))}</div>`);
-      else parts.push(`<div class="status" id="status"><span class="spinner"></span><span>${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
+      else if (!stepRunning || state.status) parts.push(`<div class="status" id="status"><span class="spinner"></span><span>${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
+    }
+    // 2. What you typed meanwhile, waiting to go with the next step (✕ takes it back into the box).
+    for (const [index, text] of (state.busy ? state.steers || [] : []).entries()) {
+      parts.push(`<div class="user queued">${escape(text)}<div class="queued-note"><span>Goes with the next step</span>` +
+        `<button data-unsteer="${index}" title="Take it back (into the box)" aria-label="Take it back">✕</button></div></div>`);
     }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
     transcript.innerHTML = parts.join("");
@@ -164,8 +170,11 @@
       ? `<span class="acts">${item.removed ? "" : `<button data-review="${item.id}">Review</button>`}${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
     const label = item.pending ? item.label : (item.summary || item.label) + (item.undone ? " · undone" : "");
     const body = open.has(item.id) && item.output ? `<pre class="out"><code>${escape(item.output)}</code></pre>` : "";
+    const time = item.running && item.since ? `<span class="time" data-since="${item.since}">${elapsed(Date.now() - item.since)}</span>`
+      : !item.pending && item.ms >= 1000 ? `<span class="time" title="How long this step took">${duration(item.ms)}</span>` : "";
+    const steered = item.steer ? `<div class="steered"><span class="who">You, with this step</span>${escape(item.steer)}</div>` : "";
     return `<div class="step ${cls}${item.undone ? " undone" : ""}"><div class="step-head" data-step="${item.id}" role="button" tabindex="0">` +
-      `<span class="mark">${mark}</span><span class="label" title="${escape(label)}">${escape(label)}</span>${acts}</div>${body}</div>`;
+      `<span class="mark">${mark}</span><span class="label" title="${escape(label)}">${escape(label)}</span>${time}${acts}</div>${body}${steered}</div>`;
   }
 
   function welcome() {
@@ -198,10 +207,8 @@
       banner.innerHTML = `<span class="msg">${escape(state.error.message)}` +
         (state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
         (state.error.resumable ? `<button data-action="resume">Resume</button>` : "");
-    } else if (state.busy && state.steers) {
-      banner.className = "banner soft";
-      banner.innerHTML = `<span class="msg">Your message goes with the next step.</span>`;
     } else banner.className = "banner hidden";
+    input.placeholder = state.busy ? "Add to this: it goes with the next step…" : "Ask Solder to read or change your code…";
     // chips
     const chips = [];
     if (state.workspace) {
@@ -225,12 +232,24 @@
     // send / stop
     $("send").classList.toggle("hidden", state.busy && !input.value.trim());
     $("stop").classList.toggle("hidden", !state.busy);
-    $("send").title = state.busy ? "Send with the next step" : "Send (Enter)";
+    $("send").title = state.busy ? "Send with the next step (Enter)" : "Send (Enter)";
     // footer
     const footer = [];
     if (state.chat.tokens) footer.push(`<span title="Tokens this chat has used">${compact(state.chat.tokens)} tokens</span>`);
     if (state.credits) footer.push(`<span title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">${compact(state.credits.remaining)} left</span>`);
     $("footer").innerHTML = footer.join("");
+  }
+
+  /** A finished step's time: "1.4s", "12s", "1:05". @param {number} ms */
+  function duration(ms) {
+    const s = ms / 1000;
+    return s < 10 ? s.toFixed(1) + "s" : s < 60 ? Math.round(s) + "s" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+  }
+
+  /** A running step's clock, from the first second: "3s", "1:05". @param {number} ms */
+  function elapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    return s < 1 ? "" : s < 60 ? s + "s" : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
 
   /** @param {string} file */
@@ -256,6 +275,9 @@
 
   // the "Thinking…" clock: after 15 s of quiet, show how long it's been
   setInterval(() => {
+    for (const time of document.querySelectorAll(".step .time[data-since]")) {
+      time.textContent = elapsed(Date.now() - Number(/** @type {HTMLElement} */ (time).dataset.since));
+    }
     const clock = document.querySelector("#status .clock");
     if (!clock) return;
     const seconds = Math.floor((Date.now() - thinkingSince) / 1000);
@@ -436,7 +458,7 @@
 
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-step],code.path,pre .copy"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -446,6 +468,7 @@
     else if (d.level) vscode.postMessage({ type: "effort", level: d.level });
     else if (d.chip) { chipsOn[/** @type {"file"|"selection"} */ (d.chip)] = !chipsOn[/** @type {"file"|"selection"} */ (d.chip)]; renderComposer(); }
     else if (d.undo) vscode.postMessage({ type: "undo", id: d.undo });
+    else if (d.unsteer !== undefined) vscode.postMessage({ type: "unsteer", index: Number(d.unsteer) });
     else if (d.review) vscode.postMessage({ type: "review", id: d.review });
     else if (d.decide) {
       const card = /** @type {HTMLElement} */ (el.closest(".approval"));

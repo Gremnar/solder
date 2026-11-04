@@ -439,3 +439,41 @@ test("ids reused across turns are made unique, so every call gets its own answer
   const answers = chat.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id);
   assert.deepEqual(answers, ["call_0", "call_0_2"], "the second, stopped at the limit, is answered too");
 });
+
+test("the chat is named by a request of its own after the 1st and 3rd answers; never once you've renamed it", async () => {
+  const titled = [];
+  const answers = [{ content: "first answer" }, (req) => { titled.push(req); return { content: "**Title:** Cart Rounding Fix." }; },
+    { content: "second answer" }, { content: "third answer" }, (req) => { titled.push(req); return { content: "Cart totals and tests" }; },
+    { content: "fourth" }, { content: "fifth" }];
+  const client = fakeClient(answers);
+  const chat = Engine.newChat();
+  const events = [];
+  const e = engine(client, fakeHost(), events);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  await e.ask(chat, "fix the rounding in cartTotal please"); await settle();
+  assert.equal(chat.title, "Cart Rounding Fix");
+  assert.equal(titled[0].messages.length, 1, "no history, no system prompt: just the excerpt");
+  assert.ok(!titled[0].tools, "no tools");
+  assert.match(titled[0].messages[0].content, /^Give a short title[\s\S]*\n\nMe: fix the rounding in cartTotal please\nAssistant: first answer$/);
+  assert.ok(events.some((x) => x.type === "titled"));
+  await e.ask(chat, "two"); await settle();
+  await e.ask(chat, "three"); await settle();
+  assert.equal(chat.title, "Cart totals and tests");
+  chat.titleSource = "user";
+  chat.titledAt = 0;
+  await e.ask(chat, "four"); await settle();
+  assert.equal(titled.length, 2, "renamed by you: never again");
+});
+
+test("each step records how long it took; a queued message can be taken back", async () => {
+  const host = fakeHost({ tools: { problems: () => new Promise((resolve) => setTimeout(() => resolve({ output: "ok", summary: "ok" }), 30)) } });
+  const client = fakeClient([{ calls: [call("1", "problems", {})] }, { content: "done" }]);
+  const chat = Engine.newChat();
+  const e = engine(client, host);
+  await e.ask(chat, "go");
+  assert.ok(chat.messages.find((m) => m.role === "tool").meta.ms >= 25);
+  e.steer("one"); e.steer("two");
+  assert.equal(e.unsteer(0), "one");
+  assert.deepEqual(e.steers, ["two"]);
+  assert.equal(e.unsteer(5), "");
+});
