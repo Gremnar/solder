@@ -7,29 +7,45 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { RULES, TOOLS, READ_ONLY, TEXTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
+const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "9f5eb9c16f1f513e";
+const PINNED = "db377d87864c7119";
+
+/** Sample arguments for every text that's a function: name → a list of argument lists. */
+const SAMPLES = {
+  notRunBatch: [[5]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]], missing: [["edit_file", "path"]],
+  wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
+  wrapUp: [[0], [1], [3]], steer: [["STEER"]], stub: [["SUMMARY"]],
+};
+const RESULT_SAMPLES = {
+  error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
+  notText: [["a.bin"]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
+  searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
+  notFound: [["a.js", 0], ["a.js", 7]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
+  written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
+  noProblems: [[""], ["a.js"]], moreProblems: [[4]], removeNoTrash: [["big"]], removed: [["a.js", null], ["src", 1], ["src", 1200]],
+};
+
+/** @param {Record<string, any>} group @param {Record<string, any[][]>} samples @param {string} name */
+function filled(group, samples, name) {
+  /** @type {Record<string, string>} */
+  const texts = {};
+  for (const [key, value] of Object.entries(group)) {
+    if (typeof value === "string") { texts[key] = value; continue; }
+    assert.ok(samples[key], `${name}.${key} is a function: add sample arguments for it in this test`);
+    samples[key].forEach((args, index) => { texts[`${key}#${index}`] = value(...args); });
+  }
+  return texts;
+}
 
 /** Every text, with the functions filled in with fixed sample values. */
 function everything() {
-  /** @type {Record<string, string>} */
-  const texts = {};
-  for (const [key, value] of Object.entries(TEXTS)) {
-    if (typeof value === "string") { texts[key] = value; continue; }
-    const fn = /** @type {(...args: any[]) => string} */ (value);
-    const samples = {
-      notRunBatch: [[5]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]], missing: [["edit_file", "path"]],
-      wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
-      wrapUp: [[0], [1], [3]], steer: [["STEER"]], stub: [["SUMMARY"]],
-    }[key];
-    assert.ok(samples, `TEXTS.${key} is a function: add sample arguments for it here`);
-    samples.forEach((args, index) => { texts[`${key}#${index}`] = fn(...args); });
-  }
   return {
     system: systemPrompt({ workspace: "C:\\work", os: "Windows", instructions: [{ path: "AGENTS.md", text: "AGENTS" }], rules: "RULE" }),
+    bare: systemPrompt({ workspace: "C:\\work" }),
     tools: toolDefinitions(),
-    texts,
+    texts: filled(TEXTS, SAMPLES, "TEXTS"),
+    results: filled(RESULTS, RESULT_SAMPLES, "RESULTS"),
     time: timeNote(new Date(2026, 10, 4, 14, 5)),
   };
 }
@@ -75,10 +91,12 @@ test("the system prompt is stable: no time, instructions and rules only when giv
   assert.ok(plain.startsWith(RULES));
   assert.doesNotMatch(plain, /\d{1,2}:\d{2}|20\d\d/, "no time or date in it");
   assert.doesNotMatch(plain, /Project instructions|The user's rules/);
+  assert.match(plain, /There's no project instructions file/, "so the model doesn't go looking for one");
   assert.match(plain, /Workspace folder: C:\\work\./);
   assert.match(systemPrompt({ workspace: "" }), /\(none open\)/);
-  assert.match(systemPrompt({ workspace: "C:\\work", rules: "   " }), /local date and time\.$/, "blank rules add nothing");
+  assert.match(systemPrompt({ workspace: "C:\\work", rules: "   " }), /your first read there\.$/, "blank rules add nothing");
   const full = systemPrompt({ workspace: "C:\\work", instructions: [{ path: "AGENTS.md", text: "\nUse tabs.\n" }], rules: " Be brief. " });
+  assert.doesNotMatch(full, /There's no project instructions file/);
   assert.ok(full.endsWith("# Project instructions (AGENTS.md)\nUse tabs.\n\n# The user's rules\nBe brief."));
 });
 

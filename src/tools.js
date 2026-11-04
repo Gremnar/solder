@@ -1,7 +1,7 @@
 // @ts-check
 "use strict";
 /**
- * The 6 tools, on VS Code's own APIs: documents (so reads see unsaved edits and edits go through the
+ * The tools, on VS Code's own APIs: documents (so reads see unsaved edits and edits go through the
  * editor), its bundled ripgrep, findFiles and diagnostics. No shell is ever started.
  * Every change keeps a backup, so each step can be reviewed (VS Code's diff) and undone.
  */
@@ -9,6 +9,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { RESULTS } = require("./prompt.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -57,7 +58,7 @@ class WorkspaceTools {
   resolve(given) {
     const root = this.root();
     const raw = String(given ?? "").trim().replace(/^["']|["']$/g, "");
-    if (!raw) throw new ToolError("No path was given.");
+    if (!raw) throw new ToolError(RESULTS.noPath);
     const full = path.resolve(this.base() || process.cwd(), raw);
     const inside = !!root && within(full, root);
     return { uri: vscode.Uri.file(full), full, inside, shown: this.shown(full) };
@@ -92,10 +93,10 @@ class WorkspaceTools {
         case "write_file": return await this.writeFile(args, ctx.chat);
         case "remove_item": return await this.removeItem(args, ctx.chat);
         case "problems": return await this.problems(args);
-        default: throw new ToolError(`There's no tool called ${name}.`);
+        default: throw new ToolError(RESULTS.noTool(name));
       }
     } catch (error) {
-      if (error instanceof ToolError) return { output: "Error: " + error.message, summary: `${name}: ${error.message}`, failed: true };
+      if (error instanceof ToolError) return { output: RESULTS.error(error.message), summary: `${name}: ${error.message}`, failed: true };
       throw error;
     }
   }
@@ -109,7 +110,7 @@ class WorkspaceTools {
     try {
       document = await vscode.workspace.openTextDocument(file.uri);
     } catch {
-      throw new ToolError(`${file.shown} couldn't be opened as text (it may be a binary file).`);
+      throw new ToolError(RESULTS.notText(file.shown));
     }
     const total = document.lineCount;
     const start = Math.max(1, Math.min(args.start_line || 1, total));
@@ -124,8 +125,8 @@ class WorkspaceTools {
       size += text.length + 1;
     }
     const partial = start > 1 || end < total;
-    let output = (partial ? `(lines ${start}–${end} of ${total}; ask for a range for more)\n` : "") + lines.join("\n");
-    if (!document.getText().length) output = "(the file is empty)";
+    let output = (partial ? RESULTS.readPart(start, end, total) + "\n" : "") + lines.join("\n");
+    if (!document.getText().length) output = RESULTS.readEmpty;
     const agents = this.nestedAgents(file, chat);
     if (agents) output += "\n\n" + agents;
     return { output, summary: `Read ${file.shown}` + (partial ? ` · lines ${start}–${end} of ${total}` : ` · ${total} lines`) };
@@ -147,7 +148,7 @@ class WorkspaceTools {
         chat.agentsSeen.push(key);
         try {
           const text = fs.readFileSync(candidate, "utf8").slice(0, 20_000).trim();
-          if (text) notes.push(`This folder's ${path.relative(root, candidate).split(path.sep).join("/")} says (it applies to files under it):\n${text}`);
+          if (text) notes.push(RESULTS.folderAgents(path.relative(root, candidate).split(path.sep).join("/"), text));
         } catch { /* unreadable: skip */ }
       }
       folder = path.dirname(folder);
@@ -159,19 +160,19 @@ class WorkspaceTools {
 
   async search(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
     const root = this.base();
-    if (!root) throw new ToolError("No workspace folder is open.");
+    if (!root) throw new ToolError(RESULTS.noWorkspace);
     const rg = this.ripgrep();
     const query = String(args.query);
     let lines = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal)
       : await this.searchInJs(root, query, !!args.regex, args.glob);
     const count = lines.length;
     if (!count) {
-      return { output: `No matches for "${query}"${args.glob ? ` in ${args.glob}` : ""}.`, summary: `Searched "${short(query)}" · no matches` };
+      return { output: RESULTS.noMatches(query, args.glob || ""), summary: `Searched "${short(query)}" · no matches` };
     }
     let note = "";
     if (count > MAX_SEARCH_LINES) {
       lines = lines.slice(0, MAX_SEARCH_LINES);
-      note = `\n\n(The first ${MAX_SEARCH_LINES} matching lines; narrow the search with glob or a longer query.)`;
+      note = "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES);
     }
     return { output: lines.join("\n") + note, summary: `Searched "${short(query)}" · ${count > MAX_SEARCH_LINES ? MAX_SEARCH_LINES + "+" : count} lines` };
   }
@@ -207,13 +208,13 @@ class WorkspaceTools {
       const timer = setTimeout(() => child.kill(), 30_000);
       child.on("error", (error) => {
         clearTimeout(timer);
-        if (signal.aborted) { reject(new ToolError("Stopped.")); return; }
+        if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
         this._rg = null; // blocked or missing: fall back from now on
         this.searchInJs(root, query, regex, glob).then(resolve, reject);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
-        if (code === 2 && !out) { reject(new ToolError(errors.trim().split("\n")[0] || "the search failed")); return; }
+        if (code === 2 && !out) { reject(new ToolError(errors.trim().split("\n")[0] || RESULTS.searchFailed)); return; }
         resolve(out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/")));
       });
     });
@@ -227,7 +228,7 @@ class WorkspaceTools {
       pattern = regex ? new RegExp(query, /[A-Z]/.test(query) ? "" : "i")
         : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), /[A-Z]/.test(query) ? "" : "i");
     } catch (error) {
-      throw new ToolError("That regular expression isn't valid.");
+      throw new ToolError(RESULTS.badRegex);
     }
     const files = await vscode.workspace.findFiles(new vscode.RelativePattern(root, globOf(glob || "**/*")), undefined, 5000);
     const lines = [];
@@ -250,12 +251,12 @@ class WorkspaceTools {
   // ----------------------------------------------------------------- find_files --
 
   async findFiles(/** @type {any} */ args) {
-    if (!this.root()) throw new ToolError("No workspace folder is open.");
+    if (!this.root()) throw new ToolError(RESULTS.noWorkspace);
     const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob))), undefined, MAX_FOUND + 1);
     const shown = uris.map((uri) => this.shown(uri.fsPath)).sort((a, b) => a.localeCompare(b));
-    if (!shown.length) return { output: `No files match ${args.glob}.`, summary: `Found no ${args.glob}` };
+    if (!shown.length) return { output: RESULTS.noFiles(args.glob), summary: `Found no ${args.glob}` };
     const more = shown.length > MAX_FOUND;
-    return { output: shown.slice(0, MAX_FOUND).join("\n") + (more ? `\n\n(The first ${MAX_FOUND}; narrow the glob.)` : ""),
+    return { output: shown.slice(0, MAX_FOUND).join("\n") + (more ? "\n\n" + RESULTS.filesCapped(MAX_FOUND) : ""),
       summary: `Found ${more ? MAX_FOUND + "+" : shown.length} file${shown.length === 1 ? "" : "s"} · ${args.glob}` };
   }
 
@@ -269,14 +270,14 @@ class WorkspaceTools {
     const eol = document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
     const old = toEol(String(args.old_text), eol);
     const replacement = toEol(String(args.new_text), eol);
-    if (!old) throw new ToolError("old_text is empty; use write_file to replace a whole file.");
+    if (!old) throw new ToolError(RESULTS.emptyOldText);
     let start = -1;
     let length = old.length;
     const count = occurrences(text, old);
     if (count === 1) start = text.indexOf(old);
     else if (count > 1) {
       const lines = positions(text, old).map((index) => lineOf(text, index));
-      throw new ToolError(`old_text appears ${count} times in ${file.shown} (at lines ${lines.slice(0, 10).join(", ")}); include more surrounding lines to make it unique.`);
+      throw new ToolError(RESULTS.manyMatches(count, file.shown, lines.slice(0, 10)));
     } else {
       const loose = looseMatch(text, old, eol);
       if (!loose) throw new ToolError(notFound(file.shown, text, old, eol));
@@ -286,12 +287,12 @@ class WorkspaceTools {
     const backup = await this.backup(chat, file, text);
     const edit = new vscode.WorkspaceEdit();
     edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replacement);
-    if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(`VS Code didn't apply the edit to ${file.shown}.`);
+    if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
     await document.save();
     const removed = old.split(eol).length;
     const added = replacement ? replacement.split(eol).length : 0;
     const problems = await this.newProblems(file, before);
-    return { output: `Edited ${file.shown}: replaced ${removed} line${removed === 1 ? "" : "s"} with ${added}, from line ${lineOf(text, start)}.` + problems.text,
+    return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + problems.text,
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: false } };
   }
@@ -304,7 +305,7 @@ class WorkspaceTools {
     let exists = false;
     try {
       const stat = await vscode.workspace.fs.stat(file.uri);
-      if (stat.type & vscode.FileType.Directory) throw new ToolError(`${file.shown} is a folder.`);
+      if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.isFolder(file.shown));
       exists = true;
     } catch (error) { if (error instanceof ToolError) throw error; }
     const open = vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath.toLowerCase() === file.full.toLowerCase());
@@ -314,7 +315,7 @@ class WorkspaceTools {
     if (open) {
       const edit = new vscode.WorkspaceEdit();
       edit.replace(file.uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), toEol(content, open.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n"));
-      if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(`VS Code didn't apply the change to ${file.shown}.`);
+      if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
       await open.save();
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file.full)));
@@ -323,7 +324,7 @@ class WorkspaceTools {
     }
     const lines = content ? content.split(/\r?\n/).length : 0;
     const problems = await this.newProblems(file, before);
-    return { output: `${exists ? "Wrote" : "Created"} ${file.shown} (${lines} line${lines === 1 ? "" : "s"}).` + problems.text,
+    return { output: RESULTS.written(exists, file.shown, lines) + problems.text,
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: !exists } };
   }
@@ -342,9 +343,9 @@ class WorkspaceTools {
       }
     }
     const errors = lines.filter((line) => / error: /.test(line)).length;
-    if (!lines.length) return { output: "No errors or warnings" + (args.path ? ` in ${args.path}.` : "."), summary: "Problems · none" };
+    if (!lines.length) return { output: RESULTS.noProblems(args.path || ""), summary: "Problems · none" };
     const shown = lines.slice(0, 100);
-    return { output: shown.join("\n") + (lines.length > 100 ? `\n\n(${lines.length - 100} more)` : ""),
+    return { output: shown.join("\n") + (lines.length > 100 ? "\n\n" + RESULTS.moreProblems(lines.length - 100) : ""),
       summary: `Problems · ${errors} error${errors === 1 ? "" : "s"}, ${lines.length - errors} warning${lines.length - errors === 1 ? "" : "s"}` };
   }
 
@@ -361,7 +362,7 @@ class WorkspaceTools {
       .filter((d) => d.severity === vscode.DiagnosticSeverity.Error && !before.has(keyOf(d)));
     if (!fresh.length) return { text: "", summary: "" };
     const lines = fresh.slice(0, 10).map((d) => `- line ${d.range.start.line + 1}: ${d.message.split("\n")[0]}` + (d.source ? ` (${d.source})` : ""));
-    return { text: `\n\nNew problems in ${file.shown} now:\n${lines.join("\n")}` + (fresh.length > 10 ? `\n- and ${fresh.length - 10} more` : ""),
+    return { text: RESULTS.newProblems(file.shown, lines, fresh.length - 10),
       summary: ` · ${fresh.length} new problem${fresh.length === 1 ? "" : "s"}` };
   }
 
@@ -383,9 +384,9 @@ class WorkspaceTools {
     const target = this.resolve(args.path);
     const root = this.root();
     let stat;
-    try { stat = fs.statSync(target.full); } catch { throw new ToolError(`${target.shown} doesn't exist.`); }
+    try { stat = fs.statSync(target.full); } catch { throw new ToolError(RESULTS.missing(target.shown)); }
     if ((root && path.resolve(target.full).toLowerCase() === path.resolve(root).toLowerCase()) || path.parse(target.full).root === target.full) {
-      throw new ToolError("That's the workspace folder (or a drive) itself; Solder won't remove it.");
+      throw new ToolError(RESULTS.removeRoot);
     }
     const folder = stat.isDirectory();
     const { files, bytes } = folder ? measure(target.full) : { files: 1, bytes: stat.size };
@@ -400,11 +401,10 @@ class WorkspaceTools {
     try {
       await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: true });
     } catch {
-      if (!backup) throw new ToolError(`${target.shown} couldn't be moved to the Recycle Bin, and it's too big to keep a copy of, so it wasn't removed.`);
+      if (!backup) throw new ToolError(RESULTS.removeNoTrash(target.shown));
       await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: false });
     }
-    const what = folder ? ` (a folder with ${files.toLocaleString()} file${files === 1 ? "" : "s"})` : "";
-    return { output: `Removed ${target.shown}${what}.`, summary: `Removed ${target.shown}` + (folder ? ` · ${files} files` : ""),
+    return { output: RESULTS.removed(target.shown, folder ? files : null), summary: `Removed ${target.shown}` + (folder ? ` · ${files} files` : ""),
       change: { path: target.full, shown: target.shown, backup, removed: true, folder } };
   }
 
@@ -438,9 +438,9 @@ class WorkspaceTools {
 
   async mustBeFile(/** @type {any} */ file) {
     let stat;
-    try { stat = await vscode.workspace.fs.stat(file.uri); } catch { throw new ToolError(`${file.shown} doesn't exist.`); }
-    if (stat.type & vscode.FileType.Directory) throw new ToolError(`${file.shown} is a folder; use find_files to list it.`);
-    if (stat.size > 20 * 1024 * 1024) throw new ToolError(`${file.shown} is too large to read (${Math.round(stat.size / 1048576)} MB).`);
+    try { stat = await vscode.workspace.fs.stat(file.uri); } catch { throw new ToolError(RESULTS.missing(file.shown)); }
+    if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.readFolder(file.shown));
+    if (stat.size > 20 * 1024 * 1024) throw new ToolError(RESULTS.tooLarge(file.shown, Math.round(stat.size / 1048576)));
   }
 }
 
@@ -517,9 +517,7 @@ function looseMatch(/** @type {string} */ text, /** @type {string} */ old, /** @
 function notFound(/** @type {string} */ shown, /** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
   const first = old.split(eol).find((line) => line.trim());
   const at = first ? text.split(eol).findIndex((line) => line.trim() === first.trim()) : -1;
-  return `old_text wasn't found in ${shown}.` + (at >= 0
-    ? ` Its first line appears at line ${at + 1}, but the lines after it differ: read the file again around there and copy the text exactly.`
-    : " Read the file again and copy the text exactly.");
+  return RESULTS.notFound(shown, at + 1);
 }
 
 function keyOf(/** @type {vscode.Diagnostic} */ d) {

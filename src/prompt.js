@@ -48,6 +48,8 @@ function systemPrompt({ workspace, os = "Windows", instructions = [], rules = ""
 when the user's message names one, otherwise to this folder; searches start there too.`,
     `- OS: ${os}.`,
     "- Each of the user's messages starts with their local date and time."];
+  if (!instructions.length) facts.push("- There's no project instructions file (AGENTS.md) at the workspace root, so \
+don't look for one. One in a subfolder is added to your first read there.");
   let text = RULES + "\n\n# The workspace\n" + facts.join("\n");
   for (const file of instructions) {
     text += `\n\n# Project instructions (${file.path})\n${file.text.trim()}`;
@@ -139,6 +141,54 @@ complete, use short headings and bullet points, and reply with only the summary.
   compactionTranscript: "Here's our conversation so far, as a transcript:",
 };
 
+/** The tools' results and errors (src/tools.js). An error reaches the model as "Error: " + the text. */
+const RESULTS = {
+  error: (/** @type {string} */ message) => `Error: ${message}`,
+  noPath: "No path was given.",
+  noTool: (/** @type {string} */ name) => `There's no tool called ${name}.`,
+  noWorkspace: "No workspace folder is open.",
+  missing: (/** @type {string} */ file) => `${file} doesn't exist.`,
+  isFolder: (/** @type {string} */ file) => `${file} is a folder.`,
+  readFolder: (/** @type {string} */ file) => `${file} is a folder; use find_files to list it.`,
+  tooLarge: (/** @type {string} */ file, /** @type {number} */ mb) => `${file} is too large to read (${mb} MB).`,
+  notText: (/** @type {string} */ file) => `${file} couldn't be opened as text (it may be a binary file).`,
+  readPart: (/** @type {number} */ start, /** @type {number} */ end, /** @type {number} */ total) =>
+    `(lines ${start}–${end} of ${total}; ask for a range for more)`,
+  readEmpty: "(the file is empty)",
+  folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
+    `This folder's ${file} says (it applies to files under it):\n${text}`,
+  noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \
+If you were checking whether something already exists, it probably doesn't: carry on without it rather than \
+searching again with other words.`,
+  searchCapped: (/** @type {number} */ limit) =>
+    `(The first ${limit} matching lines; narrow the search with glob or a longer query.)`,
+  badRegex: "That regular expression isn't valid.",
+  searchFailed: "the search failed",
+  stopped: "Stopped.",
+  noFiles: (/** @type {string} */ glob) => `No files match ${glob}.`,
+  filesCapped: (/** @type {number} */ limit) => `(The first ${limit}; narrow the glob.)`,
+  emptyOldText: "old_text is empty; use write_file to replace a whole file.",
+  manyMatches: (/** @type {number} */ count, /** @type {string} */ file, /** @type {number[]} */ lines) =>
+    `old_text appears ${count} times in ${file} (at lines ${lines.join(", ")}); include more surrounding lines to make it unique.`,
+  notFound: (/** @type {string} */ file, /** @type {number} */ firstLineAt) => `old_text wasn't found in ${file}.` + (firstLineAt > 0
+    ? ` Its first line appears at line ${firstLineAt}, but the lines after it differ: read the file again around there and copy the text exactly.`
+    : " Read the file again and copy the text exactly."),
+  notApplied: (/** @type {string} */ file) => `VS Code didn't apply the change to ${file}.`,
+  edited: (/** @type {string} */ file, /** @type {number} */ removed, /** @type {number} */ added, /** @type {number} */ from) =>
+    `Edited ${file}: replaced ${removed} line${removed === 1 ? "" : "s"} with ${added}, from line ${from}.`,
+  written: (/** @type {boolean} */ existed, /** @type {string} */ file, /** @type {number} */ lines) =>
+    `${existed ? "Wrote" : "Created"} ${file} (${lines} line${lines === 1 ? "" : "s"}).`,
+  newProblems: (/** @type {string} */ file, /** @type {string[]} */ lines, /** @type {number} */ more) =>
+    `\n\nNew problems in ${file} now:\n${lines.join("\n")}` + (more > 0 ? `\n- and ${more} more` : ""),
+  noProblems: (/** @type {string} */ file) => "No errors or warnings" + (file ? ` in ${file}.` : "."),
+  moreProblems: (/** @type {number} */ more) => `(${more} more)`,
+  removeRoot: "That's the workspace folder (or a drive) itself; Solder won't remove it.",
+  removeNoTrash: (/** @type {string} */ file) =>
+    `${file} couldn't be moved to the Recycle Bin, and it's too big to keep a copy of, so it wasn't removed.`,
+  removed: (/** @type {string} */ file, /** @type {number | null} */ files) =>
+    `Removed ${file}` + (files === null ? "" : ` (a folder with ${files.toLocaleString("en-US")} file${files === 1 ? "" : "s"})`) + ".",
+};
+
 /** "(Wednesday, 4 November 2026, 14:05)": what each user message starts with. @param {Date} [now] */
 function timeNote(now = new Date()) {
   const day = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -146,4 +196,4 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, systemPrompt, toolDefinitions, timeNote };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote };
