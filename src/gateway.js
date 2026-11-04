@@ -14,7 +14,10 @@
  *   model may already have seen (a timeout, a reset, a 5xx other than 503) is NOT retried here:
  *   with no gateway session the retry resends the whole chat and is billed again, so the loop
  *   decides once;
- * - an empty reply is an error (transient unless the output limit or a filter caused it);
+ * - an empty reply is an error (transient unless the output limit or a filter caused it), and billed,
+ *   so it isn't resent here either;
+ * - a Retry-After over 60 s isn't retried at all: Resume, later;
+ * - every failure carries the text that streamed before it (error.partial), so it's never lost;
  * - error text is cleaned of the key, URLs and host names before anyone sees it.
  */
 
@@ -205,15 +208,26 @@ class GatewayClient {
                    ...(this.apiKey ? { Authorization: "Bearer " + this.apiKey } : {}) },
       });
       let settled = false;
-      /** @param {any} error */
-      const fail = (error) => { if (!settled) { settled = true; reject(error); req.destroy(); } };
+      let sent = false;
+      /** @type {ChatStream | null} */
+      let reader = null;
+      /** Every failure carries what streamed before it (a reset, a timeout and Stop too). @param {any} error */
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        if (error instanceof GatewayError && reader && !error.partial) error.partial = reader.text;
+        reject(error);
+        req.destroy();
+      };
       const onAbort = () => fail(new Cancelled());
       signal?.addEventListener("abort", onAbort, { once: true });
       // Quiet time, not total time: a long reply that keeps streaming is fine.
       req.setTimeout(this.quietMs, () => fail(new GatewayError("The gateway went quiet for too long.",
         { transient: true, uncertain: true })));
-      req.on("error", (error) => fail(this._transportFailure(error)));
+      req.on("finish", () => { sent = true; });
+      req.on("error", (error) => fail(this._transportFailure(error, sent)));
       req.on("response", (res) => {
+        sent = true;
         const status = res.statusCode ?? 0;
         const found = credits(res.headers);
         if (status !== 200) {
@@ -226,7 +240,7 @@ class GatewayClient {
           fail(new GatewayError("The gateway didn't answer with a stream. Check the endpoint."));
           return;
         }
-        const reader = new ChatStream(emit);
+        const stream = reader = new ChatStream(emit);
         const sse = new SseParser(MAX_EVENT_BYTES);
         let total = 0;
         res.on("data", (/** @type {Buffer} */ chunk) => {
@@ -235,8 +249,8 @@ class GatewayClient {
           try {
             if (total > this.maxResponseBytes) throw new GatewayError("The reply was larger than the size limit.");
             for (const data of sse.push(chunk)) {
-              if (reader.event(data)) {
-                const done = reader.finish(); // may throw (an empty reply): before settling
+              if (stream.event(data)) {
+                const done = stream.finish(); // may throw (an empty reply): before settling
                 settled = true;
                 signal?.removeEventListener("abort", onAbort);
                 resolve({ ...done, credits: found });
@@ -245,14 +259,13 @@ class GatewayClient {
               }
             }
           } catch (error) {
-            if (error instanceof GatewayError) error.partial = reader.text;
             fail(error);
           }
         });
         res.on("end", () => fail(new GatewayError(
           "The gateway's stream ended before it finished. What came through has been kept.",
-          { transient: true, uncertain: true, partial: reader.text })));
-        res.on("error", (error) => fail(this._transportFailure(error)));
+          { transient: true, uncertain: true })));
+        res.on("error", (error) => fail(this._transportFailure(error, true)));
       });
       req.end(body);
     });
@@ -285,16 +298,21 @@ class GatewayClient {
     } catch { /* never show a proxy's HTML page */ }
     // A 429 with nothing left in the tightest allowance is "used up", not "busy": waiting a few
     // seconds won't help, so it isn't retried.
-    if (status === 429 && found && found.remaining === 0) {
+    if (status === 429 && found && found.remaining === 0
+        && !(found.resetSeconds !== undefined && found.resetSeconds * 1000 <= MAX_RETRY_AFTER_MS)) {
       const when = found.resetSeconds ? ` It resets in about ${spoken(found.resetSeconds)}.` : "";
       return new GatewayError("The allowance for this model is used up." + when,
         { status, exhausted: true, credits: found });
     }
     if (TRANSIENT_HTTP.has(status)) {
-      const retryAfter = retryAfterMs(headers["retry-after"]);
+      let retryAfter = retryAfterMs(headers["retry-after"]);
+      if (retryAfter === null && status === 429 && found && found.remaining === 0 && found.resetSeconds !== undefined) {
+        retryAfter = found.resetSeconds * 1000; // a short bucket at 0: wait for its reset
+      }
       if (retryAfter !== null && retryAfter > MAX_RETRY_AFTER_MS) {
+        // Not retried automatically (Resume still works): hammering a limiter that asked for minutes won't help.
         return new GatewayError(message + " The gateway asked to wait longer; try again later.",
-          { status, transient: true, credits: found });
+          { status, uncertain: !BUSY_HTTP.has(status), credits: found });
       }
       const error = new GatewayError(message, { status, transient: true, uncertain: !BUSY_HTTP.has(status),
         credits: found });
@@ -304,8 +322,8 @@ class GatewayClient {
     return new GatewayError(message, { status, credits: found });
   }
 
-  /** @param {any} error */
-  _transportFailure(error) {
+  /** @param {any} error @param {boolean} [sent] the request had gone out (the model may have seen it) */
+  _transportFailure(error, sent = false) {
     const code = error && error.code;
     if (code === "ENOTFOUND" || code === "EAI_AGAIN") return new GatewayError("The gateway's name couldn't be found.", { transient: true });
     if (code === "ECONNREFUSED") return new GatewayError("The gateway refused the connection.", { transient: true });
@@ -317,7 +335,8 @@ class GatewayClient {
     if (String(code).startsWith("CERT_") || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" || code === "SELF_SIGNED_CERT_IN_CHAIN") {
       return new GatewayError("The gateway's certificate couldn't be verified.");
     }
-    return new GatewayError("Couldn't reach the gateway.", { transient: true });
+    return new GatewayError(sent ? "The connection to the gateway failed." : "Couldn't reach the gateway.",
+      { transient: true, uncertain: sent });
   }
 
   /** Error text with the key, URLs and server names taken out. @param {string} text */
@@ -350,7 +369,10 @@ class ChatStream {
       if (!this.reason) throw new GatewayError("The gateway ended its reply without saying it was finished.", { transient: true, uncertain: true });
       return true;
     }
-    const value = parseJson(data);
+    let value;
+    try { value = parseJson(data); } catch {
+      throw new GatewayError("The gateway sent a stream event Solder couldn't read.", { transient: true, uncertain: true });
+    }
     if (value.error) throw new GatewayError("The gateway's stream failed.", { transient: true, uncertain: true });
     if (value.usage && typeof value.usage === "object") this.usage = value.usage;
     if (!Array.isArray(value.choices)) {
@@ -401,8 +423,9 @@ class ChatStream {
       const why = this.reason === "length" ? " It ran out of room (the output limit)."
         : this.reason === "content_filter" ? " The gateway filtered it." : "";
       const error = new GatewayError("The model sent an empty reply." + why,
-        { transient: this.reason !== "length" && this.reason !== "content_filter" });
+        { transient: this.reason !== "length" && this.reason !== "content_filter", uncertain: true });
       /** @type {any} */ (error).empty = true;
+      /** @type {any} */ (error).usage = this.usage;
       throw error;
     }
     return { content: this.text, calls, finishReason: this.reason, usage: this.usage };
@@ -471,7 +494,8 @@ function checkedUrl(value, label) {
 
 /** @param {string} text */
 function parseJson(text) {
-  const value = JSON.parse(text);
+  let value;
+  try { value = JSON.parse(text); } catch { throw new GatewayError("The gateway sent something that wasn't JSON."); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new GatewayError("The gateway sent something that wasn't a JSON object.");
   return value;
 }

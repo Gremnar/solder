@@ -151,8 +151,9 @@ class SolderPanel {
     switch (event.type) {
       case "delta": this.live += event.text; this.status = ""; this.postLive(); return;
       case "thinking": this.status = "Thinking…"; this.running = ""; break;
-      case "retrying": this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
+      case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
       case "compacting": this.status = "Summarising the older part of this chat to save tokens…"; break;
+      case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; break;
       case "message": this.live = ""; this.running = ""; break;
       case "running": this.running = event.id; this.status = ""; break;
       case "approval": this.approvals.push(event); break;

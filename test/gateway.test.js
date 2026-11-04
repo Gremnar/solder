@@ -166,3 +166,69 @@ test("Stop ends a reply that's waiting", async () => {
   gw.server.closeAllConnections();
   gw.server.close();
 });
+
+const stop = { choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }] };
+
+test("an empty reply is billed: never resent here, and its usage comes back with the error", async () => {
+  const gw = await fakeGateway([(res) => sse(res, [stop, { choices: [], usage: { total_tokens: 900 } }]), (res) => sse(res, [stop])]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.ok(error.empty && error.uncertain && error.transient);
+    assert.equal(error.usage.total_tokens, 900);
+    return true;
+  });
+  assert.equal(gw.seen.length, 1);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("Retry-After over a minute isn't retried; a short bucket at 0 is busy, not used up", async () => {
+  const gw = await fakeGateway([
+    (res) => { res.writeHead(429, { "Retry-After": "120", ...CREDITS }); res.end("{}"); },
+    (res) => { res.writeHead(502, { "Retry-After": "120" }); res.end(); },
+    (res) => { res.writeHead(429, { ...CREDITS, "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "0" }); res.end("{}"); },
+    (res) => sse(res, [{ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  ]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.ok(!error.transient && !error.exhausted);
+    assert.match(error.message, /try again later/);
+    return true;
+  });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => !error.transient && error.uncertain);
+  assert.equal(gw.seen.length, 2);
+  assert.equal((await client.reply({ model: "m", messages: ask })).content, "ok");
+  assert.equal(gw.seen.length, 4);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("a reset or a quiet timeout after text keeps the text; so does Stop", async () => {
+  const words = (res) => { res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Hal" } }] })}\n\n`); };
+  const gw = await fakeGateway([(res) => { words(res); setTimeout(() => res.socket.destroy(), 50); }, words, words]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "", quietMs: 300 });
+  for (const run of [{}, {}, { stop: true }]) {
+    const controller = new AbortController();
+    const reply = client.reply({ model: "m", messages: ask, signal: controller.signal,
+      onText: () => { if (run.stop) setTimeout(() => controller.abort(), 50); } });
+    await assert.rejects(reply, (error) => error.partial === "Hal" && (run.stop ? error.name === "Cancelled" : error.uncertain));
+  }
+  assert.equal(gw.seen.length, 3);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("a stream line that isn't JSON is a clean, uncertain stream failure", async () => {
+  const gw = await fakeGateway([(res) => { res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Hi" } }] })}\n\ndata: ping\n\n`); }]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.equal(error.name, "GatewayError");
+    assert.equal(error.message, "The gateway sent a stream event Solder couldn't read.");
+    assert.equal(error.partial, "Hi");
+    return true;
+  });
+  gw.server.closeAllConnections();
+  gw.server.close();
+});

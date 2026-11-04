@@ -26,7 +26,7 @@ const STUB_MIN_CHARS = 2_000;
 const MAX_BATCH = 5;
 const MAX_READ_BATCH = 8;
 const WRAP_UP_ROUNDS = 3;
-const RETRY_DELAYS_MS = [2000, 5000];
+const RETRY_DELAYS_MS = [2000]; // before the one resend of a failure the model may have seen
 
 /** @param {string} text */
 function estimate(text) {
@@ -67,6 +67,17 @@ class Engine {
     this.busy = false;
     /** @type {AbortController | null} */
     this.controller = null;
+    /** Tokens the current answer has used, every billed reply counted (empty ones too). */
+    this.answerTokens = 0;
+  }
+
+  /** Count a reply's tokens (a failed one that was billed too) and show them. @param {Chat} chat @param {any} usage @param {any} credits */
+  _spend(chat, usage, credits) {
+    const used = usage?.total_tokens || ((usage?.prompt_tokens || 0) + (usage?.completion_tokens || 0));
+    this.answerTokens += used;
+    chat.usage.tokens += used;
+    this.emit({ type: "usage", chat: chat.id, answer: this.answerTokens, total: chat.usage.tokens,
+      prompt: usage?.prompt_tokens || 0, credits: credits || null });
   }
 
   /** A new, empty chat. */
@@ -82,22 +93,26 @@ class Engine {
    */
   async ask(chat, text, extra = {}) {
     await this._run(chat, async (signal) => {
-      await this._compactIfDue(chat, signal);
+      // Saved first, so nothing that fails after this (compaction included) can lose what you typed.
       const content = `${timeNote(this.now())}\n\n${text}` + (extra.context ? `\n\n${extra.context}` : "");
       chat.messages.push({ role: "user", content, meta: { typed: text, chips: extra.chips || [] } });
       if (chat.title === "New chat") chat.title = titleFrom(text);
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
+      await this._compactIfDue(chat, signal, chat.messages.length - 1);
     });
   }
 
   /** Carry on after a failure or a stop, from the last finished step. @param {Chat} chat */
   async resume(chat) {
-    await this._run(chat, async () => {
+    await this._run(chat, async (signal) => {
+      if (!chat.messages.length) throw new Error("There's nothing to resume.");
+      await this._compactIfDue(chat, signal, chat.messages.length);
       const last = chat.messages[chat.messages.length - 1];
-      if (!last) throw new Error("There's nothing to resume.");
-      if (last.role === "assistant") {
-        // It stopped mid-answer: ask it to carry on (the history can't end with its own turn).
+      const summarisedAll = !!chat.compaction && chat.compaction.through >= chat.messages.length;
+      if (last.role === "assistant" || summarisedAll) {
+        // It stopped mid-answer (or all of it is in the recap): ask it to carry on, since the history
+        // can't end with its own turn.
         chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\nPlease carry on from where you stopped.`,
           meta: { typed: "Carry on", resume: true } });
         await this._save(chat);
@@ -131,19 +146,22 @@ class Engine {
     this.steers = [];
     const controller = this.controller = new AbortController();
     this.emit({ type: "busy", chat: chat.id, busy: true });
+    this.answerTokens = 0;
     try {
       this._settle(chat, TEXTS.notRunStopped); // a reply that died mid-batch last time
       await start(controller.signal);
       await this._loop(chat, controller.signal);
     } catch (error) {
-      this._settle(chat, TEXTS.notRunStopped);
+      const stopped = error instanceof Cancelled || controller.signal.aborted;
+      this._settle(chat, stopped ? TEXTS.notRunStopped : TEXTS.notRunFailed);
       await this._save(chat).catch(() => {});
-      if (error instanceof Cancelled || controller.signal.aborted) {
+      if (stopped) {
         this.emit({ type: "stopped", chat: chat.id });
       } else {
+        // Resumable even when the allowance is used up: after the reset (or on another model) it carries on.
         const exhausted = !!(error && /** @type {any} */ (error).exhausted);
         this.emit({ type: "error", chat: chat.id, message: error instanceof Error ? error.message : String(error),
-          resumable: !exhausted && chat.messages.length > 0, exhausted });
+          resumable: chat.messages.length > 0, exhausted });
       }
     } finally {
       this.busy = false;
@@ -162,7 +180,6 @@ class Engine {
     const settings = this.settings();
     const tools = toolDefinitions();
     let rounds = 0;
-    let answerTokens = 0;
     for (;;) {
       trim(chat);
       const system = await this.host.systemPrompt(chat);
@@ -170,16 +187,12 @@ class Engine {
       this.emit({ type: "thinking", chat: chat.id });
       const reply = await this._patient(chat, { model: chat.model || settings.model, messages, tools,
         effort: effortOf(chat.effort || settings.effort), signal });
-      const used = reply.usage?.total_tokens || ((reply.usage?.prompt_tokens || 0) + (reply.usage?.completion_tokens || 0));
-      answerTokens += used;
       // The server's count over our estimate, so compaction triggers on real tokens (code runs about 30% over).
       const sentEstimate = estimateMessages(messages) + estimate(JSON.stringify(tools));
       if (reply.usage?.prompt_tokens > 0 && sentEstimate > 0) {
         chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
       }
-      chat.usage.tokens += used;
-      this.emit({ type: "usage", chat: chat.id, answer: answerTokens, total: chat.usage.tokens,
-        prompt: reply.usage?.prompt_tokens || 0, credits: reply.credits });
+      this._spend(chat, reply.usage, reply.credits);
       /** @type {Stored} */
       const assistant = { role: "assistant", content: reply.content };
       if (reply.calls.length) {
@@ -278,6 +291,8 @@ class Engine {
         this.emit({ type: "approval", chat: chat.id, id, name, args, reason, label });
       });
       this.emit({ type: "approval-done", chat: chat.id, id, decision: answer.decision });
+      // Stop answers open cards with "decline": that's a stop, not the user saying no.
+      if (signal.aborted) return { output: TEXTS.notRunStopped, summary: "Not run: " + label, failed: true };
       note = (answer.note || "").trim();
       if (answer.decision !== "allow") {
         return { output: TEXTS.declined + (note ? "\n\n" + TEXTS.userNote(note) : ""),
@@ -297,69 +312,87 @@ class Engine {
     return result;
   }
 
-  /** One reply, quietly retrying what's worth retrying. `side`: not part of the chat (a summary request).
-   * @param {Chat} chat @param {any} request @param {boolean} [side] */
+  /**
+   * One reply, retrying only what's worth it. The gateway already retried busy answers (429, 503) on its
+   * backoff; what's left here is one resend of a failure the model may have seen (a reset, a timeout),
+   * and one of an empty reply to a tool result, with a note. Each resend is billed in full, so no more.
+   * Once any words have reached the user, nothing is resent: they're kept, and Resume carries on.
+   * `side`: not part of the chat (the summary request), so nothing streams to the panel.
+   * @param {Chat} chat @param {any} request @param {boolean} [side]
+   */
   async _patient(chat, request, side = false) {
     let uncertainTried = false;
     let emptyTried = false;
-    let attempt = 0;
     for (;;) {
+      let shown = "";
       try {
-        return await this.client.reply({ ...request, onText: (/** @type {string} */ text) =>
-          side || this.emit({ type: "delta", chat: chat.id, text }) });
+        return await this.client.reply({ ...request, onText: (/** @type {string} */ text) => {
+          shown += text;
+          if (!side) this.emit({ type: "delta", chat: chat.id, text });
+        } });
       } catch (error) {
         const e = /** @type {any} */ (error);
-        if (error instanceof Cancelled || request.signal.aborted) throw new Cancelled();
-        if (e.partial && !side) {
-          // Words reached you before it failed: keep them, and don't send it all again unasked.
-          chat.messages.push({ role: "assistant", content: e.partial, meta: { incomplete: true } });
-          throw error;
+        if (e.usage) this._spend(chat, e.usage, e.credits); // an empty reply was still billed
+        const stopped = error instanceof Cancelled || request.signal.aborted;
+        const partial = e.partial || shown;
+        if (partial && !side) {
+          chat.messages.push({ role: "assistant", content: partial, meta: { incomplete: true } });
+          throw stopped ? new Cancelled() : error;
         }
+        if (stopped) throw new Cancelled();
         const last = request.messages[request.messages.length - 1];
-        if (e.empty && e.transient && !emptyTried && last.role === "tool") {
+        if (e.empty) {
+          if (!e.transient || emptyTried || last.role !== "tool") throw error;
           emptyTried = true;
           request = { ...request, messages: [...request.messages.slice(0, -1), { ...last, content: last.content + TEXTS.emptyReply }] };
           this.emit({ type: "retrying", chat: chat.id, why: "empty" });
           continue;
         }
-        if (!e.transient || e.exhausted || attempt >= this.retryDelays.length) throw error;
-        if (e.uncertain) {
-          // It may have reached the model (and been counted): once only.
-          if (uncertainTried) throw error;
-          uncertainTried = true;
-        }
+        if (!e.transient || !e.uncertain || e.exhausted || uncertainTried) throw error;
+        uncertainTried = true;
         this.emit({ type: "retrying", chat: chat.id, why: e.message });
-        await sleep(this.retryDelays[attempt++], request.signal);
+        await sleep(this.retryDelays[0] ?? 0, request.signal);
       }
     }
   }
 
-  /** Summarise the older part of the chat when it's grown past the limit (before your new message). */
-  async _compactIfDue(/** @type {Chat} */ chat, /** @type {AbortSignal} */ signal) {
+  /**
+   * Summarise the older part of the chat once it's past the limit. Whole recent turns are kept word for
+   * word, up to about a fifth of the limit; the message at `limit` and after (your new one) always is.
+   * If the summary request fails, the chat goes on as it is: compaction only saves tokens.
+   * @param {Chat} chat @param {AbortSignal} signal @param {number} limit
+   */
+  async _compactIfDue(chat, signal, limit) {
     const settings = this.settings();
+    trim(chat);
     const system = await this.host.systemPrompt(chat);
+    const ratio = chat.tokenRatio || 1;
     const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions()));
-    if (size * (chat.tokenRatio || 1) < settings.compactAt) return;
+    if (size * ratio < settings.compactAt) return;
     const start = chat.compaction ? chat.compaction.through : 0;
-    const keep = settings.compactAt / 5 / (chat.tokenRatio || 1); // in estimated tokens
+    const keep = settings.compactAt / 5 / ratio; // in estimated tokens
+    let cut = limit;
     let kept = 0;
-    let cut = chat.messages.length;
-    for (let index = chat.messages.length - 1; index > start; index--) {
+    for (let index = limit - 1; index > start; index--) {
       const message = chat.messages[index];
-      kept += estimate(message.meta?.stub ? "" : message.content);
-      if (message.role === "user" && !message.meta?.resume) {
-        cut = index;
-        if (kept >= keep) break;
-      }
+      kept += sizeOf(message);
+      if (kept > keep) break;
+      if (message.role === "user" && !message.meta?.resume) cut = index;
     }
-    if (kept < keep) cut = chat.messages.length; // nothing big enough to keep: summarise it all
     if (cut <= start) return;
     this.emit({ type: "compacting", chat: chat.id });
-    const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
-    const reply = await this._patient(chat, { model: chat.model || settings.model, signal, effort: undefined, messages: [
-      { role: "system", content: "You write concise, complete summaries of coding conversations." },
-      { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` }] }, true);
-    chat.usage.tokens += reply.usage?.total_tokens || 0;
+    let reply;
+    try {
+      const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
+      reply = await this._patient(chat, { model: chat.model || settings.model, signal, effort: undefined, messages: [
+        { role: "system", content: TEXTS.compactionSystem },
+        { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` }] }, true);
+    } catch (error) {
+      if (error instanceof Cancelled || signal.aborted) throw new Cancelled();
+      this.emit({ type: "compaction-failed", chat: chat.id, message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    this._spend(chat, reply.usage, reply.credits);
     if (!reply.content.trim()) return;
     chat.compaction = { through: cut, summary: reply.content.trim() };
     await this._save(chat);
@@ -482,6 +515,12 @@ function effortOf(value) {
 
 function estimateMessages(/** @type {any[]} */ messages) {
   return messages.reduce((sum, m) => sum + estimate(m.content) + estimate(JSON.stringify(m.tool_calls || "")) + 4, 0);
+}
+
+/** One stored message's size as it's sent (a cut result as its stand-in). @param {Stored} message */
+function sizeOf(message) {
+  return estimate(message.meta?.stub ? TEXTS.stub(message.meta.summary) : message.content)
+    + estimate(JSON.stringify(message.tool_calls || "")) + 4;
 }
 
 /** The older part of a chat as plain text, for the summary request (results shortened to fit). */

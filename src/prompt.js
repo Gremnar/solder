@@ -112,6 +112,7 @@ function toolDefinitions() {
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
+  notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
   notRunBatch: (/** @type {number} */ limit) =>
     `Not run: Solder runs up to ${limit} calls from one reply. Send it again if you still need it.`,
@@ -139,6 +140,7 @@ full history. Keep my goals and preferences, key facts, decisions and conclusion
 file names, numbers or exact values that may matter later. Note which files were changed and how. Be concise but \
 complete, use short headings and bullet points, and reply with only the summary.",
   compactionTranscript: "Here's our conversation so far, as a transcript:",
+  compactionSystem: "You write concise, complete summaries of coding conversations.",
 };
 
 /** The tools' results and errors (src/tools.js). An error reaches the model as "Error: " + the text. */

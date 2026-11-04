@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Engine, outbound, trim, parseArguments } = require("../src/engine.js");
-const { GatewayError } = require("../src/gateway.js");
+const { GatewayError, Cancelled } = require("../src/gateway.js");
 const { TEXTS } = require("../src/prompt.js");
 
 /** A fake gateway: each reply() takes the next scripted answer (an object, or a function of the request). */
@@ -267,4 +267,81 @@ test("argument checks coerce what's safe", () => {
   assert.match(parseArguments("read_file", '{"path":"a","start_line":"x"}', false).problem, /whole number/);
   assert.equal(parseArguments("write_file", '{"path":"a","content":"', true).problem, TEXTS.cutOff);
   assert.equal(parseArguments("edit_file", '{"path":"a","old_text":"x","new_text":""}', false).problem, "");
+});
+
+test("an empty reply to a result is resent once, with the note, and no more; a busy error isn't retried here", async () => {
+  const empty = () => Object.assign(new GatewayError("empty", { transient: true, uncertain: true }),
+    { empty: true, usage: { total_tokens: 50 } });
+  const client = fakeClient([{ calls: [call("1", "problems", {})] }, empty(), empty(), empty()]);
+  const chat = Engine.newChat();
+  const events = [];
+  await engine(client, fakeHost(), events).ask(chat, "go");
+  assert.equal(client.sent.length, 3);
+  assert.ok(client.sent[2].at(-1).content.endsWith(TEXTS.emptyReply));
+  assert.equal(chat.usage.tokens, 10 + 50 + 50, "the empty replies were billed, so they're counted");
+  assert.ok(events.some((e) => e.type === "error" && e.resumable));
+
+  const busy = fakeClient([new GatewayError("busy", { transient: true, status: 429 })]);
+  await engine(busy, fakeHost()).ask(Engine.newChat(), "go");
+  assert.equal(busy.sent.length, 1, "the gateway already retried it on its backoff");
+});
+
+test("words that reached the panel are kept and never resent, even when the error doesn't carry them", async () => {
+  const client = fakeClient([(req) => { req.onText("Half an "); throw new GatewayError("reset", { transient: true, uncertain: true }); }]);
+  const chat = Engine.newChat();
+  await engine(client, fakeHost()).ask(chat, "go");
+  assert.equal(client.sent.length, 1);
+  assert.deepEqual(chat.messages.at(-1), { role: "assistant", content: "Half an ", meta: { incomplete: true } });
+});
+
+test("Stop while words stream keeps them; Stop at an approval card isn't a decline", async () => {
+  let e;
+  const client = fakeClient([(req) => { req.onText("Most of it"); e.stop(); throw new Cancelled(); }]);
+  const chat = Engine.newChat();
+  const events = [];
+  e = engine(client, fakeHost(), events);
+  await e.ask(chat, "go");
+  assert.equal(chat.messages.at(-1).content, "Most of it");
+  assert.ok(events.some((x) => x.type === "stopped"));
+
+  const host = fakeHost({ approval: () => { e2.stop(); return { decision: "decline" }; } });
+  const writes = fakeClient([{ calls: [call("1", "write_file", { path: "C:/x.txt", content: "x" })] }]);
+  const other = Engine.newChat();
+  const e2 = engine(writes, host);
+  await e2.ask(other, "go");
+  assert.equal(other.messages.at(-1).content, TEXTS.notRunStopped);
+});
+
+test("a failed summary doesn't lose the message: it's saved first, and the chat goes on uncompacted", async () => {
+  const chat = Engine.newChat();
+  for (let i = 0; i < 6; i++) chat.messages.push({ role: "user", content: "q".repeat(4000), meta: { typed: "q" } }, { role: "assistant", content: "a" });
+  const client = fakeClient([new GatewayError("bad", { status: 400 }), { content: "answer" }]);
+  const events = [];
+  await engine(client, fakeHost(), events, { compactAt: 5000 }).ask(chat, "my new question");
+  assert.ok(events.some((e) => e.type === "compaction-failed"));
+  assert.equal(chat.compaction, null);
+  assert.match(client.sent[1].at(-1).content, /my new question$/);
+  assert.equal(chat.messages.at(-1).content, "answer");
+});
+
+test("compaction keeps whole recent turns within a fifth of the limit, and always the new message", async () => {
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "first goal", meta: { typed: "x" } }, { role: "assistant", content: "ok" },
+    { role: "user", content: "big turn", meta: { typed: "x" } }, { role: "assistant", content: "b".repeat(30_000) },
+    { role: "user", content: "small turn", meta: { typed: "x" } }, { role: "assistant", content: "fine" });
+  const client = fakeClient([{ content: "SUMMARY" }, { content: "next answer" }]);
+  await engine(client, fakeHost(), [], { compactAt: 6000 }).ask(chat, "new");
+  assert.equal(chat.compaction.through, 4, "the big turn is summarised, the small one kept");
+  const sent = client.sent[1];
+  assert.deepEqual(sent.slice(3).map((m) => m.content.replace(/^\(.*\)\n\n/, "")), ["small turn", "fine", "new"]);
+});
+
+test("Resume compacts an over-limit chat first, then asks it to carry on", async () => {
+  const chat = Engine.newChat();
+  for (let i = 0; i < 6; i++) chat.messages.push({ role: "user", content: "q".repeat(4000), meta: { typed: "q" } }, { role: "assistant", content: "a" });
+  const client = fakeClient([{ content: "SUMMARY" }, { content: "carried on" }]);
+  await engine(client, fakeHost(), [], { compactAt: 5000 }).resume(chat);
+  assert.ok(chat.compaction);
+  assert.equal(client.sent[1][2].content, "SUMMARY");
+  assert.match(client.sent[1].at(-1).content, /Please carry on/);
 });
