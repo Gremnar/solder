@@ -23,6 +23,8 @@ const KEEP_RESULTS_TOKENS = 30_000;
 const TRIM_SLACK_TOKENS = 10_000;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
 const MAX_RESULT_CHARS = 40_000;
+/** Earlier turns' write and edit texts longer than this are left out of what's sent. */
+const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
 const MAX_BATCH = 5;
@@ -102,7 +104,6 @@ class Engine {
       if (chat.title === "New chat") chat.title = titleFrom(text);
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
-      await this._compactIfDue(chat, signal, chat.messages.length - 1);
     });
   }
 
@@ -184,6 +185,9 @@ class Engine {
     const tools = toolDefinitions();
     let rounds = 0;
     for (;;) {
+      // Before every step, not just a new message, so a long task can't run far past the limit. Only
+      // earlier turns are summarised: this one's calls carry thought signatures some models check.
+      await this._compactIfDue(chat, signal, lastUser(chat));
       trim(chat);
       const system = await this.host.systemPrompt(chat);
       const messages = outbound(chat, system);
@@ -440,11 +444,15 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
     out.push({ role: "user", content: TEXTS.compaction }, { role: "assistant", content: chat.compaction.summary });
     start = chat.compaction.through;
   }
-  for (const message of chat.messages.slice(start)) {
+  const current = lastUser(chat);
+  for (const [offset, message] of chat.messages.slice(start).entries()) {
     if (message.role === "user") out.push({ role: "user", content: message.content });
     else if (message.role === "assistant") {
       if (!message.content && !message.tool_calls?.length) continue;
-      out.push({ role: "assistant", content: message.content, ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}) });
+      // An earlier turn's big writes and edits are on disk now: sent again in full they'd cost their
+      // size on every step. (This turn's are sent as they came.)
+      const calls = start + offset < current ? message.tool_calls?.map(shortCall) : message.tool_calls;
+      out.push({ role: "assistant", content: message.content, ...(calls?.length ? { tool_calls: calls } : {}) });
     } else if (message.role === "tool") {
       out.push({ role: "tool", tool_call_id: message.tool_call_id, content: resultText(message) });
     }
@@ -452,6 +460,32 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   // A recap's kept part may start with results whose calls were summarised away: drop those.
   const offered = new Set(out.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
   return out.filter((m) => m.role !== "tool" || offered.has(m.tool_call_id));
+}
+
+/** Where the current turn starts: the latest message you typed (or Resume's "carry on"). @param {Chat} chat */
+function lastUser(chat) {
+  for (let index = chat.messages.length - 1; index >= 0; index--) if (chat.messages[index].role === "user") return index;
+  return 0;
+}
+
+/** Arguments a write or edit no longer needs in full (they're in the file). */
+const LONG_ARGUMENTS = { write_file: ["content"], edit_file: ["old_text", "new_text"] };
+
+/** A call from an earlier turn with its long text arguments replaced by a note. @param {any} call */
+function shortCall(call) {
+  const fields = LONG_ARGUMENTS[/** @type {keyof LONG_ARGUMENTS} */ (call.function?.name)];
+  if (!fields || (call.function.arguments || "").length <= LONG_ARGUMENT_CHARS) return call;
+  let args;
+  try { args = JSON.parse(call.function.arguments); } catch { return call; }
+  if (!args || typeof args !== "object") return call;
+  let changed = false;
+  for (const field of fields) {
+    if (typeof args[field] === "string" && args[field].length > LONG_ARGUMENT_CHARS) {
+      args[field] = TEXTS.argumentLeftOut(args[field].split("\n").length);
+      changed = true;
+    }
+  }
+  return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
 }
 
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
@@ -610,5 +644,5 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate,
+module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf,
   KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

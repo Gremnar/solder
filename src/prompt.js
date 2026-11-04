@@ -133,6 +133,8 @@ or give your answer.)",
     ? "That was the last reply with tool calls allowed for this message, so answer now: say what's done and what's still left."
     : `${left} more ${left === 1 ? "reply" : "replies"} with tool calls left for this message: finish up, then say what's done.`,
   steer: (/** @type {string} */ text) => `Also, a message from the user while you were working:\n\n${text}`,
+  argumentLeftOut: (/** @type {number} */ lines) =>
+    `[Solder: ${lines.toLocaleString("en-US")} lines, left out of this copy of the chat to save space. They're in the file; read it if you need them.]`,
   resultCut: (/** @type {number} */ chars) =>
     `…(${chars.toLocaleString("en-US")} characters of this output are left out here; narrow the call down to see them)…`,
   stub: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}) and you saw the full output then; \

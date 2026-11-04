@@ -2,7 +2,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { Engine, outbound, trim, parseArguments } = require("../src/engine.js");
+const { Engine, outbound, trim, parseArguments, transcriptOf } = require("../src/engine.js");
 const { GatewayError, Cancelled } = require("../src/gateway.js");
 const { TEXTS } = require("../src/prompt.js");
 
@@ -380,22 +380,40 @@ test("your steer and a folder's AGENTS.md survive their result being cut; a huge
   assert.ok(second.content.length < 41_000 && /characters of this output are left out/.test(second.content));
 });
 
-test("the summary request keeps your first goal even when big writes overflow its budget", async () => {
+test("the summary transcript keeps your first goal even when big writes overflow its budget", () => {
   const chat = Engine.newChat();
   chat.messages.push({ role: "user", content: "GOAL: never touch the legacy folder", meta: { typed: "x" } });
   for (let i = 0; i < 5; i++) {
-    chat.messages.push({ role: "assistant", content: "", tool_calls: [{ id: `w${i}`, type: "function",
+    chat.messages.push({ role: "assistant", content: "Writing. " + "w".repeat(20_000), tool_calls: [{ id: `w${i}`, type: "function",
       function: { name: "write_file", arguments: JSON.stringify({ path: `f${i}.js`, content: "z".repeat(40_000) }) } }] },
-    { role: "tool", tool_call_id: `w${i}`, content: `Wrote f${i}.js.`, meta: { summary: "wrote" } });
+    { role: "tool", tool_call_id: `w${i}`, content: "r".repeat(5000), meta: { summary: "wrote" } });
   }
-  chat.messages.push({ role: "assistant", content: "Done." });
-  const client = fakeClient([(req) => {
-    assert.match(req.messages[1].content, /GOAL: never touch the legacy folder/);
-    assert.ok(req.messages[1].content.length < 30_000 * 4);
-    return { content: "SUMMARY" };
-  }, { content: "ok" }]);
-  await engine(client, fakeHost(), [], { compactAt: 30_000 }).ask(chat, "next");
-  assert.equal(chat.compaction?.summary, "SUMMARY");
+  const text = transcriptOf(chat, 0, chat.messages.length, 12_000);
+  assert.match(text, /^Me: GOAL: never touch the legacy folder/);
+  assert.ok(text.length <= 12_100, `${text.length} characters`);
+});
+
+test("earlier turns' big writes are sent as a note, this turn's whole; compaction runs mid-task", async () => {
+  const write = (id) => ({ id, type: "function", function: { name: "write_file",
+    arguments: JSON.stringify({ path: id + ".js", content: "line\n".repeat(2000) }) } });
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "write a", meta: { typed: "x" } }, { role: "assistant", content: "", tool_calls: [write("a")] },
+    { role: "tool", tool_call_id: "a", content: "Wrote a.js.", meta: {} }, { role: "assistant", content: "Done." },
+    { role: "user", content: "write b", meta: { typed: "x" } }, { role: "assistant", content: "", tool_calls: [write("b")] },
+    { role: "tool", tool_call_id: "b", content: "Wrote b.js.", meta: {} });
+  const sent = outbound(chat, "S");
+  assert.equal(JSON.parse(sent[2].tool_calls[0].function.arguments).content, TEXTS.argumentLeftOut(2001));
+  assert.equal(sent[6].tool_calls[0], chat.messages[5].tool_calls[0], "this turn's call goes as it came");
+
+  // A long task: each step adds a big result; past the limit, the earlier turns are summarised mid-task.
+  const long = Engine.newChat();
+  long.messages.push({ role: "user", content: "old " + "o".repeat(20_000), meta: { typed: "x" } }, { role: "assistant", content: "old answer" });
+  const client = fakeClient([{ calls: [call("1", "read_file", { path: "a" })] }, { content: "SUMMARY" }, { content: "done" }]);
+  const host = fakeHost({ tools: { read_file: () => ({ output: "x".repeat(12_000), summary: "read" }) } });
+  await engine(client, host, [], { compactAt: 7000 }).ask(long, "new task");
+  assert.equal(long.compaction?.summary, "SUMMARY");
+  assert.equal(long.compaction.through, 2, "only the earlier turn");
+  assert.ok(client.sent[2].some((m) => m.tool_call_id === "1"), "this turn's step went on, whole");
 });
 
 test("odd calls are answered, never crash or run twice: prototype names, reordered keys, cut off with no arguments", async () => {
