@@ -49,9 +49,9 @@ VS Code extension host (Node)
 
 | Tool | Arguments | Built on | Approval |
 |---|---|---|---|
-| `read_file` | path, start_line?, end_line? | `workspace.openTextDocument` (it sees **unsaved** edits), with line numbers. 2,000 lines or 30k characters at most per read | none |
+| `read_file` | path, start_line?, end_line? | `workspace.openTextDocument` (it sees **unsaved** edits), with line numbers. 2,000 lines or 30k characters at most per read. Word, Excel and PowerPoint files are read as the docs index converts them, so their line numbers match the docs search | none |
 | `symbols` | path, name?, find?, line? | With only a path, the outline from `vscode.executeDocumentSymbolProvider`: classes, functions and methods, nested, with line ranges (400 entries at most; a cold language server gets a few seconds). With a name, `executeDefinitionProvider` (the definition's whole body, from the outline's extent) or `executeReferenceProvider` (one line per use, 100 at most). Solder finds the name's position itself, because models are bad at columns. With no language support, it gives whole-word text matches, labelled as such | none |
-| `search` | query, regex?, glob? | VS Code's bundled ripgrep (see below), JS fallback | none |
+| `search` | query, regex?, glob?, docs? | VS Code's bundled ripgrep (see below), JS fallback. With `docs: true`, the user's docs folders instead (see below) | none |
 | `find_files` | glob | `workspace.findFiles`, which respects `files.exclude` and `.gitignore` | none |
 | `changes` | path? | `git` started directly: one fixed program, no shell. It uses the path VS Code's git extension found, with `--no-ext-diff --no-textconv`, no pager, no fsmonitor and no optional locks, so a repo's config can't make Solder run other programs. With no path: status plus line counts, and the diff when it's 12k characters or less. With a path: that file's or folder's diff against HEAD. New files are listed, and unsaved editor changes are flagged | none |
 | `edit_file` | path, old_text, new_text | one `WorkspaceEdit`, then save. `old_text` must be unique. Keeps the file's line endings. Accepts a match that differs only in trailing whitespace | none (Undo kept) |
@@ -62,6 +62,17 @@ Details that matter:
 - **After every edit or write, include the file's new problems.** Wait up to about 2 s for `onDidChangeDiagnostics` on that file, then add any new errors to the result: "New problems in app.ts: 42: Cannot find name 'x'". This is the biggest token saver available. The model sees a broken edit at once instead of running a build to find out.
 - **Ripgrep.** VS Code ships `rg.exe` inside its install. In 1.141 it is at `<appRoot>/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/win32-x64/rg.exe`; older builds have `@vscode/ripgrep/bin/rg.exe`. Probe both from `vscode.env.appRoot`. If neither exists, or policy blocks it, fall back to a JS search over `findFiles` with size caps. Output: `path:line: text`, at most 200 matches.
 - **No shell (decided 2026-11-04).** Solder never starts PowerShell or any other shell, so Constrained Language mode, AppLocker and endpoint security have nothing to trip over, and the model can't fall into script loops (Alloy's worst token burns). It checks its work through `problems`, and says what to build or test for the user to run. If running things is missed later, add narrow, read-only tools that start one program directly (`git diff`, `git status`), never a general shell.
+- **Docs search** (`src/docs.js`, ported from Alloy's docsearch).
+  - **Where:** the user's `solder.docsFolders`, a per-user setting, are indexed in a local SQLite FTS5 index: `node:sqlite`, which VS Code's runtime ships, with porter stemming and BM25 ranking.
+  - **How files are split:** into sections of about 1,400 characters, each located by its lines and the heading above it. A file is read again only when its time or size changes.
+  - **What's read:**
+    - any plain text in UTF-8 or UTF-16 with a BOM, skipping files with a NUL byte;
+    - `.docx`, `.xlsx` and `.pptx`, which are zips of XML, read with `node:zlib`.
+  - **What's not:** PDFs, images and the old binary Office formats.
+  - **Indexing:** in the background, 15 s after start and when the folders change, yielding between files. Before a search, a catch-up of up to 4 s runs if a folder hasn't been walked for 2 minutes.
+  - **What the model gets:** results are the 10 best passages, with path, lines, heading and a bracketed excerpt. The model then reads the lines it needs with `read_file`.
+  - **Restraint:** Alloy's "loose matches" note when the best hits share a third or fewer of the query's words, and a "try once with other words, else carry on" note when nothing matches.
+  - **The system prompt:** it lists the folders and the user's one-line description of each.
 - **Undo.** Before the first change a step makes to a file, keep its text (in memory and in `globalStorageUri/backups`). The step's **Undo** restores it. **Review** opens `vscode.diff(backup, current)`. VS Code's own Ctrl+Z also works, because edits go through the editor.
 - **Paths.** Everything resolves against the workspace folder. Writes outside it ask first. Reads outside it are allowed but shown in the step line.
 
@@ -110,6 +121,7 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 | `solder.compactAtTokens` | 100,000 | 30,000 at least; see Decisions |
 | `solder.rules` | "" | plain lines added to the system prompt |
 | `solder.instructionFiles` | ["AGENTS.md"] | |
+| `solder.docsFolders` | [] | per user (scope `machine`): paths, or `{path, about}`. The setting's description lists the file types that are searched. Also set with **Use as Solder docs** on a folder in the Explorer |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.

@@ -52,8 +52,12 @@ class SolderPanel {
       vscode.window.onDidChangeTextEditorSelection(() => this.postEditor()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("solder")) { this._client = null; this.refreshModels(); }
+        if (event.affectsConfiguration("solder.docsFolders")) this.tools.refreshDocs();
       }),
     );
+    // The docs index catches up in the background, a little after start (it's only read when searched).
+    const timer = setTimeout(() => this.tools.refreshDocs(), 15_000);
+    context.subscriptions.push({ dispose: () => clearTimeout(timer) });
     this.updateStatusBar();
   }
 
@@ -74,7 +78,7 @@ class SolderPanel {
   host() {
     return {
       systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), instructions: this.instructions(),
-        rules: vscode.workspace.getConfiguration("solder").get("rules", "") }),
+        rules: vscode.workspace.getConfiguration("solder").get("rules", ""), docs: this.tools.docsFolders() }),
       runTool: (/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) => this.tools.run(name, args, ctx),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
       save: (/** @type {any} */ chat) => this.store.save(chat),

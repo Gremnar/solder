@@ -28,10 +28,12 @@
       { "command": "solder.focus", "title": "Open chat", "category": "Solder" },
       { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
       { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" },
-      { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" }
+      { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" },
+      { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" }
     ],
     "menus": {
-      "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" }]
+      "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" },
+        { "command": "solder.useAsDocs", "when": "explorerResourceIsFolder", "group": "solder@2" }]
     },
     "keybindings": [
       { "command": "solder.focus", "key": "ctrl+shift+;", "mac": "cmd+shift+;" }
@@ -57,7 +59,13 @@
         "solder.rules": { "type": "string", "default": "", "editPresentation": "multilineText", "order": 8,
           "description": "Your rules for the model, a few plain lines, added to every chat." },
         "solder.instructionFiles": { "type": "array", "items": { "type": "string" }, "default": ["AGENTS.md"], "order": 9,
-          "description": "Project instruction files the model follows: the one at the workspace root, and the nearest one when it reads files in a subfolder." }
+          "description": "Project instruction files the model follows: the one at the workspace root, and the nearest one when it reads files in a subfolder." },
+        "solder.docsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10,
+          "items": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": {
+            "path": { "type": "string", "description": "The folder." },
+            "about": { "type": "string", "description": "A few words on what's in it, so the model knows when to look there." } },
+            "required": ["path"] }] },
+          "markdownDescription": "Folders of your own reference docs (APIs, schematics, specifications) that the model can search, in every workspace. Each is a path, or `{ \"path\": \"…\", \"about\": \"…\" }`. Indexed on this PC only; only the passages the model looks at are sent.\n\n**What's searched:** any plain text (`.txt`, `.md`, `.rst`, `.html`, `.xml`, `.json`, `.yaml`, `.csv`, `.log`, code and headers such as `.c`, `.h`, `.py`, `.cs`, `.ps1`…, in UTF-8 or UTF-16) and Word, Excel and PowerPoint (`.docx`, `.xlsx`, `.pptx`, and their macro versions).\n\n**Not searched:** PDFs, images and scans, the old `.doc`, `.xls` and `.ppt` formats, and files over 5 MB (40 MB for Office files). Up to 20,000 files per folder; `.git` and `node_modules` are skipped.\n\nAdd one with **Use as Solder docs** on a folder in the Explorer." }
       }
     }
   },

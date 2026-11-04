@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "00658156ecd933ff";
+const PINNED = "80882a72c9302d44";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -21,8 +21,9 @@ const RESULT_SAMPLES = {
   error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
   notText: [["a.bin"]], outlineHead: [["a.js", 412], ["b.js", 1]], outlineCapped: [[52]], noOutline: [["a.txt", 3]], notInFile: [["total", "a.js"]], definitions: [["total", 1], ["total", 3]],
   references: [["total", 1, 1], ["total", 1200, 9]], referencesCapped: [[1100]], noLanguageHits: [["total"]], noHitsAtAll: [["total"]],
-  notGit: [["src"]], gitFailed: [["bad"]], noChanges: [[""], ["src"]], changedFiles: [[1], [7]], changedCapped: [[30]],
-  newFiles: [[["a.js", "b.js"]]], unsaved: [[["a.js"]]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
+  notGit: [["src"]], gitFailed: [["bad"]], noChanges: [[""], ["src"]], changedFiles: [[1, false], [7, true]], changedCapped: [[30]],
+  newFiles: [[["a.js", "b.js"]]], unsaved: [[["a.js"]]], docsHits: [["pump", 1], ["pump", 10]], docsLoose: [[1, 6]],
+  docsNoMatches: [["pump"]], docsBuilding: [[1234]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
   notFound: [["a.js", 0], ["a.js", 7]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
@@ -46,6 +47,7 @@ function everything() {
   return {
     system: systemPrompt({ workspace: "C:\\work", os: "Windows", instructions: [{ path: "AGENTS.md", text: "AGENTS" }], rules: "RULE" }),
     bare: systemPrompt({ workspace: "C:\\work" }),
+    withDocs: systemPrompt({ workspace: "C:\\work", docs: [{ path: "D:\\Docs", about: "ABOUT" }, { path: "E:\\Specs" }] }),
     tools: toolDefinitions(),
     texts: filled(TEXTS, SAMPLES, "TEXTS"),
     results: filled(RESULTS, RESULT_SAMPLES, "RESULTS"),

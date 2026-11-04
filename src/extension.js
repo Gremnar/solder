@@ -32,6 +32,21 @@ function activate(context) {
       if (uri) await panel.setFolder(uri.fsPath);
       else await panel.chooseFolder();
     }),
+    vscode.commands.registerCommand("solder.useAsDocs", async (/** @type {vscode.Uri | undefined} */ uri) => {
+      const folder = uri?.fsPath ?? (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false,
+        openLabel: "Use as Solder docs" }))?.[0]?.fsPath;
+      if (!folder) return;
+      const about = await vscode.window.showInputBox({ title: "Solder: what's in this docs folder?",
+        prompt: "A few words that tell the model when to look here (optional), for example: PX-40 schematics and the FooBus API",
+        value: "" });
+      if (about === undefined) return; // cancelled
+      const config = vscode.workspace.getConfiguration("solder");
+      const list = (config.get("docsFolders", []) || []).filter((/** @type {any} */ item) =>
+        String(typeof item === "string" ? item : item?.path ?? "").toLowerCase() !== folder.toLowerCase());
+      list.push(about.trim() ? { path: folder, about: about.trim() } : folder);
+      await config.update("docsFolders", list, vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(`Solder will search ${folder} as docs. It's indexed in the background.`);
+    }),
     vscode.commands.registerCommand("solder.newChat", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.onMessage({ type: "new" });

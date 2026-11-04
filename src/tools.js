@@ -8,8 +8,10 @@
 const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
+const { DocsIndex, available: docsAvailable, documentText, isOffice, loose } = require("./docs.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -50,6 +52,8 @@ class WorkspaceTools {
     this._rg = undefined;
     /** Languages whose symbol provider has answered: an empty outline from them is real, not a slow start. */
     this._outlined = new Set();
+    /** @type {DocsIndex | null | undefined} the docs index, once opened (null: no SQLite here) */
+    this._docs = undefined;
     /** The chat's working folder, relative to the workspace folder ("" for the workspace folder itself). */
     this.folder = "";
   }
@@ -131,11 +135,20 @@ class WorkspaceTools {
   async readFile(/** @type {any} */ args, /** @type {any} */ chat) {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
+    /** @type {{lineCount: number, lineAt: (index: number) => {text: string}, getText: () => string}} */
     let document;
-    try {
-      document = await vscode.workspace.openTextDocument(file.uri);
-    } catch {
-      throw new ToolError(RESULTS.notText(file.shown));
+    if (isOffice(file.full)) {
+      // Word, Excel and PowerPoint as the docs index reads them, so its line numbers fit.
+      const text = await documentText(file.full).catch(() => null);
+      if (text === null) throw new ToolError(RESULTS.notText(file.shown));
+      const all = text.split(/\r\n|\r|\n/);
+      document = { lineCount: all.length, lineAt: (index) => ({ text: all[index] }), getText: () => text };
+    } else {
+      try {
+        document = await vscode.workspace.openTextDocument(file.uri);
+      } catch {
+        throw new ToolError(RESULTS.notText(file.shown));
+      }
     }
     const total = document.lineCount;
     const start = Math.max(1, Math.min(args.start_line || 1, total));
@@ -378,6 +391,7 @@ class WorkspaceTools {
   // --------------------------------------------------------------------- search --
 
   async search(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
+    if (args.docs) return this.searchDocs(String(args.query), signal);
     const root = this.base();
     if (!root) throw new ToolError(RESULTS.noWorkspace);
     const rg = this.ripgrep();
@@ -394,6 +408,63 @@ class WorkspaceTools {
       note = "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES);
     }
     return { output: lines.join("\n") + note, summary: `Searched "${short(query)}" · ${count > MAX_SEARCH_LINES ? MAX_SEARCH_LINES + "+" : count} lines` };
+  }
+
+  // ----------------------------------------------------------------------- docs --
+
+  /** The docs folders from the user's settings that exist: [{path, about}]. */
+  docsFolders() {
+    const raw = vscode.workspace.getConfiguration("solder").get("docsFolders", []);
+    /** @type {{path: string, about: string}[]} */
+    const out = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const given = typeof item === "string" ? item : item && typeof item === "object" ? String(item.path ?? "") : "";
+      const about = item && typeof item === "object" ? String(item.about ?? "").trim() : "";
+      if (!given.trim()) continue;
+      const full = path.resolve(given.trim().replace(/^~(?=$|[\\/])/, os.homedir()));
+      try { if (!fs.statSync(full).isDirectory()) continue; } catch { continue; }
+      if (!out.some((folder) => folder.path.toLowerCase() === full.toLowerCase())) out.push({ path: full, about });
+    }
+    return out;
+  }
+
+  /** The docs index (opened on first use), or null when this VS Code's runtime has no SQLite. */
+  docsIndex() {
+    if (this._docs === undefined) {
+      this._docs = docsAvailable() ? new DocsIndex(path.join(this.context.globalStorageUri.fsPath, "docs", "docs.sqlite")) : null;
+    }
+    return this._docs;
+  }
+
+  /**
+   * Bring the docs index up to date in the background (on start, and when the folders change). Big
+   * folders take a while the first time; searches meanwhile say the index is still being built.
+   */
+  async refreshDocs() {
+    const index = this.docsIndex();
+    if (!index) return;
+    const folders = this.docsFolders().map((folder) => folder.path);
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "Solder: indexing docs" },
+      () => index.refresh(folders, { ms: 30 * 60_000 })).then(() => {}, () => {});
+  }
+
+  /** The best passages in the docs for a query; a short catch-up of the index first (up to 4 s). */
+  async searchDocs(/** @type {string} */ query, /** @type {AbortSignal} */ signal) {
+    const folders = this.docsFolders();
+    if (!folders.length) throw new ToolError(RESULTS.docsNone);
+    const index = this.docsIndex();
+    if (!index) throw new ToolError(RESULTS.docsUnavailable);
+    const roots = folders.map((folder) => folder.path);
+    const stale = roots.some((root) => Date.now() - index.walkedAt(root) > 2 * 60_000);
+    const state = stale ? await index.refresh(roots, { ms: 4000, signal }) : { files: index.count(), unfinished: false, truncated: false };
+    const hits = await index.search(query);
+    const notes = [state.unfinished ? RESULTS.docsBuilding(state.files) : "", state.truncated ? RESULTS.docsTruncated : ""].filter(Boolean);
+    if (!hits.length) return { output: [RESULTS.docsNoMatches(query), ...notes].join("\n\n"), summary: `Searched docs for "${short(query)}" · no matches` };
+    const vague = loose(hits, query);
+    const lines = hits.map((hit) => `${hit.path} · ${hit.location}${hit.heading ? ` · ${hit.heading}` : ""}\n  ${hit.excerpt}`);
+    return { output: RESULTS.docsHits(query, hits.length) + "\n\n" + lines.join("\n\n")
+      + (vague ? "\n\n" + RESULTS.docsLoose(vague.best, vague.of) : "") + (notes.length ? "\n\n" + notes.join("\n") : ""),
+      summary: `Searched docs for "${short(query)}" · ${hits.length} passage${hits.length === 1 ? "" : "s"}` };
   }
 
   /** VS Code's own rg.exe, or null (then a JS search is used). */

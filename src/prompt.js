@@ -44,9 +44,10 @@ Don't paste back files you edited.`;
 
 /**
  * The system message.
- * @param {{workspace: string, os?: string, instructions?: {path: string, text: string}[], rules?: string}} context
+ * @param {{workspace: string, os?: string, instructions?: {path: string, text: string}[], rules?: string,
+ *          docs?: {path: string, about?: string}[]}} context
  */
-function systemPrompt({ workspace, os = "Windows", instructions = [], rules = "" }) {
+function systemPrompt({ workspace, os = "Windows", instructions = [], rules = "", docs = [] }) {
   const facts = [`- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to the working folder \
 when the user's message names one, otherwise to this folder; searches start there too.`,
     `- OS: ${os}.`,
@@ -56,6 +57,11 @@ don't look for one. One in a subfolder is added to your first read there.");
   let text = RULES + "\n\n# The workspace\n" + facts.join("\n");
   for (const file of instructions) {
     text += `\n\n# Project instructions (${file.path})\n${file.text.trim()}`;
+  }
+  if (docs.length) {
+    text += "\n\n# Docs\nThe user keeps reference documentation in these folders. When a task needs something the \
+workspace doesn't have (their own APIs, hardware, specifications), search them with search and docs: true, then read \
+the passage you need with read_file:\n" + docs.map((folder) => `- ${folder.path}${folder.about ? `: ${folder.about}` : ""}`).join("\n");
   }
   if (rules.trim()) text += "\n\n# The user's rules\n" + rules.trim();
   return text;
@@ -84,6 +90,8 @@ path:line: text, up to 200.", {
     query: { type: "string", description: "The text to find." },
     regex: { type: "boolean", description: "True to read query as a regular expression." },
     glob: { type: "string", description: "Only search files matching this, such as src/**/*.ts or *.py." },
+    docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead: the best \
+passages for the query's words, in any order (regex and glob don't apply)." },
   }, ["query"]],
   find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), \
 up to 300.", {
@@ -210,6 +218,18 @@ whole-word text matches either.`,
   newFiles: (/** @type {string[]} */ files) => `New, not in git yet (read them to see them): ${files.join(", ")}`,
   noCommits: "The repository has no commits yet, so everything in it is new.",
   unsaved: (/** @type {string[]} */ files) => `Unsaved changes in the editor aren't included: ${files.join(", ")}.`,
+  docsNone: "No docs folders are set up. The user can add them in Solder's settings (Docs folders), or with \
+\"Use as Solder docs\" on a folder in the Explorer.",
+  docsUnavailable: "Docs search needs a newer VS Code (its built-in SQLite), so it isn't available here.",
+  docsHits: (/** @type {string} */ query, /** @type {number} */ count) => `The best ${count === 1 ? "passage" : `${count} passages`} \
+in the docs for ${query}, best first. [Brackets] mark the matching words; read_file the lines shown for the whole passage:`,
+  docsLoose: (/** @type {number} */ best, /** @type {number} */ of) => `(Loose matches: the best of these has only ${best} of \
+your ${of} words, so they may be about something else.)`,
+  docsNoMatches: (/** @type {string} */ query) => `Nothing in the docs matches ${query}. If it should be there, try once \
+with other words (a name, a part number); otherwise carry on without it.`,
+  docsBuilding: (/** @type {number} */ files) => `(The docs index is still being built, ${files.toLocaleString("en-US")} \
+files so far, so these results may be incomplete.)`,
+  docsTruncated: `(Some docs folders hold more than 20,000 files; the rest aren't searched.)`,
   longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
     `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown; use search to find text in it)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
