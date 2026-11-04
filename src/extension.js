@@ -13,6 +13,13 @@ const { SolderPanel, KEY } = require("./panel.js");
 function activate(context) {
   const output = vscode.window.createOutputChannel("Solder");
   const panel = new SolderPanel(context);
+  // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
+  panel.setup.needed().then(async (needed) => {
+    if (!needed) return;
+    const pick = await vscode.window.showInformationMessage("Solder isn't set up yet. It takes a minute: the gateway's address, your key and a model.",
+      "Guided setup", "Later");
+    if (pick === "Guided setup") await vscode.commands.executeCommand("solder.setup");
+  }, () => {});
   context.subscriptions.push(
     output,
     vscode.window.registerWebviewViewProvider("solder.chat", panel, { webviewOptions: { retainContextWhenHidden: true } }),
@@ -27,6 +34,12 @@ function activate(context) {
     }),
     vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(context, output)),
     vscode.commands.registerCommand("solder.focus", () => vscode.commands.executeCommand("solder.chat.focus")),
+    vscode.commands.registerCommand("solder.setup", async () => {
+      await vscode.commands.executeCommand("solder.chat.focus");
+      await panel.setup.start();
+    }),
+    vscode.commands.registerCommand("solder.openGuide", () =>
+      vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(context.extensionUri, "README.md"))),
     vscode.commands.registerCommand("solder.useFolder", async (/** @type {vscode.Uri | undefined} */ uri) => {
       await vscode.commands.executeCommand("solder.chat.focus");
       if (uri) await panel.setFolder(uri.fsPath);

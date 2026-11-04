@@ -12,6 +12,7 @@ const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
 const { WorkspaceTools } = require("./tools.js");
+const { SetupWizard } = require("./setup.js");
 
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
@@ -41,6 +42,7 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
+    this.setup = new SetupWizard(context, KEY, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "solder.focus";
     context.subscriptions.push(this.statusBar);
@@ -243,6 +245,14 @@ class SolderPanel {
       case "setKey": await vscode.commands.executeCommand("solder.setApiKey"); return;
       case "settings": await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:gremnar.solder"); return;
       case "refreshModels": return this.refreshModels();
+      case "setup":
+        if (message.action === "start") await this.setup.start();
+        else {
+          await this.setup.handle(message);
+          if (!this.setup.view) { this._client = null; await this.refreshModels(); }
+        }
+        return;
+      case "guide": await vscode.commands.executeCommand("solder.openGuide"); return;
     }
   }
 
@@ -363,6 +373,7 @@ class SolderPanel {
       credits: this.credits,
       steers: [...this.engine.steers],
       workspace: !!this.tools.root(),
+      setup: this.setup.view,
     });
   }
 

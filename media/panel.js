@@ -125,10 +125,111 @@
 
   function render() {
     if (!state) return;
-    $("chat-title-text").textContent = state.chat.title;
+    $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.chat.title;
+    document.body.classList.toggle("in-setup", !!state.setup);
+    if (state.setup) { renderSetup(); return; }
+    setupDraft = null;
     renderTranscript();
     renderComposer();
   }
+
+  // ------------------------------------------------------------ guided setup --
+  // The extension holds the wizard's state; what you type stays here (draft) until you go on.
+
+  /** @type {Record<string, string> | null} */
+  let setupDraft = null;
+  let setupShown = "";
+
+  const SETUP_TEXT = {
+    endpoint: ["Where's your gateway?", "The full Chat Completions address, ending in <code>/chat/completions</code>. Any OpenAI-compatible endpoint with tool calling works."],
+    key: ["Your API key", "Kept in VS Code's secret storage, never in settings. Solder checks it by listing the models."],
+    model: ["Your default model", "New chats start with it; each chat can switch beside Send."],
+    docs: ["Your own docs", "Optional. Folders of reference docs that live only on your PC: APIs, schematics, specifications. They're indexed here; only the passages the model reads are sent. Plain text and Word, Excel and PowerPoint files; not PDFs."],
+    rules: ["About you and your code", "Optional. A few plain lines the model always follows: languages and versions, style, what not to touch."],
+    done: ["You're set", "Solder is ready. You can change any of this in Settings, or run this again from the ⋯ menu."],
+  };
+
+  function renderSetup() {
+    const s = state.setup;
+    if (!setupDraft) setupDraft = {};
+    const keep = (/** @type {string} */ id, /** @type {string} */ value) => escape(setupDraft?.[id] ?? value ?? "");
+    const order = s.steps.filter((/** @type {string} */ name) => name !== "done");
+    const at = s.steps.indexOf(s.step);
+    const dots = order.map((/** @type {string} */ name, /** @type {number} */ i) =>
+      `<span class="dot${i < at ? " done" : i === at ? " on" : ""}" title="${escape(SETUP_TEXT[name][0])}"></span>`).join("");
+    const [title, intro] = SETUP_TEXT[/** @type {keyof typeof SETUP_TEXT} */ (s.step)];
+    let body = "";
+    if (s.step === "endpoint") {
+      body = `<input id="setup-endpoint" class="field" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/chat/completions" value="${keep("setup-endpoint", s.endpoint)}">`;
+    } else if (s.step === "key") {
+      body = `<input id="setup-key" class="field" type="password" placeholder="${s.hasKey ? "A key is saved: leave empty to keep it" : "Paste your key"}" value="${keep("setup-key", "")}">` +
+        `<div class="hint">${s.hasKey ? "A key is already saved." : "A local server may not need one: leave it empty."}</div>`;
+    } else if (s.step === "model") {
+      const chosen = setupDraft["setup-model"] ?? s.model;
+      body = s.models.length
+        ? `<div class="pick">${s.models.map((/** @type {any} */ m) => `<button class="option${m.id === chosen ? " on" : ""}" data-pick-model="${escape(m.id)}">` +
+            `<span class="radio"></span><span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")}</div>`
+        : `<input id="setup-model-typed" class="field" spellcheck="false" placeholder="The model's id" value="${keep("setup-model-typed", s.model)}">` +
+          `<div class="hint">The models couldn't be listed, so type the id your gateway uses.</div>`;
+    } else if (s.step === "docs") {
+      body = `<div class="docs">${s.docs.map((/** @type {any} */ d, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(d.path)}">` +
+          `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span>` +
+          `<button data-setup="removeDocs" data-index="${i}" title="Remove" aria-label="Remove">✕</button></div>` +
+          `<input class="field about" data-about="${i}" placeholder="What's in it? For example: PX-40 schematics and the FooBus API" value="${keep("about-" + i, d.about)}"></div>`).join("")}</div>` +
+        `<button class="link-button" data-setup="addDocs">Add a folder…</button>`;
+    } else if (s.step === "rules") {
+      body = `<textarea id="setup-rules" class="field area" rows="5" placeholder="We target Python 3.10 and Node 18.&#10;Use tabs, not spaces.&#10;Never edit files under generated/.">${keep("setup-rules", s.rules)}</textarea>`;
+    } else if (s.step === "done") {
+      let host = s.endpoint;
+      try { host = new URL(s.endpoint).host; } catch { /* as typed */ }
+      body = `<ul class="summary"><li><span>Gateway</span>${escape(host)}</li><li><span>Key</span>${s.hasKey ? "saved" : "none"}</li>` +
+        `<li><span>Model</span>${escape(s.model)}</li><li><span>Docs</span>${s.docs.length ? s.docs.length + " folder" + (s.docs.length === 1 ? "" : "s") : "none"}</li>` +
+        `<li><span>Rules</span>${s.rules ? s.rules.split("\n").filter(Boolean).length + " line" + (s.rules.split("\n").filter(Boolean).length === 1 ? "" : "s") : "none"}</li></ul>`;
+    }
+    const error = s.error ? `<div class="setup-error">${escape(s.error)}${s.step === "key" ? ` <button class="link" data-setup="skipCheck">Continue without checking</button>` : ""}</div>` : "";
+    const next = s.step === "done" ? "Start chatting" : s.step === "key" ? (s.busy ? "Checking…" : "Check and continue")
+      : (s.step === "docs" && !s.docs.length) || (s.step === "rules" && !(setupDraft["setup-rules"] ?? s.rules)) ? "Skip" : "Continue";
+    const buttons = `<div class="setup-buttons">` +
+      (at > 0 && s.step !== "done" ? `<button class="link-button" data-setup="back"${s.busy ? " disabled" : ""}>Back</button>` : `<button class="link-button" data-setup="cancel">Not now</button>`) +
+      `<span class="grow"></span><button class="link-button primary" data-setup="${s.step === "done" ? "finish" : "next"}"${s.busy ? " disabled" : ""}>` +
+      (s.busy ? `<span class="spinner"></span>` : "") + `${next}</button></div>`;
+    const fresh = setupShown !== s.step;
+    setupShown = s.step;
+    transcript.innerHTML = `<div class="setup${fresh ? " enter" : ""}"><div class="dots">${dots}</div><h2>${escape(title)}</h2>` +
+      `<p class="intro">${intro}</p>${body}${error}${buttons}</div>`;
+    const first = /** @type {HTMLElement | null} */ (transcript.querySelector(".field"));
+    if (fresh && first) setTimeout(() => first.focus(), 60);
+  }
+
+  /** What the current step's "next" sends: its inputs. */
+  function setupValues() {
+    const s = state.setup;
+    const value = (/** @type {string} */ id) => /** @type {HTMLInputElement | null} */ (document.getElementById(id))?.value ?? "";
+    if (s.step === "endpoint") return { endpoint: value("setup-endpoint") };
+    if (s.step === "key") return { key: value("setup-key") };
+    if (s.step === "model") return { model: s.models.length ? (setupDraft?.["setup-model"] ?? s.model) : value("setup-model-typed") };
+    if (s.step === "docs") return { abouts: [...document.querySelectorAll("[data-about]")].map((el) => /** @type {HTMLInputElement} */ (el).value) };
+    if (s.step === "rules") return { rules: value("setup-rules") };
+    return {};
+  }
+
+  transcript.addEventListener("input", (event) => {
+    const el = /** @type {HTMLInputElement} */ (event.target);
+    if (!state?.setup || !setupDraft) return;
+    if (el.id) setupDraft[el.id] = el.value;
+    if (el.dataset.about !== undefined) setupDraft["about-" + el.dataset.about] = el.value;
+    if (el.id === "setup-rules") {
+      const button = transcript.querySelector('[data-setup="next"]');
+      if (button) button.textContent = el.value.trim() ? "Continue" : "Skip";
+    }
+  });
+  transcript.addEventListener("keydown", (event) => {
+    const el = /** @type {HTMLElement} */ (event.target);
+    if (state?.setup && event.key === "Enter" && el.tagName === "INPUT") {
+      event.preventDefault();
+      /** @type {HTMLElement | null} */ (transcript.querySelector('[data-setup="next"]'))?.click();
+    }
+  });
 
   function renderTranscript() {
     const items = state.chat.items;
@@ -179,9 +280,9 @@
 
   function welcome() {
     if (state.modelsProblem === "setup") {
-      return `<div class="welcome"><h2>Set up Solder</h2>Point it at an OpenAI-compatible endpoint with tool calling, then add its key.` +
-        `<div class="actions"><button class="link-button primary" data-action="settings">Open settings</button>` +
-        `<button class="link-button" data-action="setKey">Set API key</button></div></div>`;
+      return `<div class="welcome"><h2>Set up Solder</h2>It takes a minute: your gateway's address, your key and a model, then your own docs and rules if you like.` +
+        `<div class="actions"><button class="link-button primary" data-setup="start">Start guided setup</button>` +
+        `<button class="link-button" data-action="settings">Settings</button></div></div>`;
     }
     if (state.modelsProblem) {
       return `<div class="welcome"><h2>Can't reach the endpoint</h2>${escape(state.modelsProblem)}` +
@@ -458,11 +559,21 @@
 
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
+    else if (d.setup) {
+      closeMenus();
+      if (el.hasAttribute("disabled")) return;
+      const extra = d.setup === "next" ? setupValues() : d.setup === "removeDocs" ? { index: Number(d.index) } : {};
+      if (d.setup === "removeDocs" && setupDraft) setupDraft = Object.fromEntries(Object.entries(setupDraft).filter(([k]) => !k.startsWith("about-")));
+      vscode.postMessage({ type: "setup", action: d.setup, ...extra });
+    } else if (d.pickModel) {
+      if (setupDraft) setupDraft["setup-model"] = d.pickModel;
+      for (const option of transcript.querySelectorAll("[data-pick-model]")) option.classList.toggle("on", option === el);
+    }
     else if (d.open) { closeMenus(); vscode.postMessage({ type: "open", id: d.open }); }
     else if (d.model) { closeMenus(); vscode.postMessage({ type: "model", id: d.model }); }
     else if (d.level) vscode.postMessage({ type: "effort", level: d.level });

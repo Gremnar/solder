@@ -53,7 +53,8 @@ function vsixManifest() {
       <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
       <Property Id="Microsoft.VisualStudio.Services.GitHubFlavoredMarkdown" Value="true" />
     </Properties>
-    <License>extension/LICENSE.txt</License>
+    <License>extension/LICENSE.txt</License>${m.icon ? `
+    <Icon>extension/${xml(m.icon)}</Icon>` : ""}
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Code" />
@@ -62,7 +63,8 @@ function vsixManifest() {
   <Assets>
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/README.md" Addressable="true" />
-    <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />${m.icon ? `
+    <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/${xml(m.icon)}" Addressable="true" />` : ""}
   </Assets>
 </PackageManifest>
 `;

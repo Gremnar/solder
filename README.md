@@ -1,38 +1,106 @@
 # Solder
 
-A lean coding agent that lives in a VS Code side panel. It works with any OpenAI-compatible Chat Completions endpoint that supports tool calling.
+**A lean coding agent beside your editor.** Solder sits in VS Code's side bar and reads, searches and edits the code in your workspace. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling, such as your company's gateway or a server on your own PC, and to nothing else.
 
-Solder is for people who want an agent beside the editor, not instead of it:
-- **9 tools:** `read_file`, `symbols` (outline, definitions, references), `search`, `find_files`, `changes` (git), `edit_file`, `write_file`, `remove_item` and `problems`. No shell: Solder reads and edits code, and tells you what to build or test.
-- **Docs search:** point the `solder.docsFolders` setting at your own reference folders, or use **Use as Solder docs** on a folder in the Explorer, and `search` with `docs: true` looks there too. They're indexed on your PC.
-- **VS Code's own diff and undo** for every edit.
-- **An approval** before any change outside the workspace.
-- **Follows `AGENTS.md`**, plus a few rules you set.
-- **A token meter** that shows what each answer costs.
+![A finished chat, with Review and Undo on the edit](media/screenshots/finished-chat.png)
 
-**Status: early (0.0.1).** The panel, the agent loop and the tools work; build the `.vsix` with `node build/vsix.js`. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/LESSONS.md](docs/LESSONS.md) for the engine lessons it's built on.
+## Getting started
 
-## Screenshots
+1. **Install it:** in VS Code, open the Extensions view, choose **⋯ → Install from VSIX…**, and pick `solder-<version>.vsix`. Or run `code --install-extension solder-<version>.vsix`.
+2. **Run the guided setup.** Solder offers it the first time it starts. You can also run it any time from the panel's **⋯ menu → Guided setup…**. It asks for:
+   - **your gateway's address:** the full Chat Completions URL, ending in `/chat/completions`;
+   - **your API key:** kept in VS Code's secret storage, never in settings. Solder checks it by listing the models;
+   - **your default model;**
+   - **your own docs folders:** optional, see [Your docs](#your-docs);
+   - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`".
+3. **Ask.** Type in the box at the bottom and press **Enter**; **Shift+Enter** adds a new line.
 
-A finished chat, with Review and Undo on the edit:
+![Guided setup: choosing the default model](media/screenshots/guided-setup.png)
 
-![A finished chat](docs/screenshots/finished-chat.png)
+## Using Solder
 
-A reply streaming in, and a step running while you type the next message:
+- **What it looks at.** Chips above the box tell Solder where you are:
+  - **The working folder:** relative paths and searches start there. Click the chip to change it, or right-click a folder in the Explorer and choose **Work in this folder**.
+  - **The open file, or your selection:** click a chip to include it, or click it again to leave it out.
+- **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
+- **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. VS Code's own **Ctrl+Z** works too.
+- **It asks first** before deleting anything, or changing a file outside the workspace. You can add a note for the model when you answer.
+- **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
+- **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
+- **Chats** are saved per workspace. The title menu lists them. Solder names each chat after its first answer, and again after the third. **⋯ → Rename this chat…** gives a chat your own name, which Solder then keeps.
 
-![A reply streaming in](docs/screenshots/streaming-reply.png) ![A step running](docs/screenshots/running-step.png)
+![A reply streaming in](media/screenshots/streaming-reply.png) ![A step running while a message waits for the next step](media/screenshots/running-step.png)
 
-## Try the connection check
+## What it can do
 
-1. Install the `.vsix`: `code --install-extension solder-0.0.1.vsix`. For development, open this folder and press F5.
-2. Settings → Solder: set **Endpoint** (the full `/chat/completions` address).
-3. Command palette → **Solder: Set API key**.
-4. Command palette → **Solder: Check connection**. It lists the models, then makes one tool round trip and reports each step in the Solder output.
+Solder has nine tools, and no shell. It never runs commands: when something needs building or testing, it says what to run, and you run it.
 
-## Rules for changing Solder
+| Tool | What it does |
+|---|---|
+| `read_file` | Reads a file, or a range of lines. It sees unsaved changes, and reads Word, Excel and PowerPoint files as text. |
+| `symbols` | A file's outline (classes, functions, methods), or where a name is defined and every place it's used, from VS Code's language support. |
+| `search` | Searches the workspace, or your docs folders. |
+| `find_files` | Lists files matching a pattern. |
+| `changes` | Shows what's changed in git since the last commit. |
+| `edit_file`, `write_file` | Changes or writes a file, then reports any new errors VS Code finds in it. |
+| `remove_item` | Deletes a file or folder, after asking. It can be undone. |
+| `problems` | Lists the errors and warnings VS Code shows. |
 
-- **No npm packages**, not even for development. Plain JavaScript with `// @ts-check` and JSDoc; Node built-ins and the `vscode` API only.
-- **Nothing deployment-specific in this repo:** no company or gateway names, addresses, model names, keys or logs. Those go in user settings or org policy, and private notes stay out of the repo (`private/` is ignored).
-- **Contact only the configured endpoint.** No telemetry, no other network calls.
-- **Every model-facing text** lives in `src/prompt.js` and is pinned by a test.
-- **Tests:** `node --test`. With no Node installed, use VS Code's own: `$env:ELECTRON_RUN_AS_NODE=1; & "<VS Code>\Code.exe" --test`.
+## Your docs
+
+Point Solder at folders of reference documentation that only exist on your PC: in-house APIs, schematics, specifications. The model then searches them when a task needs them.
+
+- **Add a folder:** in the guided setup; with **Use as Solder docs** on a folder in the Explorer; or in the **Docs folders** setting. Each folder can have a short note on what's in it, which tells the model when to look there.
+- **What's searched:**
+  - any plain text: `.txt`, `.md`, `.rst`, `.html`, `.xml`, `.json`, `.yaml`, `.csv`, `.log`, and code and headers such as `.c`, `.h`, `.py`, `.cs` and `.ps1`, in UTF-8 or UTF-16;
+  - Word, Excel and PowerPoint files: `.docx`, `.xlsx`, `.pptx`, and their macro versions.
+- **What isn't:**
+  - PDFs, images and scans;
+  - the old `.doc`, `.xls` and `.ppt` formats;
+  - files over 5 MB (40 MB for Office files);
+  - anything beyond 20,000 files in one folder. `.git` and `node_modules` are skipped.
+- **Privacy:** the index is built and kept on your PC, and refreshed in the background. Only the passages the model reads are sent to your endpoint.
+
+## Instructions it follows
+
+- **`AGENTS.md`:** if your workspace has one at its root, Solder follows it. One in a subfolder applies once Solder reads files there. The **Instruction files** setting adds others, such as `CLAUDE.md`.
+- **Your rules:** a few plain lines in the **Rules** setting, or in the guided setup, added to every chat.
+
+## Tokens and cost
+
+Each step sends the whole chat again, so long chats cost more per step. Solder keeps that down:
+- it cuts old tool output down to short stand-ins;
+- it leaves out earlier turns' big file writes;
+- it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default.
+
+The panel shows what the chat has used, and the status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
+
+## Settings
+
+| Setting | What it's for |
+|---|---|
+| **Endpoint** | your gateway's `/chat/completions` address |
+| **Model**, **Model filter**, **Model names** | the default model; which models are offered; short names for the picker |
+| **Effort** | how hard new chats think |
+| **Compact at tokens** | when the older part of a chat is summarised |
+| **Max rounds** | the most steps with tool calls for one message |
+| **Rules**, **Instruction files** | what the model always follows |
+| **Docs folders** | your own reference docs |
+
+The API key is set with **Solder: Set API key**, or in the guided setup. It's never stored in settings.
+
+## Privacy
+
+- **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet.
+- **Your key:** kept in VS Code's secret storage.
+- **Your chats and the docs index:** stay on your PC, in VS Code's storage for Solder.
+
+## Troubleshooting
+
+- **"Can't reach the endpoint":** run **Solder: Check connection** from the command palette. It lists the models, then makes one tool round trip, and reports each step in the Solder output.
+- **"The allowance is used up":** your gateway's daily limit was reached. Everything so far is saved, so choose **Resume** once it resets.
+- **The outline or symbols come back empty:** VS Code has no language support for that kind of file, or it's still starting. Solder falls back to text search.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Solder is MIT licensed.

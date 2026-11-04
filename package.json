@@ -5,6 +5,7 @@
   "version": "0.0.1",
   "publisher": "gremnar",
   "license": "MIT",
+  "icon": "media/icon.png",
   "private": true,
   "engines": { "vscode": "^1.100.0" },
   "categories": ["AI", "Programming Languages"],
@@ -29,7 +30,9 @@
       { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
       { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" },
       { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" },
-      { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" }
+      { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" },
+      { "command": "solder.setup", "title": "Guided setup", "category": "Solder" },
+      { "command": "solder.openGuide", "title": "Guide", "category": "Solder" }
     ],
     "menus": {
       "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" },
