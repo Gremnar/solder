@@ -9,10 +9,10 @@
 </head>
 <body>
 <header class="bar">
-  <button id="chat-title" class="title" title="Your chats"><span id="chat-title-text">New chat</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+  <button id="chat-title" class="title" title="Your chats" aria-haspopup="menu" aria-expanded="false"><span id="chat-title-text">New chat</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
   <div class="bar-actions">
     <button id="btn-new" class="icon" title="New chat" aria-label="New chat"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
-    <button id="btn-more" class="icon" title="More" aria-label="More"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/></svg></button>
+    <button id="btn-more" class="icon" title="More" aria-label="More" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/></svg></button>
   </div>
   <div id="chat-menu" class="menu hidden" role="menu"></div>
   <div id="more-menu" class="menu right hidden" role="menu">
@@ -37,11 +37,11 @@
     <textarea id="input" rows="1" placeholder="Ask Solder to read or change your code…" aria-label="Message"></textarea>
     <div class="row">
       <div id="model" class="model">
-        <button id="model-button" class="model-button" title="Model"><span id="model-name">Model</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+        <button id="model-button" class="model-button" title="Model" aria-haspopup="menu" aria-expanded="false"><span id="model-name">Model</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
         <div id="model-menu" class="menu up hidden" role="menu"></div>
       </div>
       <div id="effort" class="effort" title="How hard the model thinks">
-        <button data-level="low" data-tip="Quick answers. The default.">Low</button>
+        <button data-level="low" class="active" data-tip="Quick answers. The default.">Low</button>
         <button data-level="medium" data-tip="More thought, a little slower.">Medium</button>
         <button data-level="high" data-tip="Consumes significantly more usage and will take longer to answer.">High</button>
       </div>

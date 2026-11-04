@@ -123,12 +123,73 @@
 
   // --------------------------------------------------------------- rendering --
 
+  // ------------------------------------------------------------- entrances --
+  // The transcript is re-rendered whole on every state, so an element can't just animate when it's created: it
+  // would replay each time. Things that should arrive with a little motion carry data-enter="key"; a key seen for
+  // the first time gets .enter, and keeps it (with its age in --age, so the animation carries on rather than
+  // restarting) for ENTER_MS. Keys: i: an item, d: a step's finished mark, o: an opened output, t: a steer,
+  // q: a queued message, s: the status line, w: the welcome.
+
+  const ENTER_MS = 1000;
+  /** @type {Map<string, number>} */
+  const bornInTranscript = new Map();
+  /** @type {Map<string, number>} */
+  const bornInComposer = new Map();
+
+  /** @param {HTMLElement} root @param {Map<string, number>} born @param {boolean} quiet nothing animates but the welcome */
+  function entrances(root, born, quiet) {
+    const now = performance.now();
+    const els = /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll("[data-enter]"));
+    let fresh = 0;
+    for (const el of els) if (!born.has(String(el.dataset.enter)) && String(el.dataset.enter).startsWith("i:")) fresh++;
+    if (fresh > 4) quiet = true; // a whole chat changed at once (a summary shifted it): no parade
+    const present = new Set();
+    for (const el of els) {
+      const key = String(el.dataset.enter);
+      present.add(key);
+      if (!born.has(key)) born.set(key, quiet && !key.startsWith("w:") ? -Infinity : now);
+      const age = now - Number(born.get(key));
+      if (age < ENTER_MS) {
+        el.classList.add("enter");
+        if (age >= 1) el.style.setProperty("--age", `-${Math.round(age)}ms`);
+      }
+    }
+    for (const key of [...born.keys()]) if (!present.has(key)) born.delete(key);
+  }
+
+  /** Restarts a one-shot animation class. @param {Element | null} el @param {string} name */
+  function replay(el, name) {
+    if (!el) return;
+    el.classList.remove(name);
+    void (/** @type {HTMLElement} */ (el).offsetWidth);
+    el.classList.add(name);
+  }
+
+  const ICONS = {
+    check: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M4.2 8.4 6.9 11l4.9-5.8"/></svg>`,
+    cross: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5 5l6 6M11 5l-6 6"/></svg>`,
+    undo: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5.5 6.5h4a2.6 2.6 0 0 1 0 5.2H7.5M7.6 4.4 5.5 6.5l2.1 2.1"/></svg>`,
+    more: `<svg class="more" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg>`,
+    clock: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 5v3l2 1.3M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0Z"/></svg>`,
+    alert: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.8v3.6M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/><circle cx="8" cy="11" r="0.85"/></svg>`,
+    pause: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.6 6v4M9.4 6v4M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>`,
+    shield: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13 3.8V8c0 3-2.2 5.1-5 6.2C5.2 13.1 3 11 3 8V3.8z"/></svg>`,
+    search: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.4 10.4 13.6 13.6M11.6 7.1a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Z"/></svg>`,
+    edit: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.2 12.8 6l-6.6 6.6H3.4V9.8zM8.6 4.6l2.8 2.8"/></svg>`,
+    triangle: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.6 14.2 13.2H1.8zM8 6.6v3.2"/><circle cx="8" cy="11.4" r="0.8"/></svg>`,
+    // Solder's mark (media/solder.svg): a pad, the S-shaped trace, and the joint at its end
+    solder: `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="trace" pathLength="1" d="M16.3 5.5H9.6L7.4 7.7v1.8l2.2 2.2h4.6l2.2 2.2v1.6l-2.2 2.2H7.7"/>` +
+      `<circle class="pad" cx="16.4" cy="5.5" r="1.7"/><circle class="end" cx="7.6" cy="17.7" r="1.9"/></svg>`,
+  };
+
   function render() {
     if (!state) return;
     $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.chat.title;
     document.body.classList.toggle("in-setup", !!state.setup);
+    document.body.classList.toggle("busy", !!state.busy && !state.setup);
     if (state.setup) { renderSetup(); return; }
     setupDraft = null;
+    setupShown = "";
     renderTranscript();
     renderComposer();
   }
@@ -139,6 +200,7 @@
   /** @type {Record<string, string> | null} */
   let setupDraft = null;
   let setupShown = "";
+  let setupLast = { error: "", busy: false, at: 0 }; // what the last render showed: for the direction of the slide and the shake
 
   const SETUP_TEXT = {
     endpoint: ["Where's your gateway?", "The full Chat Completions address, ending in <code>/chat/completions</code>. Any OpenAI-compatible endpoint with tool calling works."],
@@ -151,6 +213,7 @@
 
   function renderSetup() {
     const s = state.setup;
+    for (const key of [...bornInTranscript.keys()]) if (key.startsWith("w:")) bornInTranscript.delete(key); // the welcome after it arrives anew
     if (!setupDraft) setupDraft = {};
     const keep = (/** @type {string} */ id, /** @type {string} */ value) => escape(setupDraft?.[id] ?? value ?? "");
     const order = s.steps.filter((/** @type {string} */ name) => name !== "done");
@@ -186,16 +249,23 @@
         `<li><span>Model</span>${escape(s.model)}</li><li><span>Docs</span>${s.docs.length ? s.docs.length + " folder" + (s.docs.length === 1 ? "" : "s") : "none"}</li>` +
         `<li><span>Rules</span>${s.rules ? s.rules.split("\n").filter(Boolean).length + " line" + (s.rules.split("\n").filter(Boolean).length === 1 ? "" : "s") : "none"}</li></ul>`;
     }
-    const error = s.error ? `<div class="setup-error">${escape(s.error)}${s.step === "key" ? ` <button class="link" data-setup="skipCheck">Continue without checking</button>` : ""}</div>` : "";
+    const fresh = setupShown !== s.step;
+    const shake = !!s.error && (fresh || s.error !== setupLast.error || setupLast.busy);
+    const back = fresh && setupShown !== "" && at < setupLast.at;
+    const error = s.error ? `<div class="setup-error${shake ? " enter" : ""}" role="alert">${ICONS.alert}<div>${escape(s.error)}` +
+      `${s.step === "key" ? ` <button class="link" data-setup="skipCheck">Continue without checking</button>` : ""}</div></div>` : "";
     const next = s.step === "done" ? "Start chatting" : s.step === "key" ? (s.busy ? "Checking…" : "Check and continue")
       : (s.step === "docs" && !s.docs.length) || (s.step === "rules" && !(setupDraft["setup-rules"] ?? s.rules)) ? "Skip" : "Continue";
     const buttons = `<div class="setup-buttons">` +
       (at > 0 && s.step !== "done" ? `<button class="link-button" data-setup="back"${s.busy ? " disabled" : ""}>Back</button>` : `<button class="link-button" data-setup="cancel">Not now</button>`) +
       `<span class="grow"></span><button class="link-button primary" data-setup="${s.step === "done" ? "finish" : "next"}"${s.busy ? " disabled" : ""}>` +
       (s.busy ? `<span class="spinner"></span>` : "") + `${next}</button></div>`;
-    const fresh = setupShown !== s.step;
     setupShown = s.step;
-    transcript.innerHTML = `<div class="setup${fresh ? " enter" : ""}"><div class="dots">${dots}</div><h2>${escape(title)}</h2>` +
+    setupLast = { error: s.error || "", busy: !!s.busy, at };
+    const progress = s.step === "done"
+      ? `<div class="done-mark">${ICONS.check}</div>`
+      : `<div class="progress"><div class="dots">${dots}</div><span class="count">${at + 1} of ${order.length}</span></div>`;
+    transcript.innerHTML = `<div class="setup${fresh ? " enter" : ""}${back ? " back" : ""}">${progress}<h2>${escape(title)}</h2>` +
       `<p class="intro">${intro}</p>${body}${error}${buttons}</div>`;
     const first = /** @type {HTMLElement | null} */ (transcript.querySelector(".field"));
     if (fresh && first) setTimeout(() => first.focus(), 60);
@@ -231,81 +301,128 @@
     }
   });
 
+  let shownChat = ""; // the chat the transcript last showed: a different one arrives without a parade
+
   function renderTranscript() {
     const items = state.chat.items;
+    const quiet = shownChat !== state.chat.id;
+    if (quiet && shownChat) replay(transcript, "swap");
+    shownChat = state.chat.id;
     const parts = [];
     if (!items.length && !state.busy) parts.push(welcome());
-    for (const item of items) {
+    let inSteps = false; // consecutive steps share one timeline
+    const endSteps = () => { if (inSteps) parts.push("</div>"); inSteps = false; };
+    items.forEach((/** @type {any} */ item, /** @type {number} */ index) => {
+      if (item.kind === "step") {
+        if (!inSteps) parts.push(`<div class="steps">`);
+        inSteps = true;
+        parts.push(step(item));
+        return;
+      }
+      endSteps();
       if (item.kind === "user") {
-        parts.push(`<div class="user${item.resume ? " resume" : ""}">${escape(item.text)}` +
-          (item.chips.length ? `<div class="chips">${item.chips.map((c) => `<span class="chip">${escape(c)}</span>`).join("")}</div>` : "") + "</div>");
+        parts.push(`<div class="user${item.resume ? " resume" : ""}" data-enter="i:u${index}">${escape(item.text)}` +
+          (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c)}</span>`).join("")}</div>` : "") + "</div>");
       } else if (item.kind === "answer") {
+        // no entrance: an answer arrives word by word, through the fade-in
         parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${markdown(item.text)}</div>`);
       } else if (item.kind === "note") {
-        parts.push(`<div class="note">${escape(item.text)}</div>`);
-      } else if (item.kind === "step") {
-        parts.push(step(item));
+        parts.push(`<div class="note" data-enter="i:n${index}">${escape(item.text)}</div>`);
       }
-    }
+    });
     if (state.busy) {
       const stepRunning = items.some((/** @type {any} */ i) => i.kind === "step" && i.running);
-      if (reveal.shown) parts.push(`<div class="answer" id="live">${markdown(closeOpenMarks(reveal.shown))}</div>`);
-      else if (!stepRunning || state.status) parts.push(`<div class="status" id="status"><span class="spinner"></span><span>${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
+      if (reveal.shown) { endSteps(); parts.push(`<div class="answer" id="live">${markdown(closeOpenMarks(reveal.shown))}</div>`); }
+      else if (!stepRunning || state.status) {
+        // after steps, the status is the timeline's next node
+        parts.push(`<div class="status" id="status" data-enter="s:status"><span class="spinner"></span><span class="what">${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
+      }
     }
+    endSteps();
     // 2. What you typed meanwhile, waiting to go with the next step (✕ takes it back into the box).
     for (const [index, text] of (state.busy ? state.steers || [] : []).entries()) {
-      parts.push(`<div class="user queued">${escape(text)}<div class="queued-note"><span>Goes with the next step</span>` +
+      parts.push(`<div class="user queued" data-enter="q:${escape(text)}">${escape(text)}<div class="queued-note">${ICONS.clock}<span>Goes with the next step</span>` +
         `<button data-unsteer="${index}" title="Take it back (into the box)" aria-label="Take it back">✕</button></div></div>`);
     }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
     transcript.innerHTML = parts.join("");
+    entrances(transcript, bornInTranscript, quiet);
     if (atBottom || stickToBottom) transcript.scrollTop = transcript.scrollHeight;
     stickToBottom = false;
+  }
+
+  /** A step's label: the tool's name in code type while it waits; after it, the summary with its detail quieter. @param {any} item @param {string} label */
+  function stepLabel(item, label) {
+    if (item.pending && item.name && label.startsWith(item.name + " ")) return `<span class="tool">${escape(item.name)}</span>${escape(label.slice(item.name.length))}`;
+    const cut = label.indexOf(" · ");
+    if (cut < 0) return escape(label);
+    let detail = escape(label.slice(cut));
+    if (item.change && !item.undone) {
+      detail = detail.replace(/(^|\s)([−-]\d+)(?=\s|$)/g, `$1<span class="del">$2</span>`).replace(/(^|\s)(\+\d+)(?=\s|$)/g, `$1<span class="add">$2</span>`);
+    }
+    return `${escape(label.slice(0, cut))}<span class="sub">${detail}</span>`;
   }
 
   /** @param {any} item */
   function step(item) {
     const cls = item.pending ? (item.running ? "running" : "waiting") : item.failed ? "failed" : "ok";
-    const mark = item.pending ? (item.running ? "" : "·") : item.failed ? "✕" : "✓";
+    const mark = item.pending ? "" : item.undone ? ICONS.undo : item.failed ? ICONS.cross : ICONS.check;
     const acts = item.change && !item.pending
       ? `<span class="acts">${item.removed ? "" : `<button data-review="${item.id}">Review</button>`}${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
     const label = item.pending ? item.label : (item.summary || item.label) + (item.undone ? " · undone" : "");
-    const body = open.has(item.id) && item.output ? `<pre class="out"><code>${escape(item.output)}</code></pre>` : "";
+    const shown = open.has(item.id) && !!item.output;
+    const body = shown ? `<pre class="out" data-enter="o:${item.id}"><code>${escape(item.output)}</code></pre>` : "";
     const time = item.running && item.since ? `<span class="time" data-since="${item.since}">${elapsed(Date.now() - item.since)}</span>`
       : !item.pending && item.ms >= 1000 ? `<span class="time" title="How long this step took">${duration(item.ms)}</span>` : "";
-    const steered = item.steer ? `<div class="steered"><span class="who">You, with this step</span>${escape(item.steer)}</div>` : "";
-    return `<div class="step ${cls}${item.undone ? " undone" : ""}"><div class="step-head" data-step="${item.id}" role="button" tabindex="0">` +
-      `<span class="mark">${mark}</span><span class="label" title="${escape(label)}">${escape(label)}</span>${time}${acts}</div>${body}${steered}</div>`;
+    const steered = item.steer ? `<div class="steered" data-enter="t:${item.id}"><span class="who">You, with this step</span>${escape(item.steer)}</div>` : "";
+    // the head's key changes as the step finishes (or is undone), so its mark pops and draws once
+    const settled = item.pending ? "" : ` data-enter="d:${item.id}${item.failed ? ":failed" : ""}${item.undone ? ":undone" : ""}"`;
+    return `<div class="step ${cls}${item.undone ? " undone" : ""}${shown ? " open" : ""}" data-enter="i:${item.id}"><div class="step-head" data-step="${item.id}" role="button" tabindex="0"${settled}>` +
+      `<span class="mark">${mark}</span><span class="label" title="${escape(label)}">${stepLabel(item, label)}</span>${item.output ? ICONS.more : ""}${time}${acts}</div>${body}${steered}</div>`;
   }
 
   function welcome() {
     if (state.modelsProblem === "setup") {
-      return `<div class="welcome"><h2>Set up Solder</h2>It takes a minute: your gateway's address, your key and a model, then your own docs and rules if you like.` +
+      return `<div class="welcome" data-enter="w:setup"><div class="logo">${ICONS.solder}</div><h2>Set up Solder</h2>` +
+        `<p class="lead">It takes a minute: your gateway's address, your key and a model, then your own docs and rules if you like.</p>` +
         `<div class="actions"><button class="link-button primary" data-setup="start">Start guided setup</button>` +
         `<button class="link-button" data-action="settings">Settings</button></div></div>`;
     }
     if (state.modelsProblem) {
-      return `<div class="welcome"><h2>Can't reach the endpoint</h2>${escape(state.modelsProblem)}` +
+      return `<div class="welcome" data-enter="w:problem"><div class="logo problem">${ICONS.triangle}</div><h2>Can't reach the endpoint</h2>` +
+        `<p class="lead">${escape(state.modelsProblem)}</p>` +
         `<div class="actions"><button class="link-button primary" data-action="refreshModels">Try again</button>` +
         `<button class="link-button" data-action="settings">Settings</button><button class="link-button" data-action="setKey">Set API key</button></div></div>`;
     }
-    return `<div class="welcome"><h2>Solder</h2>Ask about your code, or for a change. Solder reads, searches and edits files in this workspace, ` +
-      `checks VS Code's problems after each edit, and every change can be reviewed and undone.` +
-      (state.workspace ? "" : "<br><br>Open a folder first: Solder works inside a workspace.") + "</div>";
+    const feature = (/** @type {string} */ icon, /** @type {string} */ html) => `<li><span class="ico">${icon}</span><span>${html}</span></li>`;
+    return `<div class="welcome" data-enter="w:${state.chat.id}"><div class="logo">${ICONS.solder}</div><h2>Solder</h2>` +
+      `<p class="lead">Ask about your code, or for a change.</p><ul class="features">` +
+      feature(ICONS.search, "<b>Reads and searches</b> your workspace") +
+      feature(ICONS.edit, "<b>Edits</b>, then checks for problems") +
+      feature(ICONS.undo, "<b>Every change</b> can be reviewed and undone") + "</ul>" +
+      (state.workspace ? "" : `<p class="aside">Open a folder first: Solder works inside a workspace.</p>`) + "</div>";
   }
+
+  let shownApprovals = "";
+  let shownModels = "";
 
   function renderComposer() {
     // approvals
-    $("approvals").innerHTML = state.approvals.map((/** @type {any} */ a) => `<div class="approval" data-id="${a.id}">` +
-      `<div class="what">${escape(a.label)}</div><div class="why">${escape(a.reason)}</div>` +
+    const approvals = state.approvals.map((/** @type {any} */ a) => `<div class="approval" data-id="${a.id}" data-enter="a:${a.id}" role="alert">` +
+      `<div class="what">${ICONS.shield}<span>${escape(a.label)}</span></div><div class="why">${escape(a.reason)}</div>` +
       (a.content ? `<pre><code>${escape(a.content)}</code></pre>` : "") +
       `<input type="text" placeholder="A note for the model (optional)"><div class="buttons">` +
       `<button class="allow" data-decide="allow">Allow</button><button data-decide="decline">Decline</button></div></div>`).join("");
+    if (approvals !== shownApprovals) { // only when they change: a note you're typing stays put
+      shownApprovals = approvals;
+      $("approvals").innerHTML = approvals;
+      entrances($("approvals"), bornInComposer, false);
+    }
     // banner
     const banner = $("banner");
     if (state.error && !state.busy) {
       banner.className = "banner" + (state.error.stopped ? " soft" : "");
-      banner.innerHTML = `<span class="msg">${escape(state.error.message)}` +
+      banner.innerHTML = (state.error.stopped ? ICONS.pause : ICONS.alert) + `<span class="msg">${escape(state.error.message)}` +
         (state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
         (state.error.resumable ? `<button data-action="resume">Resume</button>` : "");
     } else banner.className = "banner hidden";
@@ -323,22 +440,27 @@
     // model
     const model = state.models.find((/** @type {any} */ m) => m.id === state.model);
     $("model-name").textContent = model ? model.name : state.model || "Choose a model";
-    $("model-menu").innerHTML = state.models.length
+    const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
         `<span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
       : `<div class="empty">No models listed.</div>`;
+    if (models !== shownModels) { shownModels = models; $("model-menu").innerHTML = models; } // an open menu doesn't flicker
     // effort
     const level = state.effort === "default" ? "low" : state.effort;
     for (const button of $("effort").querySelectorAll("button")) button.classList.toggle("active", button.dataset.level === level);
     // send / stop
     $("send").classList.toggle("hidden", state.busy && !input.value.trim());
     $("stop").classList.toggle("hidden", !state.busy);
+    $("send").classList.toggle("idle", !input.value.trim());
     $("send").title = state.busy ? "Send with the next step (Enter)" : "Send (Enter)";
     // footer
     const footer = [];
     if (state.chat.tokens) footer.push(`<span title="Tokens this chat has used">${compact(state.chat.tokens)} tokens</span>`);
-    if (state.credits) footer.push(`<span title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">${compact(state.credits.remaining)} left</span>`);
+    const share = state.credits && state.credits.limit ? Math.max(0, Math.min(1, state.credits.remaining / state.credits.limit)) : 0;
+    if (state.credits) footer.push(`<span class="left" title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">` +
+      `${state.credits.limit ? `<span class="meter${share < 0.15 ? " low" : ""}"></span>` : ""}${compact(state.credits.remaining)} left</span>`);
     $("footer").innerHTML = footer.join("");
+    /** @type {HTMLElement | null} */ (document.querySelector("#footer .meter"))?.style.setProperty("--fill", share.toFixed(3));
   }
 
   /** A finished step's time: "1.4s", "12s", "1:05". @param {number} ms */
@@ -383,7 +505,7 @@
     if (!clock) return;
     const seconds = Math.floor((Date.now() - thinkingSince) / 1000);
     clock.textContent = seconds >= 15 ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}` : "";
-    const label = document.querySelector("#status span:nth-child(2)");
+    const label = document.querySelector("#status .what");
     if (label && seconds >= 15 && state?.effort === "high" && !state.status.includes("…")) label.textContent = "Thinking hard on High effort…";
   }, 1000);
 
@@ -517,6 +639,7 @@
     const text = input.value.trim();
     if (!text || !state) return;
     vscode.postMessage({ type: "send", text, selection: !!editor.selection && chipsOn.selection, file: !!editor.file && chipsOn.file });
+    replay($("send"), "launch");
     input.value = "";
     stickToBottom = true;
     autosize();
@@ -527,6 +650,7 @@
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px";
     if (state) $("send").classList.toggle("hidden", state.busy && !input.value.trim());
+    $("send").classList.toggle("idle", !input.value.trim());
   }
 
   input.addEventListener("input", () => { autosize(); vscode.setState({ draft: input.value }); });
@@ -543,15 +667,24 @@
   $("stop").addEventListener("click", () => vscode.postMessage({ type: "stop" }));
   $("btn-new").addEventListener("click", () => { vscode.postMessage({ type: "new" }); input.focus(); });
 
+  /** Each menu and the button that opens it (its chevron turns while it's open). */
+  const OPENERS = { "chat-menu": "chat-title", "more-menu": "btn-more", "model-menu": "model-button" };
   function closeMenus(except = "") {
-    for (const menu of document.querySelectorAll(".menu")) if (menu.id !== except) menu.classList.add("hidden");
+    for (const menu of document.querySelectorAll(".menu")) if (menu.id !== except) {
+      menu.classList.add("hidden");
+      document.getElementById(OPENERS[/** @type {keyof typeof OPENERS} */ (menu.id)] || "")?.setAttribute("aria-expanded", "false");
+    }
   }
   /** @param {string} id */
   function toggle(id) {
     const menu = $(id);
     const show = menu.classList.contains("hidden");
     closeMenus();
-    if (show) { if (id === "chat-menu") renderChatMenu(); menu.classList.remove("hidden"); }
+    if (show) {
+      if (id === "chat-menu") renderChatMenu();
+      menu.classList.remove("hidden");
+      document.getElementById(OPENERS[/** @type {keyof typeof OPENERS} */ (id)])?.setAttribute("aria-expanded", "true");
+    }
   }
   $("chat-title").addEventListener("click", (e) => { e.stopPropagation(); toggle("chat-menu"); });
   $("btn-more").addEventListener("click", (e) => { e.stopPropagation(); toggle("more-menu"); });
@@ -577,7 +710,7 @@
     else if (d.open) { closeMenus(); vscode.postMessage({ type: "open", id: d.open }); }
     else if (d.model) { closeMenus(); vscode.postMessage({ type: "model", id: d.model }); }
     else if (d.level) vscode.postMessage({ type: "effort", level: d.level });
-    else if (d.chip) { chipsOn[/** @type {"file"|"selection"} */ (d.chip)] = !chipsOn[/** @type {"file"|"selection"} */ (d.chip)]; renderComposer(); }
+    else if (d.chip) { chipsOn[/** @type {"file"|"selection"} */ (d.chip)] = !chipsOn[/** @type {"file"|"selection"} */ (d.chip)]; renderComposer(); replay(document.querySelector(`[data-chip="${d.chip}"]`), "flip"); }
     else if (d.undo) vscode.postMessage({ type: "undo", id: d.undo });
     else if (d.unsteer !== undefined) vscode.postMessage({ type: "unsteer", index: Number(d.unsteer) });
     else if (d.review) vscode.postMessage({ type: "review", id: d.review });
@@ -594,7 +727,11 @@
       vscode.postMessage({ type: "openFile", path: file, line: line ? Number(line) : undefined });
     } else if (el.matches("pre .copy")) {
       const code = el.parentElement?.querySelector("code")?.textContent || "";
-      navigator.clipboard.writeText(code).then(() => { el.textContent = "Copied"; setTimeout(() => (el.textContent = "Copy"), 1200); });
+      navigator.clipboard.writeText(code).then(() => {
+        el.textContent = "Copied";
+        el.classList.add("done");
+        setTimeout(() => { el.textContent = "Copy"; el.classList.remove("done"); }, 1200);
+      });
     }
   });
   document.addEventListener("keydown", (event) => {

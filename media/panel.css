@@ -1,176 +1,374 @@
+/* Solder's panel. Every colour is the user's VS Code theme (var(--vscode-*)) or a mix of it; nothing is hard-coded.
+   Motion: 120–350 ms, ease-out, once; only spinners and the "Thinking…" sheen loop. prefers-reduced-motion turns it all off. */
 :root {
-  --gap: 10px;
-  --radius: 6px;
+  --bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --fg: var(--vscode-foreground);
   --muted: var(--vscode-descriptionForeground);
-  --border: var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.35)));
-  --hover: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  --link: var(--vscode-textLink-foreground);
+  --focus: var(--vscode-focusBorder, var(--link));
   --accent: var(--vscode-button-background);
   --accent-fg: var(--vscode-button-foreground);
+  --accent-hover: var(--vscode-button-hoverBackground, var(--accent));
+  /* lines: the theme's contrast border in high contrast, else a soft mix of the text colour */
+  --border: var(--vscode-widget-border, var(--vscode-panel-border, color-mix(in srgb, var(--fg) 22%, transparent)));
+  --hairline: var(--vscode-contrastBorder, color-mix(in srgb, var(--fg) 9%, transparent));
+  --line: var(--vscode-contrastBorder, color-mix(in srgb, var(--fg) 15%, transparent));
+  --hover: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--fg) 10%, transparent));
+  --press: var(--vscode-toolbar-activeBackground, color-mix(in srgb, var(--fg) 16%, transparent));
+  --raised: color-mix(in srgb, var(--vscode-input-background, var(--bg)) 62%, var(--bg));
   --input-bg: var(--vscode-input-background);
-  --code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
-  --ok: var(--vscode-testing-iconPassed, #3fb950);
-  --bad: var(--vscode-errorForeground, #f85149);
-  --warn: var(--vscode-editorWarning-foreground, #d29922);
+  --code-bg: var(--vscode-textCodeBlock-background, color-mix(in srgb, var(--fg) 7%, transparent));
+  --ok: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--fg)));
+  --bad: var(--vscode-errorForeground, var(--fg));
+  --warn: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, var(--fg)));
+  --shadow: var(--vscode-widget-shadow, transparent);
+  --r-sm: 5px;
+  --r: 8px;
+  --r-lg: 12px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* out-quint: quick start, soft landing */
+  --spring: cubic-bezier(0.34, 1.5, 0.64, 1);   /* a small overshoot, for pops */
+  --t-fast: 120ms;
+  --t: 180ms;
+  --t-slow: 280ms;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; padding: 0; }
 body {
   display: flex; flex-direction: column; overflow: hidden;
   font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
-  color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  color: var(--fg); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
-button:focus-visible, textarea:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+button:focus-visible, textarea:focus-visible, [role="button"]:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 svg circle { fill: currentColor; stroke: none; }
 .hidden { display: none !important; }
 
+/* ---- motion ---- */
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes appear { from { opacity: 0; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.55); } }
+@keyframes draw { from { stroke-dashoffset: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes menuDown { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes menuUp { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes itemIn { from { opacity: 0; transform: translateY(-2px); } }
+@keyframes wipe { from { opacity: 0; clip-path: inset(0 0 100% 0); transform: translateY(-3px); } }
+@keyframes shake { 20% { transform: translateX(-4px); } 40% { transform: translateX(4px); } 60% { transform: translateX(-2px); } 80% { transform: translateX(1px); } }
+@keyframes grow { from { transform: scaleX(0); } }
+@keyframes fromRight { from { opacity: 0; transform: translateX(14px); } }
+@keyframes fromLeft { from { opacity: 0; transform: translateX(-14px); } }
+@keyframes chipFlip { 40% { transform: scale(0.9); } }
+@keyframes launch { 40% { transform: translateX(9px); opacity: 0; } 41% { transform: translateX(-9px); opacity: 0; } }
+@keyframes sheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes glow { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent); } }
+/* An element that re-renders mid-entrance carries its age in --age (set by panel.js), so it picks up where it was. */
+.enter { animation-delay: var(--age, 0ms); }
+
 /* ---- top bar ---- */
-.bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
-.title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; text-align: left; padding: 3px 6px; border-radius: 4px; font-weight: 600; }
+.bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 8px; border-bottom: 1px solid var(--hairline); }
+.title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; text-align: left; padding: 4px 7px; border-radius: var(--r-sm);
+  font-weight: 600; letter-spacing: -0.005em; transition: background var(--t-fast) ease; }
 .title:hover { background: var(--hover); }
 .title span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chev { flex: none; width: 12px; height: 12px; opacity: 0.85; stroke-width: 1.8; }
+.chev { flex: none; width: 12px; height: 12px; opacity: 0.75; stroke-width: 1.8; transition: transform var(--t) var(--ease), opacity var(--t-fast) ease; }
 .title .chev { margin-top: 1px; }
+.title:hover .chev, [aria-expanded="true"] .chev { opacity: 1; }
+[aria-expanded="true"] > .chev { transform: rotate(180deg); }
 .bar-actions { display: flex; gap: 2px; }
-.icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 4px; }
+.icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-sm); transition: background var(--t-fast) ease, transform var(--t-fast) ease; }
 .icon:hover { background: var(--hover); }
+.icon:active { background: var(--press); transform: scale(0.9); }
+.icon svg { transition: transform var(--t-slow) var(--ease); }
+#btn-new:hover svg { transform: rotate(90deg); }
+.icon[aria-expanded="true"] { background: var(--press); }
 
+/* ---- menus ---- */
 .menu {
-  position: absolute; z-index: 20; top: 100%; left: 8px; min-width: 200px; max-width: calc(100% - 16px); max-height: 60vh; overflow-y: auto;
-  padding: 4px; border-radius: var(--radius); border: 1px solid var(--vscode-menu-border, var(--border));
+  position: absolute; z-index: 20; top: calc(100% + 2px); left: 8px; min-width: 210px; max-width: calc(100% - 16px); max-height: 60vh; overflow-y: auto;
+  padding: 4px; border-radius: var(--r); border: 1px solid var(--vscode-menu-border, var(--border));
   background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, inherit);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 12px 28px -8px var(--shadow), 0 2px 8px -2px var(--shadow);
+  transform-origin: top left; animation: menuDown var(--t) var(--ease);
 }
-.menu.right { left: auto; right: 8px; }
-.menu.up { top: auto; bottom: calc(100% + 4px); left: 0; }
-.menu button { display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left; padding: 5px 8px; border-radius: 4px; }
-.menu button:hover, .menu button.active { background: var(--vscode-menu-selectionBackground, var(--hover)); color: var(--vscode-menu-selectionForeground, inherit); }
-.menu .when { margin-left: auto; color: var(--muted); font-size: 0.85em; white-space: nowrap; }
-.menu .grey { color: var(--muted); font-size: 0.85em; margin-left: auto; }
-.menu .empty { padding: 6px 8px; color: var(--muted); }
+.menu.right { left: auto; right: 8px; transform-origin: top right; }
+.menu.up { top: auto; bottom: calc(100% + 6px); left: 0; transform-origin: bottom left; animation-name: menuUp; }
+.menu > * { animation: itemIn var(--t) var(--ease) both; }
+.menu > :nth-child(2) { animation-delay: 15ms; }
+.menu > :nth-child(3) { animation-delay: 30ms; }
+.menu > :nth-child(4) { animation-delay: 45ms; }
+.menu > :nth-child(5) { animation-delay: 60ms; }
+.menu > :nth-child(n+6) { animation-delay: 75ms; }
+.menu button { position: relative; display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left; padding: 6px 9px; border-radius: var(--r-sm);
+  transition: background 80ms ease, color 80ms ease; }
+.menu button:hover, .menu button:focus-visible { background: var(--vscode-menu-selectionBackground, var(--hover)); color: var(--vscode-menu-selectionForeground, inherit); outline: none; }
+.menu button.active { font-weight: 600; }
+.menu button.active::before { content: ""; position: absolute; left: 2px; top: 50%; width: 3px; height: 14px; margin-top: -7px; border-radius: 2px; background: var(--link); }
+.menu button.active:hover::before { background: currentColor; }
+.menu .when, .menu .grey { margin-left: auto; color: var(--muted); font-size: 0.85em; font-weight: 400; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.menu button:hover .when, .menu button:hover .grey { color: inherit; opacity: 0.8; }
+.menu .empty { padding: 6px 9px; color: var(--muted); }
+.menu .sep { height: 1px; margin: 4px 6px; background: var(--vscode-menu-separatorBackground, var(--hairline)); }
 
 /* ---- transcript ---- */
-#transcript { flex: 1; overflow-y: auto; padding: 12px 12px 4px; }
-.welcome { color: var(--muted); padding: 18px 4px; line-height: 1.5; }
-.welcome h2 { color: var(--vscode-foreground); font-size: 1.1em; margin: 0 0 6px; }
-.welcome .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.link-button { padding: 4px 10px; border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--hover)); color: var(--vscode-button-secondaryForeground, inherit); }
+#transcript {
+  flex: 1; overflow-y: auto; padding: 12px 12px 16px;
+  /* content softens as it scrolls under the bar and the composer (a mask reads only alpha: black here is opacity, not a colour) */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 10px, black calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 10px, black calc(100% - 14px), transparent 100%);
+}
+#transcript.swap { animation: appear var(--t) ease; }
+
+/* the welcome: Solder's mark, drawn in */
+.welcome { color: var(--muted); line-height: 1.55; min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 16px 10px 28px; }
+.welcome h2 { color: var(--fg); font-size: 1.4em; font-weight: 600; letter-spacing: -0.015em; margin: 14px 0 4px; }
+.welcome .lead { margin: 0; max-width: 300px; }
+.welcome .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; justify-content: center; }
+.welcome .aside { margin-top: 16px; font-size: 0.9em; }
+.logo { position: relative; width: 64px; height: 64px; display: grid; place-items: center; border-radius: 18px; color: var(--link);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--link) 16%, var(--bg)), color-mix(in srgb, var(--link) 5%, var(--bg)));
+  border: 1px solid var(--vscode-contrastBorder, color-mix(in srgb, var(--link) 26%, transparent));
+  box-shadow: 0 10px 30px -12px color-mix(in srgb, var(--link) 55%, transparent), inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent); }
+.logo svg { width: 38px; height: 38px; stroke-width: 1.6; overflow: visible; }
+.logo svg circle.pad { fill: none; stroke: currentColor; }
+.logo.problem { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--bg)); border-color: var(--vscode-contrastBorder, color-mix(in srgb, var(--warn) 30%, transparent));
+  box-shadow: 0 10px 30px -14px color-mix(in srgb, var(--warn) 50%, transparent); }
+.logo.problem svg { width: 30px; height: 30px; }
+.features { list-style: none; margin: 20px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; width: 100%; max-width: 290px; }
+.features li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--r); }
+.features li b { color: var(--fg); font-weight: 600; }
+.features .ico { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: var(--link);
+  background: color-mix(in srgb, var(--link) 11%, transparent); border: 1px solid var(--vscode-contrastBorder, transparent); }
+.features .ico svg { width: 14px; height: 14px; }
+.welcome.enter .logo { animation: pop var(--t-slow) var(--spring) both; animation-delay: var(--age, 0ms); }
+.welcome.enter .logo .trace { stroke-dasharray: 1; animation: draw 520ms cubic-bezier(0.65, 0, 0.35, 1) both; animation-delay: calc(var(--age, 0ms) + 120ms); }
+.welcome.enter .logo .pad { animation: pop 220ms var(--spring) both; animation-delay: calc(var(--age, 0ms) + 80ms); transform-box: fill-box; transform-origin: center; }
+.welcome.enter .logo .end { animation: pop 240ms var(--spring) both; animation-delay: calc(var(--age, 0ms) + 600ms); transform-box: fill-box; transform-origin: center; }
+.welcome.enter :is(h2, .lead, .actions, .aside) { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--age, 0ms) + 140ms); }
+.welcome.enter .lead { animation-delay: calc(var(--age, 0ms) + 190ms); }
+.welcome.enter :is(.actions, .aside) { animation-delay: calc(var(--age, 0ms) + 240ms); }
+.welcome.enter .features li { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--age, 0ms) + 260ms); }
+.welcome.enter .features li:nth-child(2) { animation-delay: calc(var(--age, 0ms) + 310ms); }
+.welcome.enter .features li:nth-child(3) { animation-delay: calc(var(--age, 0ms) + 360ms); }
+
+/* buttons in the transcript */
+.link-button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 6px; font-weight: 500;
+  background: var(--vscode-button-secondaryBackground, var(--hover)); color: var(--vscode-button-secondaryForeground, inherit);
+  border: 1px solid var(--vscode-button-border, transparent);
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease, box-shadow var(--t) ease; }
+.link-button:hover:not([disabled]) { background: var(--vscode-button-secondaryHoverBackground, var(--press)); }
 .link-button.primary { background: var(--accent); color: var(--accent-fg); }
+.link-button.primary:hover:not([disabled]) { background: var(--accent-hover); box-shadow: 0 4px 12px -5px color-mix(in srgb, var(--accent) 70%, transparent); }
+.link-button:active:not([disabled]) { transform: scale(0.97); }
 
-.user { margin: 14px 0 10px; padding: 8px 10px; border-radius: var(--radius); background: var(--vscode-input-background); white-space: pre-wrap; word-wrap: break-word; }
-.user .chips { margin-top: 6px; }
-.user.resume { background: none; color: var(--muted); padding: 4px 10px; font-style: italic; }
-.answer { margin: 8px 0; line-height: 1.55; word-wrap: break-word; }
+/* messages */
+.user { position: relative; margin: 20px 0 10px; padding: 9px 12px; border-radius: var(--r-lg); background: var(--raised); border: 1px solid var(--hairline);
+  white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; }
+.user:first-child { margin-top: 2px; }
+.user .chips { margin-top: 7px; }
+.user .chips .chip { background: color-mix(in srgb, var(--fg) 6%, transparent); border-color: transparent; }
+.user.resume { background: none; border-color: transparent; color: var(--muted); padding: 2px 12px; font-style: italic; }
+.user.enter, .note.enter, .steered.enter { animation: rise var(--t-slow) var(--ease) both; animation-delay: var(--age, 0ms); }
+.answer { margin: 10px 0; line-height: 1.6; word-wrap: break-word; }
 .answer.incomplete::after { content: " (cut off)"; color: var(--muted); font-style: italic; }
-.note { margin: 10px 0; color: var(--muted); font-size: 0.9em; text-align: center; }
-.note::before, .note::after { content: " — "; }
+.note { display: flex; align-items: center; gap: 10px; margin: 16px 0; color: var(--muted); font-size: 0.86em; }
+.note::before, .note::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 
-.step { margin: 2px 0; border-radius: 4px; }
-.step-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 4px; border-radius: 4px; color: var(--muted); text-align: left; }
-.step-head:hover { background: var(--hover); color: var(--vscode-foreground); }
-.step .mark { width: 14px; flex: none; text-align: center; font-size: 0.9em; }
-.step.ok .mark { color: var(--ok); }
-.step.failed .mark { color: var(--bad); }
-.step.undone .label { text-decoration: line-through; }
+/* steps: a timeline, one node per tool call */
+.steps { position: relative; margin: 8px 0; }
+.steps:has(> :nth-child(2))::before { content: ""; position: absolute; left: 11.5px; top: 14px; bottom: 14px; width: 1px; background: var(--line); }
+.step { position: relative; border-radius: var(--r-sm); }
+.step.enter { animation: rise var(--t) var(--ease) both; animation-delay: var(--age, 0ms); }
+.step-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 3px 4px; border-radius: var(--r-sm); color: var(--muted); text-align: left;
+  cursor: pointer; transition: background var(--t-fast) ease, color var(--t-fast) ease; }
+.step-head:hover { background: var(--hover); color: var(--fg); }
+.step-head:active { background: var(--press); }
+.step .mark { position: relative; width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 14%, var(--bg)); color: var(--muted); }
+.step .mark svg { width: 11px; height: 11px; stroke-width: 2; }
+.step.ok .mark { background: color-mix(in srgb, var(--ok) 16%, var(--bg)); color: var(--ok); }
+.step.failed .mark { background: color-mix(in srgb, var(--bad) 16%, var(--bg)); color: var(--bad); }
+.step.waiting .mark { background: var(--bg); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--muted) 55%, transparent); }
+.step.running .mark { background: var(--bg); }
+.step.undone .mark { background: color-mix(in srgb, var(--muted) 12%, var(--bg)); color: var(--muted); }
+.step.undone .label { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); }
+.step-head.enter .mark { animation: pop var(--t-slow) var(--spring) both; animation-delay: var(--age, 0ms); }
+.step-head.enter .mark path { stroke-dasharray: 1; animation: draw 260ms var(--ease) both; animation-delay: calc(var(--age, 0ms) + 90ms); }
+.step-head.enter .label { animation: appear var(--t) ease both; animation-delay: var(--age, 0ms); }
 .step .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.92em; }
+.step .label .sub { opacity: 0.72; }
+.step .label .tool { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
+.step .label .add { color: var(--ok); }
+.step .label .del { color: var(--bad); }
+.step.failed .label { color: color-mix(in srgb, var(--bad) 65%, var(--fg)); }
+.step .more { flex: none; width: 12px; height: 12px; opacity: 0; transform: rotate(-90deg); transition: opacity var(--t-fast) ease, transform var(--t) var(--ease); }
+.step-head:hover .more, .step-head:focus-visible .more { opacity: 0.7; }
+.step.open .more { opacity: 0.7; transform: none; }
+.step.open:has(> .out.enter) .more { animation: turn var(--t) var(--ease); }
+@keyframes turn { from { transform: rotate(-90deg); } }
 .step .acts { display: flex; gap: 2px; }
-.step .time { flex: none; color: var(--muted); font-size: 0.82em; font-variant-numeric: tabular-nums; opacity: 0.85; }
-.step .steered { margin: 2px 0 6px 20px; padding: 3px 8px; border-left: 2px solid var(--vscode-textLink-foreground); white-space: pre-wrap; word-wrap: break-word; font-size: 0.92em; }
-.step .steered .who { display: block; color: var(--muted); font-size: 0.85em; }
-.user.queued { background: none; border: 1px dashed var(--border); color: var(--muted); }
-.user .queued-note { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 0.82em; font-style: italic; }
-.user .queued-note button { margin-left: auto; padding: 0 5px; border-radius: 3px; font-style: normal; }
-.user .queued-note button:hover { background: var(--hover); color: var(--vscode-foreground); }
-.step .acts button { padding: 1px 6px; border-radius: 3px; font-size: 0.85em; color: var(--vscode-textLink-foreground); }
-.step .acts button:hover { background: var(--hover); }
-.step pre.out { margin: 2px 0 6px 20px; max-height: 260px; }
-.step.running .mark, .spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 4px; font-size: 0.92em; }
-.status .clock { font-variant-numeric: tabular-nums; opacity: 0.8; }
+.step .time { flex: none; color: var(--muted); font-size: 0.8em; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.step .acts button { padding: 1px 7px; border-radius: 10px; font-size: 0.85em; color: var(--link); border: 1px solid var(--vscode-contrastBorder, transparent);
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease; }
+.step .acts button:hover { background: color-mix(in srgb, var(--link) 14%, transparent); }
+.step .acts button:active { transform: scale(0.94); }
+.step pre.out { margin: 3px 0 8px 28px; max-height: 260px; }
+.step pre.out.enter { animation: wipe 220ms var(--ease) both; animation-delay: var(--age, 0ms); }
+.step .steered { margin: 3px 0 8px 28px; padding: 5px 10px; border-radius: 0 var(--r-sm) var(--r-sm) 0; border-left: 2px solid var(--link);
+  background: color-mix(in srgb, var(--link) 7%, transparent); white-space: pre-wrap; word-wrap: break-word; font-size: 0.92em; line-height: 1.45; }
+.step .steered .who { display: block; color: var(--muted); font-size: 0.85em; margin-bottom: 1px; }
+
+/* spinners: the one looping thing, because they mean work is happening */
+.spinner, .step.running .mark::after { content: ""; display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 30%, transparent); border-top-color: var(--link); animation: spin 0.7s linear infinite; }
+.step.running .mark::after { width: 13px; height: 13px; }
+.step.running .label { color: var(--fg); }
+.status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 0; padding: 3px 4px; font-size: 0.92em; }
+.status .spinner { margin: 0 2px; }
+.status.enter { animation: rise var(--t) var(--ease) both; animation-delay: var(--age, 0ms); }
+.status .clock { font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 0.92em; }
+/* "Thinking…" catches the light: a sheen of the text colour passing over the muted one */
+.status .what { background: linear-gradient(90deg, var(--muted) 0 38%, var(--fg) 50%, var(--muted) 62% 100%) 0 0 / 250% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; animation: sheen 2.4s linear infinite; }
+body.vscode-high-contrast .status .what { background: none; color: var(--fg); animation: none; }
+
+/* queued: typed while it works, waiting for the next step */
+.user.queued { background: none; border: 1px dashed var(--line); color: var(--muted); }
+.user.queued.enter { animation: rise var(--t-slow) var(--ease) both; animation-delay: var(--age, 0ms); }
+.user .queued-note { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 0.82em; font-style: italic; }
+.user .queued-note svg { width: 12px; height: 12px; opacity: 0.8; }
+.user .queued-note button { margin-left: auto; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font-style: normal;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t) var(--ease); }
+.user .queued-note button:hover { background: var(--hover); color: var(--fg); transform: rotate(90deg); }
+.user .queued-note button:active { transform: rotate(90deg) scale(0.88); }
 
 /* markdown */
-.answer p { margin: 0 0 8px; }
-.answer h1, .answer h2, .answer h3, .answer h4 { margin: 12px 0 6px; font-size: 1.05em; }
-.answer h1 { font-size: 1.15em; }
-.answer ul, .answer ol { margin: 0 0 8px; padding-left: 20px; }
-.answer li { margin: 2px 0; }
-.answer blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--border); color: var(--muted); }
-.answer a { color: var(--vscode-textLink-foreground); }
-code { font-family: var(--vscode-editor-font-family); font-size: 0.92em; background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
-code.path { cursor: pointer; color: var(--vscode-textLink-foreground); }
-code.path:hover { text-decoration: underline; }
-pre { position: relative; margin: 0 0 8px; padding: 8px 10px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: var(--radius); background: var(--code-bg); font-family: var(--vscode-editor-font-family); font-size: 0.9em; line-height: 1.45; }
-pre code { background: none; padding: 0; font-size: 1em; white-space: inherit; }
-pre:has(> .copy) { padding-right: 3.8em; } /* wrapped lines never run under the Copy button */
-pre .copy { position: absolute; top: 4px; right: 4px; padding: 1px 6px; border-radius: 3px; font-size: 0.8em; opacity: 0.45; background: var(--vscode-editorWidget-background); border: 1px solid var(--border); }
-pre:hover .copy { opacity: 1; }
-table { border-collapse: collapse; margin: 0 0 8px; font-size: 0.95em; display: block; overflow-x: auto; }
-th, td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; }
-th { background: var(--code-bg); }
-hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.answer p { margin: 0 0 10px; }
+.answer > :last-child { margin-bottom: 0; }
+.answer h1, .answer h2, .answer h3, .answer h4 { margin: 16px 0 6px; font-size: 1.05em; font-weight: 600; letter-spacing: -0.005em; }
+.answer h1 { font-size: 1.18em; }
+.answer :is(h1, h2, h3, h4):first-child { margin-top: 0; }
+.answer ul, .answer ol { margin: 0 0 10px; padding-left: 20px; }
+.answer li { margin: 3px 0; padding-left: 2px; }
+.answer li::marker { color: var(--muted); }
+.answer strong { font-weight: 600; color: var(--fg); }
+.answer blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); color: var(--muted); }
+.answer a { color: var(--link); text-decoration: none; }
+.answer a:hover { text-decoration: underline; text-underline-offset: 2px; }
+code { font-family: var(--vscode-editor-font-family); font-size: 0.92em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--vscode-contrastBorder, transparent); }
+code.path { cursor: pointer; color: var(--link); transition: background var(--t-fast) ease; }
+code.path:hover { background: color-mix(in srgb, var(--link) 14%, var(--code-bg)); text-decoration: underline; text-underline-offset: 2px; }
+pre { position: relative; margin: 0 0 10px; padding: 9px 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: var(--r);
+  background: var(--code-bg); border: 1px solid var(--hairline); font-family: var(--vscode-editor-font-family); font-size: 0.9em; line-height: 1.5; }
+pre code { background: none; padding: 0; font-size: 1em; white-space: inherit; border: 0; }
+pre:has(> .copy) { padding-right: 4.2em; } /* wrapped lines never run under the Copy button */
+pre .copy { position: absolute; top: 5px; right: 5px; padding: 2px 8px; border-radius: var(--r-sm); font-family: var(--vscode-font-family); font-size: 0.82em;
+  opacity: 0; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--line);
+  transition: opacity var(--t) ease, background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) ease; }
+pre:hover .copy, pre .copy:focus-visible, pre .copy.done { opacity: 1; }
+pre .copy:hover { background: var(--hover); }
+pre .copy:active { transform: scale(0.94); }
+pre .copy.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+table { border-collapse: collapse; margin: 0 0 10px; font-size: 0.95em; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
+th { background: var(--code-bg); font-weight: 600; }
+hr { border: 0; border-top: 1px solid var(--hairline); margin: 14px 0; }
 
 /* ---- guided setup ---- */
 body.in-setup #composer { display: none; }
 body.in-setup #btn-new, body.in-setup #chat-title .chev { visibility: hidden; }
 .setup { padding: 14px 4px 20px; }
-.setup.enter { animation: setupIn 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-@keyframes setupIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.setup .dots { display: flex; gap: 6px; margin-bottom: 14px; }
-.setup .dot { width: 22px; height: 3px; border-radius: 2px; background: var(--border); transition: background 0.3s ease; }
-.setup .dot.done { background: var(--vscode-textLink-foreground); opacity: 0.55; }
-.setup .dot.on { background: var(--vscode-textLink-foreground); }
-.setup h2 { margin: 0 0 6px; font-size: 1.15em; }
-.setup .intro { margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
-.setup .field { display: block; width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--vscode-input-border, var(--border));
-  background: var(--input-bg); color: var(--vscode-input-foreground); font: inherit; transition: border-color 0.15s ease; }
-.setup .field:focus { outline: none; border-color: var(--vscode-focusBorder); }
-.setup .field.area { resize: vertical; min-height: 90px; line-height: 1.45; }
-.setup .hint { margin-top: 6px; color: var(--muted); font-size: 0.88em; }
-.setup .pick { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; }
-.setup .option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; text-align: left; transition: background 0.15s ease; }
+.setup .progress { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.setup .dots { flex: 1; display: flex; gap: 4px; }
+.setup .dot { position: relative; flex: 1; height: 3px; border-radius: 2px; overflow: hidden; background: var(--line); }
+.setup .dot::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--link); transform-origin: left; transform: scaleX(0); }
+.setup .dot.done::after, .setup .dot.on::after { transform: none; }
+.setup .dot.done::after { opacity: 0.55; }
+.setup .count { flex: none; color: var(--muted); font-size: 0.82em; font-variant-numeric: tabular-nums; }
+.setup h2 { margin: 0 0 6px; font-size: 1.25em; font-weight: 600; letter-spacing: -0.01em; }
+.setup .intro { margin: 0 0 14px; color: var(--muted); line-height: 1.55; }
+.setup.enter .dot.on::after { animation: grow 360ms var(--ease) both; animation-delay: 60ms; }
+.setup.enter > :not(.progress) { animation: fromRight var(--t-slow) var(--ease) both; }
+.setup.enter.back > :not(.progress) { animation-name: fromLeft; }
+.setup.enter > :nth-child(3) { animation-delay: 35ms; }
+.setup.enter > :nth-child(4) { animation-delay: 70ms; }
+.setup.enter > :nth-child(n+5) { animation-delay: 105ms; }
+.setup .field { display: block; width: 100%; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--line));
+  background: var(--input-bg); color: var(--vscode-input-foreground); font: inherit; transition: border-color var(--t-fast) ease, box-shadow var(--t) ease; }
+.setup .field::placeholder { color: var(--vscode-input-placeholderForeground); }
+.setup .field:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 20%, transparent); }
+.setup .field.area { resize: vertical; min-height: 96px; line-height: 1.5; }
+.setup .hint { margin-top: 7px; color: var(--muted); font-size: 0.88em; }
+.setup .pick { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; padding: 1px; }
+.setup .option { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r); text-align: left; border: 1px solid transparent;
+  transition: background var(--t-fast) ease, border-color var(--t) ease, transform var(--t-fast) ease; }
 .setup .option:hover { background: var(--hover); }
-.setup .option.on { background: var(--vscode-list-activeSelectionBackground, var(--hover)); color: var(--vscode-list-activeSelectionForeground, inherit); }
+.setup .option:active { transform: scale(0.99); }
+.setup .option.on { background: var(--vscode-list-activeSelectionBackground, var(--hover)); color: var(--vscode-list-activeSelectionForeground, inherit);
+  border-color: var(--vscode-contrastActiveBorder, color-mix(in srgb, var(--link) 35%, transparent)); }
 .setup .option .grey { margin-left: auto; color: var(--muted); font-size: 0.85em; }
-.setup .radio { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 1.5px solid var(--muted); transition: all 0.15s ease; }
-.setup .option.on .radio { border-color: var(--vscode-textLink-foreground); box-shadow: inset 0 0 0 2.5px var(--vscode-sideBar-background, var(--vscode-editor-background)); background: var(--vscode-textLink-foreground); }
-.setup .docs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-.setup .doc-path { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.92em; }
+.setup .option.on .grey { color: inherit; opacity: 0.75; }
+.setup .radio { position: relative; width: 14px; height: 14px; flex: none; border-radius: 50%; border: 1.5px solid var(--muted); transition: border-color var(--t) ease; }
+.setup .radio::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: var(--link); transform: scale(0); transition: transform var(--t) var(--spring); }
+.setup .option.on .radio { border-color: var(--link); }
+.setup .option.on .radio::after { transform: none; }
+.setup .docs { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.setup .doc { padding: 8px; border-radius: var(--r); background: var(--raised); border: 1px solid var(--hairline); }
+.setup .doc-path { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; font-size: 0.92em; }
 .setup .doc-path span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.setup .doc-path svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
-.setup .doc-path button { padding: 0 5px; border-radius: 3px; color: var(--muted); }
-.setup .doc-path button:hover { background: var(--hover); color: var(--vscode-foreground); }
-.setup .summary { list-style: none; padding: 0; margin: 0 0 4px; }
-.setup .summary li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
+.setup .doc-path svg { width: 14px; height: 14px; flex: none; color: var(--link); }
+.setup .doc-path button { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: var(--muted);
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t) var(--ease); }
+.setup .doc-path button:hover { background: var(--hover); color: var(--fg); transform: rotate(90deg); }
+.setup .done-mark { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 14px; border-radius: 50%; color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg)); border: 1px solid var(--vscode-contrastBorder, color-mix(in srgb, var(--ok) 30%, transparent)); }
+.setup .done-mark svg { width: 22px; height: 22px; stroke-width: 2; }
+.setup.enter .done-mark { animation: pop var(--t-slow) var(--spring) both; }
+.setup.enter .done-mark path { stroke-dasharray: 1; animation: draw 320ms var(--ease) both; animation-delay: 160ms; }
+.setup .summary { list-style: none; padding: 0; margin: 0 0 4px; border-radius: var(--r); border: 1px solid var(--hairline); overflow: hidden; }
+.setup .summary li { display: flex; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--hairline); word-break: break-all; }
+.setup .summary li:last-child { border-bottom: 0; }
 .setup .summary li span { width: 64px; flex: none; color: var(--muted); }
-.setup-error { margin-top: 10px; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--vscode-inputValidation-errorBorder, var(--bad));
-  background: var(--vscode-inputValidation-errorBackground, transparent); line-height: 1.45; }
-.setup-error .link { color: var(--vscode-textLink-foreground); text-decoration: underline; }
-.setup-buttons { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-.setup-buttons .link-button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; transition: filter 0.15s ease; }
-.setup-buttons .link-button:hover:not([disabled]) { filter: brightness(1.12); }
+.setup-error { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding: 8px 10px; border-radius: var(--r);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--bad));
+  background: var(--vscode-inputValidation-errorBackground, color-mix(in srgb, var(--bad) 10%, transparent)); line-height: 1.45; }
+.setup-error > svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--bad); }
+.setup-error.enter { animation: shake 320ms ease both; }
+.setup-error .link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.setup-buttons { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
 .setup-buttons [disabled] { opacity: 0.6; cursor: default; }
-.menu .sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.link-button .spinner { width: 11px; height: 11px; border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 
 /* ---- composer ---- */
-#composer { padding: 6px 10px 8px; border-top: 1px solid var(--border); }
-.box { border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--radius); background: var(--input-bg); padding: 6px 6px 4px 8px; }
-.box:focus-within { border-color: var(--vscode-focusBorder); }
+#composer { position: relative; padding: 2px 10px 9px; }
+.box { border: 1px solid var(--vscode-input-border, var(--line)); border-radius: var(--r-lg); background: var(--input-bg); padding: 8px 8px 6px 10px;
+  box-shadow: 0 2px 10px -6px var(--shadow); transition: border-color var(--t) ease, box-shadow var(--t-slow) var(--ease); }
+.box:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent), 0 6px 18px -8px var(--shadow); }
+body.busy .box:not(:focus-within) { border-color: color-mix(in srgb, var(--link) 40%, var(--vscode-input-border, var(--line))); }
 textarea {
   display: block; width: 100%; resize: none; border: 0; outline: none !important; background: transparent; color: var(--vscode-input-foreground);
-  font: inherit; line-height: 1.45; max-height: 40vh; padding: 2px 0; overflow-y: auto;
+  font: inherit; line-height: 1.5; max-height: 40vh; padding: 2px 0; overflow-y: auto;
 }
-textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
+textarea::placeholder { color: var(--vscode-input-placeholderForeground); transition: color var(--t) ease; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chips:empty { display: none; }
-#chips { margin-bottom: 4px; }
-.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: 10px; font-size: 0.85em; border: 1px solid var(--border); color: var(--muted); }
-.chip.on { color: var(--vscode-foreground); background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); border-color: transparent; }
-button.chip:hover { border-color: var(--vscode-focusBorder); }
+#chips { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; min-height: 20px; border-radius: 10px; font-size: 0.85em;
+  border: 1px solid var(--line); color: var(--muted);
+  transition: background var(--t-fast) ease, border-color var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) ease; }
+.chip.on { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); border-color: var(--vscode-contrastBorder, transparent); }
+button.chip:hover { border-color: var(--focus); color: var(--fg); }
+button.chip.on:hover { color: var(--vscode-badge-foreground); }
+button.chip:active { transform: scale(0.95); }
+.chip.flip { animation: chipFlip 220ms var(--spring); }
 .chip svg { width: 12px; height: 12px; }
-.chip.folder { color: var(--vscode-foreground); }
-.chip.clear { padding: 1px 5px; margin-left: -2px; }
+.chip.folder { color: var(--fg); }
+.chip.folder svg { color: var(--link); }
+.chip.clear { width: 20px; padding: 0; justify-content: center; margin-left: -2px; }
+.chip.clear:hover { transform: rotate(90deg); }
 
 /* the fade-in, as Alloy's: each new word rises from the link colour and a slight blur */
 @keyframes fadeIn {
@@ -179,49 +377,109 @@ button.chip:hover { border-color: var(--vscode-focusBorder); }
   100% { opacity: 1; color: inherit; filter: blur(0); }
 }
 .fade { animation: fadeIn 0.9s cubic-bezier(0.25, 0.1, 0.25, 1) both; } /* FADE_MS in panel.js */
-.row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.row { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
 .grow { flex: 1; }
 
 .model { position: relative; min-width: 0; }
-.model-button { display: flex; align-items: center; gap: 4px; max-width: 150px; padding: 2px 6px; border-radius: 4px; color: var(--muted); font-size: 0.9em; }
-.model-button:hover { background: var(--hover); color: var(--vscode-foreground); }
+.model-button { display: flex; align-items: center; gap: 4px; max-width: 160px; padding: 3px 7px; border-radius: 6px; color: var(--muted); font-size: 0.9em;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease; }
+.model-button:hover, .model-button[aria-expanded="true"] { background: var(--hover); color: var(--fg); }
 .model-button span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model .menu { min-width: 220px; }
 
-/* effort: folded onto the chosen level, opens on hover */
-.effort { display: flex; align-items: center; border-radius: 4px; font-size: 0.9em; }
-.effort button { position: relative; padding: 2px 6px; border-radius: 4px; color: var(--muted); }
-.effort button.active { color: var(--vscode-foreground); background: var(--hover); }
-.effort button.active[data-level="high"] { color: var(--warn); }
-.effort:not(:hover):not(:has(:focus-visible)) button:not(.active) { display: none; }
-.effort:hover { background: var(--hover); }
-.effort:hover button.active { background: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.3)); }
+/* effort: folded onto the chosen level, slides open on hover */
+.effort { display: flex; align-items: center; border-radius: 6px; font-size: 0.9em; transition: background var(--t) ease; }
+.effort button { position: relative; padding: 3px 7px; max-width: 90px; border-radius: 6px; color: var(--muted); white-space: nowrap;
+  transition: max-width 240ms var(--ease), padding 240ms var(--ease), opacity var(--t) ease 60ms, color var(--t-fast) ease, background var(--t-fast) ease, visibility 0s; }
+.effort button:hover { color: var(--fg); }
+.effort button.active { color: var(--fg); background: var(--hover); }
+.effort button.active[data-level="high"] { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.effort:not(:hover):not(:has(:focus-visible)) button:not(.active) { max-width: 0; padding-left: 0; padding-right: 0; opacity: 0; visibility: hidden;
+  transition: max-width 200ms var(--ease), padding 200ms var(--ease), opacity var(--t-fast) ease, visibility 0s linear 200ms; }
+.effort:hover, .effort:has(:focus-visible) { background: var(--hover); }
+.effort:hover button.active, .effort:has(:focus-visible) button.active { background: var(--press); }
 .effort button[data-tip]:hover::after {
-  content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: -40px; width: 190px; z-index: 30;
-  padding: 5px 8px; border-radius: 4px; font-size: 0.9em; line-height: 1.35; white-space: normal; text-align: left;
-  background: var(--vscode-editorHoverWidget-background); color: var(--vscode-editorHoverWidget-foreground, inherit); border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: -40px; width: 190px; z-index: 30;
+  padding: 6px 9px; border-radius: 6px; font-size: 0.92em; line-height: 1.4; white-space: normal; text-align: left; color: var(--vscode-editorHoverWidget-foreground, var(--fg));
+  background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
+  box-shadow: 0 8px 20px -8px var(--shadow); pointer-events: none; animation: menuUp 140ms var(--ease) 260ms both;
 }
 
-.send { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 4px; background: var(--accent); color: var(--accent-fg); }
-.send:hover { background: var(--vscode-button-hoverBackground); }
+.send { position: relative; flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-fg);
+  border: 1px solid var(--vscode-button-border, transparent); animation: pop 220ms var(--spring);
+  transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease), box-shadow var(--t) ease, opacity var(--t) ease; }
+.send:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 5px 12px -5px color-mix(in srgb, var(--accent) 80%, transparent); }
+.send:active { transform: scale(0.9); box-shadow: none; }
+.send svg { transition: transform var(--t) var(--ease); }
+.send:hover svg { transform: translateX(1px); }
+.send.idle:not(.stop) { opacity: 0.45; box-shadow: none; transform: none; }
+.send.idle:not(.stop) svg { transform: none; }
+.send.launch svg { animation: launch 300ms var(--ease); }
 .send:disabled { opacity: 0.4; cursor: default; }
-.send.stop { background: none; border: 1px solid var(--vscode-foreground); color: var(--vscode-foreground); opacity: 0.85; }
-.send.stop:hover { background: var(--hover); opacity: 1; }
+.send.stop { background: color-mix(in srgb, var(--fg) 9%, transparent); border: 1px solid var(--vscode-contrastBorder, color-mix(in srgb, var(--fg) 22%, transparent)); color: var(--fg); }
+.send.stop:hover { background: color-mix(in srgb, var(--fg) 15%, transparent); box-shadow: none; }
+.send.stop svg { width: 14px; height: 14px; }
 .send.stop svg rect { fill: currentColor; stroke: none; }
+/* a ring turns round Stop while it works */
+.send.stop::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid transparent;
+  border-top-color: var(--link); border-right-color: color-mix(in srgb, var(--link) 35%, transparent); animation: spin 1s linear infinite; pointer-events: none; }
 
-.footer { display: flex; gap: 10px; justify-content: space-between; margin-top: 4px; padding: 0 2px; color: var(--muted); font-size: 0.82em; }
+.footer { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-top: 5px; padding: 0 4px; color: var(--muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
 .footer:empty { display: none; }
+.footer .left { display: inline-flex; align-items: center; gap: 6px; }
+.meter { position: relative; width: 36px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--line); }
+.meter::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--link); transform-origin: left; transform: scaleX(var(--fill, 1));
+  transition: transform var(--t-slow) var(--ease); }
+.meter.low::after { background: var(--warn); }
 
-.banner { margin-bottom: 6px; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--vscode-inputValidation-errorBorder, var(--bad)); background: var(--vscode-inputValidation-errorBackground, transparent); display: flex; gap: 8px; align-items: center; }
-.banner.soft { border-color: var(--border); background: none; color: var(--muted); }
+.banner { margin-bottom: 8px; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--vscode-inputValidation-errorBorder, var(--bad));
+  background: var(--vscode-inputValidation-errorBackground, color-mix(in srgb, var(--bad) 10%, transparent)); display: flex; gap: 8px; align-items: center;
+  line-height: 1.45; animation: rise var(--t-slow) var(--ease); }
+.banner > svg { flex: none; width: 15px; height: 15px; align-self: flex-start; margin-top: 1px; color: var(--bad); }
+.banner.soft { border-color: var(--line); background: var(--raised); color: var(--muted); }
+.banner.soft > svg { color: var(--muted); }
 .banner .msg { flex: 1; }
-.banner button { padding: 2px 8px; border-radius: 4px; background: var(--accent); color: var(--accent-fg); }
+.banner button { flex: none; padding: 3px 10px; border-radius: 6px; background: var(--accent); color: var(--accent-fg); border: 1px solid var(--vscode-button-border, transparent);
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease; }
+.banner button:hover { background: var(--accent-hover); }
+.banner button:active { transform: scale(0.96); }
 
-.approval { margin-bottom: 6px; padding: 8px; border-radius: var(--radius); border: 1px solid var(--warn); }
-.approval .what { font-weight: 600; word-break: break-all; }
-.approval .why { color: var(--muted); margin: 2px 0 6px; }
+.approval { margin-bottom: 8px; padding: 10px 12px; border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--warn) 60%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, var(--bg)); box-shadow: 0 8px 20px -12px var(--shadow); }
+.approval.enter { animation: rise var(--t-slow) var(--ease) both, glow 900ms ease-out both; animation-delay: var(--age, 0ms); }
+.approval .what { display: flex; align-items: center; gap: 7px; font-weight: 600; word-break: break-all; }
+.approval .what svg { flex: none; width: 15px; height: 15px; color: var(--warn); }
+.approval .why { color: var(--muted); margin: 3px 0 8px; line-height: 1.45; }
 .approval pre { max-height: 140px; }
-.approval input { width: 100%; margin: 4px 0 6px; padding: 4px 6px; border: 1px solid var(--vscode-input-border, var(--border)); background: var(--input-bg); color: var(--vscode-input-foreground); border-radius: 4px; font: inherit; }
+.approval input { width: 100%; margin: 2px 0 8px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--line)); background: var(--input-bg);
+  color: var(--vscode-input-foreground); border-radius: 6px; font: inherit; transition: border-color var(--t-fast) ease, box-shadow var(--t) ease; }
+.approval input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.approval input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent); }
 .approval .buttons { display: flex; gap: 6px; }
-.approval .buttons button { padding: 3px 12px; border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--hover)); color: var(--vscode-button-secondaryForeground, inherit); }
+.approval .buttons button { padding: 4px 14px; border-radius: 6px; font-weight: 500; background: var(--vscode-button-secondaryBackground, var(--hover));
+  color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-button-border, transparent);
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease; }
+.approval .buttons button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--press)); }
 .approval .buttons button.allow { background: var(--accent); color: var(--accent-fg); }
+.approval .buttons button.allow:hover { background: var(--accent-hover); }
+.approval .buttons button:active { transform: scale(0.96); }
+
+/* ---- high contrast: outlines instead of tints, no shadows ---- */
+body.vscode-high-contrast :is(.menu, .box, .box:focus-within, .approval, .send, .send:hover, .link-button, .logo, .effort button[data-tip]:hover::after) { box-shadow: none; }
+body.vscode-high-contrast :is(.icon, .title, .step-head, .model-button, button.chip, .link-button, .effort button, .send, .setup .option, .step .acts button,
+  .user .queued-note button, pre .copy, .banner button, .approval .buttons button, .setup .doc-path button):hover {
+  outline: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
+body.vscode-high-contrast .menu button:hover { outline: 1px solid var(--vscode-menu-selectionBorder, var(--vscode-contrastActiveBorder, var(--focus))); outline-offset: -1px; }
+body.vscode-high-contrast .send.stop::after { border-right-color: transparent; }
+body.vscode-high-contrast .step:not(.running) .mark { box-shadow: inset 0 0 0 1px currentColor; }
+body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: none; }
+
+/* ---- reduced motion: everything lands at once ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important; transition-delay: 0ms !important; scroll-behavior: auto !important;
+  }
+  .status .what { background: none; color: var(--muted); }
+  .send.stop::after { border-right-color: var(--link); border-bottom-color: var(--link); border-left-color: var(--link); opacity: 0.6; }
+}
