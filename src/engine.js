@@ -21,6 +21,8 @@ const CHARS_PER_TOKEN = 4;
 const KEEP_RESULTS_TOKENS = 30_000;
 /** …and may run this far past it before the older ones are cut, all at once (a stable prefix for longer). */
 const TRIM_SLACK_TOKENS = 10_000;
+/** No single result is longer than this (a read is capped lower; this catches everything else). */
+const MAX_RESULT_CHARS = 40_000;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
 const MAX_BATCH = 5;
@@ -38,7 +40,8 @@ function estimate(text) {
  * @typedef {{id: string, title: string, created: number, updated: number, messages: Stored[],
  *            compaction: {through: number, summary: string} | null, usage: {tokens: number},
  *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number}} Chat
- * @typedef {{output: string, summary: string, failed?: boolean, change?: any}} ToolResult
+ * @typedef {{output: string, summary: string, failed?: boolean, change?: any, keep?: string}} ToolResult
+ *   keep: text that rides with the output but isn't output (a folder's AGENTS.md): never cut away
  * @typedef {{
  *   systemPrompt(chat: Chat): Promise<string>,
  *   runTool(name: string, args: any, ctx: {chat: Chat, signal: AbortSignal}): Promise<ToolResult>,
@@ -253,9 +256,12 @@ class Engine {
         if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;
         if (signal.aborted) skip = TEXTS.notRunStopped;
       }
+      // `keep` (a folder's AGENTS.md, your note) isn't tool output: it survives the result being cut.
+      const output = capped(result.output);
       /** @type {Stored} */
-      const message = { role: "tool", tool_call_id: call.id, content: result.output,
-        meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.change ? { change: result.change } : {}) } };
+      const message = { role: "tool", tool_call_id: call.id, content: result.keep ? output + "\n\n" + result.keep : output,
+        meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.keep ? { keep: result.keep } : {}),
+          ...(result.change ? { change: result.change } : {}) } };
       chat.messages.push(message);
       added.push(message);
       await this._save(chat);
@@ -271,6 +277,7 @@ class Engine {
         this.steers = [];
         notes.push(TEXTS.steer(text));
         last.meta.steer = text;
+        last.meta.keep = [last.meta.keep, TEXTS.steer(text)].filter(Boolean).join("\n\n");
         this.emit({ type: "steer-sent", chat: chat.id, text });
       }
       if (notes.length) {
@@ -307,7 +314,8 @@ class Engine {
       result = { output: "Error: " + (error instanceof Error ? error.message : String(error)), summary: label + " failed", failed: true };
     }
     if (note) {
-      result = { ...result, output: result.output + "\n\n" + TEXTS.userNote(note), summary: result.summary + " · with your note" };
+      result = { ...result, keep: [result.keep, TEXTS.userNote(note)].filter(Boolean).join("\n\n"),
+        summary: result.summary + " · with your note" };
     }
     return result;
   }
@@ -436,8 +444,7 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
       if (!message.content && !message.tool_calls?.length) continue;
       out.push({ role: "assistant", content: message.content, ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}) });
     } else if (message.role === "tool") {
-      out.push({ role: "tool", tool_call_id: message.tool_call_id,
-        content: message.meta?.stub ? TEXTS.stub(message.meta.summary) : message.content });
+      out.push({ role: "tool", tool_call_id: message.tool_call_id, content: resultText(message) });
     }
   }
   // A recap's kept part may start with results whose calls were summarised away: drop those.
@@ -445,23 +452,43 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   return out.filter((m) => m.role !== "tool" || offered.has(m.tool_call_id));
 }
 
-/** Cut older large results to one-line stand-ins once the chat's results pass the budget (sticky). */
+/** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
+function resultText(message) {
+  if (!message.meta?.stub) return message.content;
+  return TEXTS.stub(message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
+}
+
+/**
+ * Cut older large results to one-line stand-ins once the chat's results pass the budget (sticky).
+ * The newest reply's results are never cut: the model hasn't seen them yet.
+ */
 function trim(/** @type {Chat} */ chat) {
   const start = chat.compaction ? chat.compaction.through : 0;
+  let latest = chat.messages.length - 1;
+  while (latest >= start && chat.messages[latest].role === "tool") latest--;
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0);
   if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return false;
+  const fresh = new Set(chat.messages.slice(latest + 1));
   let kept = 0;
   let cut = false;
   for (let index = results.length - 1; index >= 0; index--) {
     const message = results[index];
     kept += estimate(message.content);
-    if (index < results.length - 1 && kept > KEEP_RESULTS_TOKENS && message.content.length > STUB_MIN_CHARS) {
+    if (!fresh.has(message) && kept > KEEP_RESULTS_TOKENS && message.content.length > STUB_MIN_CHARS) {
       message.meta.stub = true;
       cut = true;
     }
   }
   return cut;
+}
+
+/** A tool's output, capped (head and tail) so no single result can swamp the chat. @param {string} text */
+function capped(text) {
+  if (text.length <= MAX_RESULT_CHARS) return text;
+  const head = Math.floor(MAX_RESULT_CHARS * 0.8);
+  const tail = MAX_RESULT_CHARS - head;
+  return text.slice(0, head) + "\n\n" + TEXTS.resultCut(text.length - head - tail) + "\n\n" + text.slice(-tail);
 }
 
 /** A call's arguments checked against its definition. */
@@ -519,26 +546,43 @@ function estimateMessages(/** @type {any[]} */ messages) {
 
 /** One stored message's size as it's sent (a cut result as its stand-in). @param {Stored} message */
 function sizeOf(message) {
-  return estimate(message.meta?.stub ? TEXTS.stub(message.meta.summary) : message.content)
+  return estimate(message.role === "tool" ? resultText(message) : message.content)
     + estimate(JSON.stringify(message.tool_calls || "")) + 4;
 }
 
-/** The older part of a chat as plain text, for the summary request (results shortened to fit). */
-function transcriptOf(/** @type {Chat} */ chat, /** @type {number} */ start, /** @type {number} */ end, /** @type {number} */ budget) {
+/**
+ * The older part of a chat as plain text, for the summary request. What you said (and the earlier
+ * summary) is never dropped to make room; tool calls and results are shortened, and if it's still too
+ * long the oldest steps go first. @param {Chat} chat @param {number} start @param {number} end @param {number} budget
+ */
+function transcriptOf(chat, start, end, budget) {
+  /** @type {{text: string, yours: boolean}[]} */
   const parts = [];
-  if (chat.compaction) parts.push(`(Summary of what came before:)\n${chat.compaction.summary}`);
+  const short = (/** @type {string} */ text, /** @type {number} */ max) =>
+    text.length > max ? text.slice(0, Math.floor(max * 0.8)) + "\n…(shortened)…\n" + text.slice(-Math.floor(max * 0.2)) : text;
+  if (chat.compaction) parts.push({ text: `(Summary of what came before:)\n${chat.compaction.summary}`, yours: true });
   for (const message of chat.messages.slice(start, end)) {
-    if (message.role === "user") parts.push(`Me: ${message.content}`);
+    if (message.role === "user") parts.push({ text: `Me: ${short(message.content, 6000)}`, yours: true });
     else if (message.role === "assistant") {
-      if (message.content.trim()) parts.push(`You: ${message.content.trim()}`);
-      for (const call of message.tool_calls || []) parts.push(`You called ${call.function.name} ${call.function.arguments}`);
+      if (message.content.trim()) parts.push({ text: `You: ${short(message.content.trim(), 3000)}`, yours: false });
+      for (const call of message.tool_calls || []) {
+        parts.push({ text: `You called ${call.function.name} ${short(call.function.arguments, 600)}`, yours: false });
+      }
     } else if (message.role === "tool") {
-      const text = message.meta?.stub ? `(${message.meta.summary})` : message.content;
-      parts.push(`Result: ${text.length > 1500 ? text.slice(0, 1200) + "\n…(shortened)…\n" + text.slice(-300) : text}`);
+      const whole = !message.meta?.stub && message.content.length <= 1500;
+      parts.push({ text: `Result: ${message.meta?.stub ? `(${message.meta.summary})` : short(message.content, 1500)}`, yours: false });
+      // A cut or shortened result may have lost your note or a folder's instructions: they go in on their own.
+      if (message.meta?.keep && !whole) parts.push({ text: message.meta.keep, yours: true });
     }
   }
-  let text = parts.join("\n\n");
-  if (text.length > budget) text = "…(the earliest part is left out)…\n\n" + text.slice(-budget);
+  let total = parts.reduce((sum, part) => sum + part.text.length + 2, 0);
+  for (let index = 0; index < parts.length && total > budget; index++) {
+    if (parts[index].yours) continue;
+    total -= parts[index].text.length - 1;
+    parts[index].text = "…";
+  }
+  let text = parts.filter((part, index) => part.text !== "…" || parts[index - 1]?.text !== "…").map((part) => part.text).join("\n\n");
+  if (text.length > budget) text = "…(the earliest part is left out)…\n\n" + text.slice(-budget); // only your own words left
   return text;
 }
 

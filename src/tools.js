@@ -120,16 +120,23 @@ class WorkspaceTools {
     let size = 0;
     for (let line = start; line <= end; line++) {
       const text = `${line}\t${document.lineAt(line - 1).text}`;
-      if (size + text.length > MAX_OUTPUT_CHARS && lines.length) { end = line - 1; break; }
+      if (size + text.length > MAX_OUTPUT_CHARS) {
+        if (lines.length) { end = line - 1; break; }
+        // One line longer than the whole cap (minified code, a data file): its start only.
+        lines.push(text.slice(0, MAX_OUTPUT_CHARS) + "\n" + RESULTS.longLine(line, text.length - String(line).length - 1));
+        end = line;
+        break;
+      }
       lines.push(text);
       size += text.length + 1;
     }
     const partial = start > 1 || end < total;
     let output = (partial ? RESULTS.readPart(start, end, total) + "\n" : "") + lines.join("\n");
     if (!document.getText().length) output = RESULTS.readEmpty;
+    // A folder's AGENTS.md rides along as `keep`, so it stays when this result is later cut.
     const agents = this.nestedAgents(file, chat);
-    if (agents) output += "\n\n" + agents;
-    return { output, summary: `Read ${file.shown}` + (partial ? ` · lines ${start}–${end} of ${total}` : ` · ${total} lines`) };
+    return { output, summary: `Read ${file.shown}` + (partial ? ` · lines ${start}–${end} of ${total}` : ` · ${total} lines`),
+      ...(agents ? { keep: agents } : {}) };
   }
 
   /** The first read in a folder with its own AGENTS.md brings that file along (the nearest one wins). */

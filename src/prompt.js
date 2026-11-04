@@ -133,6 +133,8 @@ or give your answer.)",
     ? "That was the last reply with tool calls allowed for this message, so answer now: say what's done and what's still left."
     : `${left} more ${left === 1 ? "reply" : "replies"} with tool calls left for this message: finish up, then say what's done.`,
   steer: (/** @type {string} */ text) => `Also, a message from the user while you were working:\n\n${text}`,
+  resultCut: (/** @type {number} */ chars) =>
+    `…(${chars.toLocaleString("en-US")} characters of this output are left out here; narrow the call down to see them)…`,
   stub: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}) and you saw the full output then; \
 it's left out here to save space. Read it again, narrowed down, if you still need it.`,
   compaction: "Before we continue, please write a summary of our conversation so far that could stand in for the \
@@ -157,6 +159,8 @@ const RESULTS = {
   readPart: (/** @type {number} */ start, /** @type {number} */ end, /** @type {number} */ total) =>
     `(lines ${start}–${end} of ${total}; ask for a range for more)`,
   readEmpty: "(the file is empty)",
+  longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
+    `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown; use search to find text in it)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
     `This folder's ${file} says (it applies to files under it):\n${text}`,
   noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \

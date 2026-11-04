@@ -345,3 +345,55 @@ test("Resume compacts an over-limit chat first, then asks it to carry on", async
   assert.equal(client.sent[1][2].content, "SUMMARY");
   assert.match(client.sent[1].at(-1).content, /Please carry on/);
 });
+
+const readCall = (id) => ({ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: id }) } });
+
+test("the newest reply's results are never cut, however big: the model hasn't seen them yet", () => {
+  const chat = Engine.newChat();
+  const big = "x".repeat(28_000); // 7k tokens each: 7 of them pass the budget on their own
+  chat.messages.push({ role: "assistant", content: "", tool_calls: [readCall("old")] },
+    { role: "tool", tool_call_id: "old", content: big, meta: { summary: "read old" } });
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+  chat.messages.push({ role: "assistant", content: "", tool_calls: ids.map(readCall) });
+  for (const id of ids) chat.messages.push({ role: "tool", tool_call_id: id, content: big, meta: { summary: `read ${id}` } });
+  trim(chat);
+  assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["read old"]);
+});
+
+test("your steer and a folder's AGENTS.md survive their result being cut; a huge result is capped", async () => {
+  let e;
+  const host = fakeHost({ tools: {
+    read_file: (args) => args.path === "a"
+      ? (e.steer("keep the API stable"), { output: "A".repeat(50_000), summary: "read a", keep: "This folder's sub/AGENTS.md says: tabs" })
+      : { output: (args.path === "big" ? "B".repeat(60_000) : "C".repeat(39_000)), summary: "read " + args.path },
+  } });
+  const client = fakeClient([{ calls: [call("1", "read_file", { path: "a" })] },
+    ...["big", "c", "d", "e"].map((p, i) => ({ calls: [call(String(i + 2), "read_file", { path: p })] })), { content: "done" }]);
+  const chat = Engine.newChat();
+  e = engine(client, host);
+  await e.ask(chat, "go");
+  const first = client.sent[5].find((m) => m.tool_call_id === "1");
+  assert.ok(first.content.startsWith(TEXTS.stub("read a")), "it was cut");
+  assert.match(first.content, /sub\/AGENTS\.md says: tabs/);
+  assert.match(first.content, /keep the API stable/);
+  const second = chat.messages.find((m) => m.tool_call_id === "2");
+  assert.ok(second.content.length < 41_000 && /characters of this output are left out/.test(second.content));
+});
+
+test("the summary request keeps your first goal even when big writes overflow its budget", async () => {
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "GOAL: never touch the legacy folder", meta: { typed: "x" } });
+  for (let i = 0; i < 5; i++) {
+    chat.messages.push({ role: "assistant", content: "", tool_calls: [{ id: `w${i}`, type: "function",
+      function: { name: "write_file", arguments: JSON.stringify({ path: `f${i}.js`, content: "z".repeat(40_000) }) } }] },
+    { role: "tool", tool_call_id: `w${i}`, content: `Wrote f${i}.js.`, meta: { summary: "wrote" } });
+  }
+  chat.messages.push({ role: "assistant", content: "Done." });
+  const client = fakeClient([(req) => {
+    assert.match(req.messages[1].content, /GOAL: never touch the legacy folder/);
+    assert.ok(req.messages[1].content.length < 30_000 * 4);
+    return { content: "SUMMARY" };
+  }, { content: "ok" }]);
+  await engine(client, fakeHost(), [], { compactAt: 30_000 }).ask(chat, "next");
+  assert.equal(chat.compaction?.summary, "SUMMARY");
+});
