@@ -258,3 +258,20 @@ test("bare-CR streams finish, even when the server keeps the connection open; CR
   gw.server.closeAllConnections();
   gw.server.close();
 });
+
+test("a 429 asking to wait hours is the allowance used up, even with no bucket at 0 (as seen in the field)", async () => {
+  const gw = await fakeGateway([(res) => {
+    res.writeHead(429, { "Retry-After": "18000", "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "daily limit exceeded: 100/100 used. Request an increase at https://gw.example.com/quota" } }));
+  }]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.ok(error.exhausted && !error.transient);
+    assert.equal(error.message, "The allowance is used up. It resets in about 5 hours. " +
+      "(The gateway said: daily limit exceeded: 100/100 used. Request an increase at [endpoint])");
+    return true;
+  });
+  assert.equal(gw.seen.length, 1);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});

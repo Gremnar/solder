@@ -28,6 +28,8 @@ const TRANSIENT_HTTP = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523
 const BUSY_HTTP = new Set([429, 503]); // turned away before the model saw it: safe to resend
 const BACKOFF_MS = [1000, 4000, 8000];
 const MAX_RETRY_AFTER_MS = 60_000;
+/** A 429 that asks to wait longer than this is an allowance used up, not a busy moment. */
+const EXHAUSTED_WAIT_MS = 10 * 60_000;
 const MAX_EVENT_BYTES = 256 * 1024;
 const MAX_ERROR_BYTES = 16 * 1024;
 const MAX_ERROR_CHARS = 500;
@@ -300,21 +302,26 @@ class GatewayClient {
    *  @param {Credits|null} [found] */
   _httpFailure(status, headers, text, found = credits(headers)) {
     let message = `The gateway answered HTTP ${status}.`;
+    let detail = "";
     try {
       const error = parseJson(text).error;
-      const detail = error && typeof error.message === "string" ? this._clean(error.message) : "";
+      detail = error && typeof error.message === "string" ? this._clean(error.message) : "";
       if (detail) message = message.slice(0, -1) + ": " + detail;
     } catch { /* never show a proxy's HTML page */ }
-    // A 429 with nothing left in the tightest allowance is "used up", not "busy": waiting a few
-    // seconds won't help, so it isn't retried.
-    if (status === 429 && found && found.remaining === 0
-        && !(found.resetSeconds !== undefined && found.resetSeconds * 1000 <= MAX_RETRY_AFTER_MS)) {
-      const when = found.resetSeconds ? ` It resets in about ${spoken(found.resetSeconds)}.` : "";
-      return new GatewayError("The allowance for this model is used up." + when,
+    // A 429 is "used up", not "busy", when the tightest allowance is at 0 and doesn't come back within a
+    // minute, or when the gateway asks to wait more than 10 minutes (seen: a daily limit, with a
+    // Retry-After of hours and no usable bucket header). Waiting a few seconds won't help: not retried.
+    const asked = retryAfterMs(headers["retry-after"]);
+    const zero = !!found && found.remaining === 0
+      && !(found.resetSeconds !== undefined && found.resetSeconds * 1000 <= MAX_RETRY_AFTER_MS);
+    if (status === 429 && (zero || (asked !== null && asked > EXHAUSTED_WAIT_MS))) {
+      const seconds = zero && found?.resetSeconds ? found.resetSeconds : asked !== null ? asked / 1000 : 0;
+      const when = seconds ? ` It resets in about ${spoken(seconds)}.` : "";
+      return new GatewayError("The allowance is used up." + when + (detail ? ` (The gateway said: ${detail})` : ""),
         { status, exhausted: true, credits: found });
     }
     if (TRANSIENT_HTTP.has(status)) {
-      let retryAfter = retryAfterMs(headers["retry-after"]);
+      let retryAfter = asked;
       if (retryAfter === null && status === 429 && found && found.remaining === 0 && found.resetSeconds !== undefined) {
         retryAfter = found.resetSeconds * 1000; // a short bucket at 0: wait for its reset
       }

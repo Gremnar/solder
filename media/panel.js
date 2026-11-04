@@ -196,7 +196,7 @@
     if (state.error && !state.busy) {
       banner.className = "banner" + (state.error.stopped ? " soft" : "");
       banner.innerHTML = `<span class="msg">${escape(state.error.message)}` +
-        (state.error.exhausted ? " Choose another model below, or wait for the reset." : "") + "</span>" +
+        (state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
         (state.error.resumable ? `<button data-action="resume">Resume</button>` : "");
     } else if (state.busy && state.steers) {
       banner.className = "banner soft";

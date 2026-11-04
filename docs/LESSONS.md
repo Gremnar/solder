@@ -73,7 +73,7 @@ Stateless tool models resend the whole chat on every request, so **a retry costs
 | `Retry-After` > 60 s | no | no: "try again later" |
 | other 5xx, timeout, connection reset | **maybe** | not in the client. The loop tries **once**, then stops with a Resume button |
 | 4xx | n/a | no: show the cleaned error |
-| 429 with the allowance at 0 | n/a | no: "used up, resets in …" |
+| 429 with the allowance at 0, or Retry-After > 10 min | n/a | no: "used up, resets in …" (Resume afterwards) |
 
 - **Connection resets happen** (WinError 10054). Alloy saw two in about 120 requests on a healthy day. The single loop-level retry exists for these.
 - **Never resend after text has reached the user.** Keep the partial text and offer Resume.
@@ -86,7 +86,7 @@ if (!error.transient || error.uncertain || streamed || error.exhausted || attemp
 ### 2.2 The allowance
 
 - Gateways that meter usage often send `x-ratelimit-{limit,remaining,reset}-<bucket>` headers on **every** response, including errors. Read the tightest bucket and show it in a status bar item.
-- **What happens when the allowance runs out hasn't been seen yet.** Solder assumes a 429 with `remaining: 0` means used up. Confirm the real response the first time it happens, and log the status, body shape and headers (numbers only).
+- **When the allowance runs out** (first seen November 2026), one gateway answered **HTTP 429 with a Retry-After of hours** and a body saying the daily limit was exceeded, with the time to the reset and where to ask for more. Solder treats a 429 as "used up" when the tightest bucket is at 0 and doesn't reset within a minute, **or** when it asks to wait more than 10 minutes. It isn't retried. The message keeps the gateway's own (cleaned) explanation, and Resume works after the reset. Retrying it as "busy" only hammers the gateway.
 
 ### 2.3 Clean every error before showing it
 
