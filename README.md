@@ -3,13 +3,24 @@
 A lean coding agent that lives in a VS Code side panel. It works with any OpenAI-compatible Chat Completions endpoint that supports tool calling.
 
 Solder is for people who want an agent beside the editor, not instead of it:
-- **6 tools:** read, search, find, edit, write, problems. No shell: Solder reads and edits code, and tells you what to build or test.
+- **9 tools:** `read_file`, `symbols` (outline, definitions, references), `search`, `find_files`, `changes` (git), `edit_file`, `write_file`, `remove_item` and `problems`. No shell: Solder reads and edits code, and tells you what to build or test.
+- **Docs search:** point the `solder.docsFolders` setting at your own reference folders, or use **Use as Solder docs** on a folder in the Explorer, and `search` with `docs: true` looks there too. They're indexed on your PC.
 - **VS Code's own diff and undo** for every edit.
 - **An approval** before any change outside the workspace.
 - **Follows `AGENTS.md`**, plus a few rules you set.
 - **A token meter** that shows what each answer costs.
 
 **Status: early (0.0.1).** The panel, the agent loop and the tools work; build the `.vsix` with `node build/vsix.js`. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/LESSONS.md](docs/LESSONS.md) for the engine lessons it's built on.
+
+## Screenshots
+
+A finished chat, with Review and Undo on the edit:
+
+![A finished chat](docs/screenshots/finished-chat.png)
+
+A reply streaming in, and a step running while you type the next message:
+
+![A reply streaming in](docs/screenshots/streaming-reply.png) ![A step running](docs/screenshots/running-step.png)
 
 ## Try the connection check
 
