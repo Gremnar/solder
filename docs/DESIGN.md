@@ -134,10 +134,10 @@ That comes to about 400 tokens, before `AGENTS.md`.
 | `solder.modelFilter` | "" | a regex: only models matching it are offered (for example, only tool-capable ones) |
 | `solder.modelNames` | {} | `{ "<id>": "<short name>" }` for the picker. Deployments set this privately or by policy |
 | `solder.effort` | "default" | per chat in the picker; "default" sends nothing |
-| `solder.compactAtTokens` | **decide** | see Open decisions |
+| `solder.compactAtTokens` | 100,000 | 30,000 at least; see Decisions |
 | `solder.rules` | "" | plain lines added to the system prompt |
 | `solder.instructionFiles` | ["AGENTS.md"] | |
-| `solder.runShell` | "powershell" | or pwsh, cmd, bash |
+| `solder.runShell` | "powershell" | `powershell` (5.1), `pwsh` (7) or `auto` (pwsh when it's on the PATH, else 5.1) |
 | `solder.runTimeoutSeconds` | 120 | per command |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
 
@@ -209,10 +209,15 @@ Sources:
 | **3: Polish** | Model names, effort picker, context chips, the step clock on High, keyboard shortcuts |
 | **4: Ship** | `build/vsix.js`, icon, README for the Marketplace, first upload to `gremnar` |
 
-## Open decisions
+## Decisions
 
-1. **Compaction threshold.** Alloy won't compact before 225k. For stateless models that's 200k+ per step, which is how an allowance disappears in 30 minutes. Suggestion: default **100k**, configurable down to 30k. Your call.
-2. **Shell.** Should the default be Windows PowerShell 5.1 (always there) or pwsh?
-3. **Free fallback lane.** Alloy can fall back to non-tool models through a text protocol (stateful, unmetered on some gateways). Solder v1 is tool models only. Add the text lane later if allowances bite?
-4. **Name and icon** for the Marketplace (`gremnar.solder`, display name "Solder").
-5. **License.** The Marketplace and a public repo need one (MIT is the usual choice for extensions).
+Made 2026-11-04.
+
+1. **Compaction at 100k tokens** by default, configurable from 30k up. Alloy's 225k is too high when every step resends the whole chat.
+2. **Shell:** Windows PowerShell 5.1 (`powershell.exe`) by default, because it is always there. PowerShell 7 (`pwsh.exe`) is a supported choice in settings. `auto` uses pwsh when it's on the PATH.
+3. **Tool-calling models only** in v1. A text-protocol lane for models without tool calling waits until usage asks for it.
+4. **License:** MIT.
+
+## Still open
+
+- **Icon** for the Marketplace (`gremnar.solder`, display name "Solder").

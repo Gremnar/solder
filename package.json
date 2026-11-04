@@ -4,6 +4,7 @@
   "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint with tool calling.",
   "version": "0.0.1",
   "publisher": "gremnar",
+  "license": "MIT",
   "private": true,
   "engines": { "vscode": "^1.100.0" },
   "categories": ["AI", "Programming Languages"],
