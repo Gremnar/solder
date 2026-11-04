@@ -199,7 +199,8 @@ class Engine {
       /** @type {Stored} */
       const assistant = { role: "assistant", content: reply.content };
       if (reply.calls.length) {
-        assistant.tool_calls = reply.calls.map((/** @type {any} */ call) => ({ id: call.id, type: "function",
+        const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
+        assistant.tool_calls = reply.calls.map((/** @type {any} */ call) => ({ id: unique(call.id, used), type: "function",
           function: { name: call.name, arguments: call.arguments }, ...(call.extra ? { extra_content: call.extra } : {}) }));
       }
       chat.messages.push(assistant);
@@ -248,10 +249,10 @@ class Engine {
         result = { output: TEXTS.notRunBatch(limit), summary: "Not run: " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
-      } else if (seen.has(name + "\u0000" + JSON.stringify(parsed.args))) {
+      } else if (seen.has(fingerprint(name, parsed.args))) {
         result = { output: TEXTS.repeat, summary: "Not run again: " + label, failed: true };
       } else {
-        seen.add(name + "\u0000" + JSON.stringify(parsed.args));
+        seen.add(fingerprint(name, parsed.args));
         result = await this._runOne(chat, call.id, name, parsed.args, label, signal);
         if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;
         if (signal.aborted) skip = TEXTS.notRunStopped;
@@ -409,9 +410,10 @@ class Engine {
 
   /** Answer every call still owed one (a reply that stopped mid-batch). @param {Chat} chat @param {string} why */
   _settle(chat, why) {
-    const answered = new Set(chat.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id));
+    const answered = new Set();
     for (let index = chat.messages.length - 1; index >= 0; index--) {
       const message = chat.messages[index];
+      if (message.role === "tool") { answered.add(message.tool_call_id); continue; }
       if (message.role !== "assistant") continue;
       for (const call of message.tool_calls || []) {
         if (answered.has(call.id)) continue;
@@ -493,10 +495,11 @@ function capped(text) {
 
 /** A call's arguments checked against its definition. */
 function parseArguments(/** @type {string} */ name, /** @type {string} */ text, /** @type {boolean} */ cutOff) {
-  const definition = TOOLS[/** @type {keyof TOOLS} */ (name)];
+  const definition = Object.hasOwn(TOOLS, name) ? TOOLS[/** @type {keyof TOOLS} */ (name)] : null;
   if (!definition) return { args: {}, problem: TEXTS.unknownTool(name, Object.keys(TOOLS)) };
   let args;
   try {
+    if (cutOff && !(text && text.trim())) return { args: {}, problem: TEXTS.cutOff };
     args = text && text.trim() ? JSON.parse(text) : {};
   } catch {
     return { args: {}, problem: cutOff ? TEXTS.cutOff : TEXTS.badArguments };
@@ -521,6 +524,19 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
     if (type === "string" && typeof value === "number") args[arg] = String(value);
   }
   return { args, problem: "" };
+}
+
+/** An id not used yet in this chat (some servers number calls call_0, call_1… every turn). @param {string} id @param {Set<string>} used */
+function unique(id, used) {
+  let out = id;
+  for (let n = 2; used.has(out); n++) out = `${id}_${n}`;
+  used.add(out);
+  return out;
+}
+
+/** A call's identity for spotting repeats: the same arguments in any key order. @param {string} name @param {any} args */
+function fingerprint(name, args) {
+  return name + "\u0000" + JSON.stringify(Object.keys(args).sort().map((key) => [key, args[key]]));
 }
 
 /** A short label for a step line: "read_file src/a.js". */

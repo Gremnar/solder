@@ -232,3 +232,29 @@ test("a stream line that isn't JSON is a clean, uncertain stream failure", async
   gw.server.closeAllConnections();
   gw.server.close();
 });
+
+test("several whole calls in one delta with no index stay separate", async () => {
+  const gw = await fakeGateway([(res) => sse(res, [{ choices: [{ index: 0, delta: { tool_calls: [
+    { id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a"}' } },
+    { id: "c2", type: "function", function: { name: "read_file", arguments: '{"path":"b"}' } }] }, finish_reason: "tool_calls" }] }])]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  const reply = await client.reply({ model: "m", messages: ask });
+  assert.deepEqual(reply.calls.map((c) => [c.id, c.name, c.arguments]), [["c1", "read_file", '{"path":"a"}'], ["c2", "read_file", '{"path":"b"}']]);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("bare-CR streams finish, even when the server keeps the connection open; CRLF split across chunks too", async () => {
+  const event = (content, finish) => `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, ...(finish ? { finish_reason: "stop" } : {}) }] })}`;
+  const gw = await fakeGateway([
+    (res) => { res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(event("o", false) + "\r\r"); res.write(event("k", true) + "\r\r"); res.write("data: [DONE]\r\r"); }, // never ends
+    (res) => { res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(event("o", false) + "\r"); res.write("\n\r"); res.write("\n" + event("k", true) + "\r\n\r\ndata: [DONE]\r\n\r\n"); res.end(); },
+  ]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "", quietMs: 2000 });
+  assert.equal((await client.reply({ model: "m", messages: ask })).content, "ok");
+  assert.equal((await client.reply({ model: "m", messages: ask })).content, "ok");
+  gw.server.closeAllConnections();
+  gw.server.close();
+});

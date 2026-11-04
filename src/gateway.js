@@ -243,28 +243,37 @@ class GatewayClient {
         const stream = reader = new ChatStream(emit);
         const sse = new SseParser(MAX_EVENT_BYTES);
         let total = 0;
+        /** Feed events; true once the reply is complete (and resolved). @param {string[]} events */
+        const take = (events) => {
+          for (const data of events) {
+            if (stream.event(data)) {
+              const done = stream.finish(); // may throw (an empty reply): before settling
+              settled = true;
+              signal?.removeEventListener("abort", onAbort);
+              resolve({ ...done, credits: found });
+              res.destroy();
+              return true;
+            }
+          }
+          return false;
+        };
         res.on("data", (/** @type {Buffer} */ chunk) => {
           if (settled) return;
           total += chunk.length;
           try {
             if (total > this.maxResponseBytes) throw new GatewayError("The reply was larger than the size limit.");
-            for (const data of sse.push(chunk)) {
-              if (stream.event(data)) {
-                const done = stream.finish(); // may throw (an empty reply): before settling
-                settled = true;
-                signal?.removeEventListener("abort", onAbort);
-                resolve({ ...done, credits: found });
-                res.destroy();
-                return;
-              }
-            }
+            take(sse.push(chunk));
           } catch (error) {
             fail(error);
           }
         });
-        res.on("end", () => fail(new GatewayError(
-          "The gateway's stream ended before it finished. What came through has been kept.",
-          { transient: true, uncertain: true })));
+        res.on("end", () => {
+          if (settled) return;
+          try { if (take(sse.end())) return; } catch (error) { fail(error); return; }
+          fail(new GatewayError(
+            "The gateway's stream ended before it finished. What came through has been kept.",
+            { transient: true, uncertain: true }));
+        });
         res.on("error", (error) => fail(this._transportFailure(error, true)));
       });
       req.end(body);
@@ -382,8 +391,14 @@ class ChatStream {
     for (const choice of value.choices) {
       if ((choice.index ?? 0) !== 0) continue;
       const delta = choice.delta ?? {};
-      for (const piece of delta.tool_calls ?? []) {
-        const index = Number.isInteger(piece.index) ? piece.index : 0;
+      const pieces = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+      for (let position = 0; position < pieces.length; position++) {
+        const piece = pieces[position];
+        let index = Number.isInteger(piece.index) ? piece.index : position;
+        const id = callId(piece);
+        if (!Number.isInteger(piece.index) && id && this.calls.get(index)?.id && this.calls.get(index)?.id !== id) {
+          index = Math.max(...this.calls.keys()) + 1; // a new call, not more of the one at this position
+        }
         const entry = this.calls.get(index) ?? { id: "", name: "", arguments: "" };
         entry.id ||= callId(piece);
         entry.extra ??= callExtra(piece);
@@ -442,6 +457,13 @@ class SseParser {
     /** @type {string[]} */
     this.data = [];
     this.size = 0;
+    /** The last chunk ended in a CR: an LF starting the next one is the rest of that CRLF. */
+    this.afterCr = false;
+  }
+
+  /** The stream ended: nothing is held back any more (a line without its end is dropped, as the spec says). */
+  end() {
+    return [];
   }
 
   /** @param {Buffer} chunk @returns {string[]} */
@@ -450,15 +472,19 @@ class SseParser {
     try { text = this.decoder.decode(chunk, { stream: true }); } catch {
       throw new GatewayError("The gateway's stream wasn't valid UTF-8.");
     }
+    if (this.afterCr && text.startsWith("\n")) text = text.slice(1);
+    if (text) this.afterCr = false;
     this.buffer += text;
     /** @type {string[]} */
     const events = [];
     for (;;) {
       const match = /\r\n|\r|\n/.exec(this.buffer);
-      // A lone \r at the very end may be the first half of \r\n: wait for more.
-      if (!match || (match[0] === "\r" && match.index + 1 === this.buffer.length)) break;
+      if (!match) break;
       const line = this.buffer.slice(0, match.index);
       this.buffer = this.buffer.slice(match.index + match[0].length);
+      // A CR at the very end is a line end now (no waiting, so a bare-CR stream isn't held up a chunk);
+      // if the next chunk starts with LF, that LF was its other half.
+      if (match[0] === "\r" && !this.buffer) this.afterCr = true;
       if (!line) {
         if (this.data.length) events.push(this.data.join("\n"));
         this.data = [];

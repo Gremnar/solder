@@ -397,3 +397,27 @@ test("the summary request keeps your first goal even when big writes overflow it
   await engine(client, fakeHost(), [], { compactAt: 30_000 }).ask(chat, "next");
   assert.equal(chat.compaction?.summary, "SUMMARY");
 });
+
+test("odd calls are answered, never crash or run twice: prototype names, reordered keys, cut off with no arguments", async () => {
+  for (const name of ["toString", "constructor", "__proto__"]) assert.match(parseArguments(name, "{}", false).problem, /no tool called/);
+  assert.equal(parseArguments("write_file", "", true).problem, TEXTS.cutOff);
+  const client = fakeClient([{ calls: [call("1", "toString", {}),
+    { id: "2", name: "edit_file", arguments: JSON.stringify({ path: "a", old_text: "x", new_text: "y" }) },
+    { id: "3", name: "edit_file", arguments: JSON.stringify({ new_text: "y", old_text: "x", path: "a" }) }] }, { content: "done" }]);
+  const host = fakeHost();
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "go");
+  assert.equal(host.ran.length, 1, "the reordered repeat didn't run");
+  assert.deepEqual(chat.messages.filter((m) => m.role === "tool").map((m) => m.content.slice(0, 12)),
+    [TEXTS.unknownTool("toString", []).slice(0, 12), "edit_file ok", TEXTS.repeat.slice(0, 12)]);
+});
+
+test("ids reused across turns are made unique, so every call gets its own answer", async () => {
+  const client = fakeClient([{ calls: [call("call_0", "problems", {})] }, { calls: [call("call_0", "problems", { path: "b" })] }]);
+  const chat = Engine.newChat();
+  await engine(client, fakeHost(), [], { maxRounds: 1 }).ask(chat, "go");
+  const calls = chat.messages.filter((m) => m.tool_calls).map((m) => m.tool_calls[0].id);
+  assert.deepEqual(calls, ["call_0", "call_0_2"]);
+  const answers = chat.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id);
+  assert.deepEqual(answers, ["call_0", "call_0_2"], "the second, stopped at the limit, is answered too");
+});
