@@ -9,7 +9,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { RESULTS } = require("./prompt.js");
+const { RESULTS, TEXTS } = require("./prompt.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -19,6 +19,24 @@ const DIAGNOSTICS_WAIT_MS = 2500;
 const MAX_OUTLINE = 400;
 /** A language server that's still starting answers with nothing: how long to keep asking. */
 const OUTLINE_WAITS_MS = [500, 1000, 1500];
+/** How long a definition or reference lookup may take before it counts as "found nothing". */
+const LOOKUP_MS = 15_000;
+const MAX_DEFINITIONS = 5;
+const MAX_DEFINITION_LINES = 80;
+const MAX_REFERENCES = 100;
+const MAX_CHANGED = 200;
+const MAX_DIFF_CHARS = 30_000;
+/** With no path, the whole diff comes along with the file list when it's this small (saves a call per file). */
+const INLINE_DIFF_CHARS = 12_000;
+const GIT_MS = 20_000;
+/**
+ * Every git call starts with these: no pager, no colour, no fsmonitor hook, no optional locks, and (for
+ * diffs, see gitDiffArgs) no external diff drivers or textconv filters, so a repository's own config can't
+ * make Solder run other programs. Status may still run the clean filters VS Code's own Source Control
+ * view runs (Git LFS, say): nothing beyond what VS Code already does.
+ */
+const GIT_SAFE = ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false",
+  "-c", "color.ui=false", "-c", "diff.external="];
 const MAX_REMOVE_BACKUP_BYTES = 200 * 1024 * 1024;
 const MAX_REMOVE_BACKUP_FILES = 20_000;
 
@@ -92,7 +110,8 @@ class WorkspaceTools {
     try {
       switch (name) {
         case "read_file": return await this.readFile(args, ctx.chat);
-        case "outline": return await this.outline(args);
+        case "symbols": return await this.symbols(args, ctx.signal);
+        case "changes": return await this.changes(args, ctx.signal);
         case "search": return await this.search(args, ctx.signal);
         case "find_files": return await this.findFiles(args);
         case "edit_file": return await this.editFile(args, ctx.chat);
@@ -169,7 +188,153 @@ class WorkspaceTools {
     return notes.join("\n\n");
   }
 
-  // -------------------------------------------------------------------- outline --
+  // -------------------------------------------------------------------- symbols --
+
+  /** The outline, or (with a name) its definition or references. */
+  async symbols(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
+    if (!args.name) return this.outline(args);
+    const find = args.find ?? "definition";
+    if (find !== "definition" && find !== "references") throw new ToolError(RESULTS.badFind);
+    const name = String(args.name).trim();
+    const file = this.resolve(args.path);
+    await this.mustBeFile(file);
+    let document;
+    try { document = await vscode.workspace.openTextDocument(file.uri); } catch { throw new ToolError(RESULTS.notText(file.shown)); }
+    const symbols = await this.symbolsOf(document); // also gives a cold language server its moment
+    const position = positionOf(document, symbols, name, args.line);
+    if (!position) throw new ToolError(RESULTS.notInFile(name, file.shown));
+    const command = find === "definition" ? "vscode.executeDefinitionProvider" : "vscode.executeReferenceProvider";
+    const found = locations(await deadline(vscode.commands.executeCommand(command, document.uri, position), LOOKUP_MS));
+    if (!found.length) return this.textMatches(name, signal);
+    return find === "definition" ? this.definitions(name, found) : this.references(name, found);
+  }
+
+  /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */
+  async definitions(/** @type {string} */ name, /** @type {{uri: vscode.Uri, range: vscode.Range}[]} */ found) {
+    const blocks = [];
+    for (const place of found.slice(0, MAX_DEFINITIONS)) {
+      const shown = this.shown(place.uri.fsPath);
+      if (place.uri.scheme !== "file") { blocks.push(`${shown} ${place.range.start.line + 1}`); continue; }
+      let document;
+      try { document = await vscode.workspace.openTextDocument(place.uri); } catch { blocks.push(`${shown} ${place.range.start.line + 1}`); continue; }
+      const extent = enclosing(await this.symbolsOf(document), place.range.start.line) ?? place.range;
+      const first = Math.min(extent.start.line, place.range.start.line);
+      const last = Math.min(Math.max(extent.end.line, place.range.end.line), document.lineCount - 1);
+      const end = Math.min(last, first + MAX_DEFINITION_LINES - 1);
+      const lines = [];
+      for (let line = first; line <= end; line++) lines.push(`${line + 1}\t${document.lineAt(line).text}`);
+      blocks.push(`${shown} ${first + 1}–${last + 1}:\n${lines.join("\n")}` + (end < last ? "\n" + RESULTS.definitionCut : ""));
+    }
+    return { output: RESULTS.definitions(name, found.length) + "\n\n" + blocks.join("\n\n"),
+      summary: `Definition of ${short(name)} · ${found.length === 1 ? this.shown(found[0].uri.fsPath) : found.length + " places"}` };
+  }
+
+  /** Every use, one line each, grouped by file. */
+  async references(/** @type {string} */ name, /** @type {{uri: vscode.Uri, range: vscode.Range}[]} */ found) {
+    /** @type {Map<string, {uri: vscode.Uri, lines: number[]}>} */
+    const files = new Map();
+    for (const place of found) {
+      const key = place.uri.toString();
+      const entry = files.get(key) ?? { uri: place.uri, lines: [] };
+      if (!entry.lines.includes(place.range.start.line)) entry.lines.push(place.range.start.line);
+      files.set(key, entry);
+    }
+    const out = [];
+    let count = 0;
+    for (const { uri, lines } of files.values()) {
+      let document = null;
+      try { if (uri.scheme === "file") document = await vscode.workspace.openTextDocument(uri); } catch { /* listed without text */ }
+      for (const line of lines.sort((a, b) => a - b)) {
+        count++;
+        if (out.length >= MAX_REFERENCES) continue;
+        const text = document && line < document.lineCount ? document.lineAt(line).text.trim().slice(0, 200) : "";
+        out.push(`${this.shown(uri.fsPath)}:${line + 1}: ${text}`);
+      }
+    }
+    return { output: RESULTS.references(name, count, files.size) + "\n" + out.join("\n")
+      + (count > out.length ? "\n" + RESULTS.referencesCapped(count - out.length) : ""),
+      summary: `Uses of ${short(name)} · ${count} in ${files.size} file${files.size === 1 ? "" : "s"}` };
+  }
+
+  /** No language support answered: whole-word text matches, clearly labelled as such (saves the model a search). */
+  async textMatches(/** @type {string} */ name, /** @type {AbortSignal} */ signal) {
+    const root = this.base();
+    const query = "\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b";
+    const rg = this.ripgrep();
+    let lines = root ? (rg ? await this.searchWithRipgrep(rg, root, query, true, undefined, signal)
+      : await this.searchInJs(root, query, true, undefined)) : [];
+    if (!lines.length) return { output: RESULTS.noHitsAtAll(name), summary: `${short(name)} · not found` };
+    const more = lines.length > MAX_SEARCH_LINES;
+    lines = lines.slice(0, MAX_SEARCH_LINES);
+    return { output: RESULTS.noLanguageHits(name) + "\n" + lines.join("\n") + (more ? "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES) : ""),
+      summary: `${short(name)} · ${lines.length}${more ? "+" : ""} text matches` };
+  }
+
+  // -------------------------------------------------------------------- changes --
+
+  /** What's changed in git since the last commit: the files, or one file's or folder's diff. */
+  async changes(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
+    if (!this.root()) throw new ToolError(RESULTS.noWorkspace);
+    const target = args.path ? this.resolve(args.path) : null;
+    let folder = this.base();
+    if (target) {
+      let stat;
+      try { stat = fs.statSync(target.full); } catch { stat = null; }
+      folder = stat?.isDirectory() ? target.full : path.dirname(target.full);
+    }
+    const git = this.gitPath();
+    let top;
+    try {
+      top = (await runGit(git, folder, ["rev-parse", "--show-toplevel"], signal)).trim();
+    } catch (error) {
+      const e = /** @type {any} */ (error);
+      if (e.code === "ENOENT" || e.code === "EACCES" || e.code === "EPERM") throw new ToolError(RESULTS.noGit);
+      if (/not a git repository/i.test(e.message)) throw new ToolError(RESULTS.notGit(target ? target.shown : this.shown(folder)));
+      throw new ToolError(RESULTS.gitFailed(e.message));
+    }
+    const scope = target ? target.full : this.base();
+    const spec = path.relative(top, scope).split(path.sep).join("/");
+    const pathspec = ["--", spec && spec !== "." ? spec : "."];
+    const where = target ? target.shown : (this.folder ? this.shown(this.base()) : "");
+    const hasHead = await runGit(git, top, ["rev-parse", "--verify", "--quiet", "HEAD"], signal).then(() => true, () => false);
+    const fail = (/** @type {any} */ error) => { throw new ToolError(RESULTS.gitFailed(error.message)); };
+    const entries = parseStatus(await runGit(git, top, ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...pathspec], signal).catch(fail));
+    const unsaved = vscode.workspace.textDocuments
+      .filter((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, scope)).map((doc) => this.shown(doc.uri.fsPath));
+    const tail = (unsaved.length ? "\n\n" + RESULTS.unsaved(unsaved) : "") + (hasHead ? "" : "\n\n" + RESULTS.noCommits);
+    if (!entries.length) return { output: RESULTS.noChanges(where) + tail, summary: "Changes · none" };
+    const fullOf = (/** @type {string} */ file) => path.join(top, ...file.split("/"));
+    const fresh = entries.filter((entry) => entry.state === "new").map((entry) => this.shown(fullOf(entry.path)));
+    if (!target) {
+      /** @type {Map<string, string>} */
+      const counts = new Map();
+      if (hasHead) {
+        const numstat = await runGit(git, top, ["diff", "--numstat", "--no-ext-diff", "--no-textconv", "-z", "HEAD", ...pathspec], signal).catch(() => "");
+        for (const [file, count] of parseNumstat(numstat)) counts.set(file, count);
+      }
+      const lines = entries.slice(0, MAX_CHANGED).map((entry) =>
+        `${this.shown(fullOf(entry.path))} · ${entry.label}${counts.has(entry.path) ? " · " + counts.get(entry.path) : ""}`);
+      const diff = hasHead ? await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(() => "") : "";
+      const inline = diff.trim() && diff.length <= INLINE_DIFF_CHARS ? "\n\n" + diff.trim() : "";
+      return { output: RESULTS.changedFiles(entries.length, !!inline) + "\n" + lines.join("\n")
+        + (entries.length > MAX_CHANGED ? "\n" + RESULTS.changedCapped(entries.length - MAX_CHANGED) : "") + inline + tail,
+        summary: `Changes · ${entries.length} file${entries.length === 1 ? "" : "s"}` };
+    }
+    let diff = hasHead ? await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(fail) : "";
+    if (diff.length > MAX_DIFF_CHARS) diff = diff.slice(0, MAX_DIFF_CHARS) + "\n" + TEXTS.resultCut(diff.length - MAX_DIFF_CHARS);
+    const parts = [diff.trim(), fresh.length ? RESULTS.newFiles(fresh) : ""].filter(Boolean);
+    return { output: (parts.join("\n\n") || RESULTS.noChanges(where)) + tail,
+      summary: `Changes in ${target.shown} · ${entries.length} file${entries.length === 1 ? "" : "s"}` };
+  }
+
+  /** The git VS Code itself uses (its git extension found it), or git on the PATH. */
+  gitPath() {
+    try {
+      const api = vscode.extensions.getExtension("vscode.git")?.exports?.getAPI?.(1);
+      if (api?.git?.path) return String(api.git.path);
+    } catch { /* not active yet, or turned off */ }
+    return process.platform === "win32" ? "git.exe" : "git";
+  }
 
   async outline(/** @type {any} */ args) {
     const file = this.resolve(args.path);
@@ -527,6 +692,152 @@ function outlineEntries(symbols, kindName) {
   return out;
 }
 
+/**
+ * Where to ask about `name` in the document: on the given line if it's there, else where an outline
+ * symbol of that name is declared, else its first whole-word appearance. null when it isn't there.
+ * @param {vscode.TextDocument} document @param {any[]} symbols @param {string} name @param {number} [line]
+ */
+function positionOf(document, symbols, name, line) {
+  if (!name) return null;
+  const word = new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w$])`);
+  const on = (/** @type {number} */ index) => {
+    if (index < 0 || index >= document.lineCount) return null;
+    const match = word.exec(document.lineAt(index).text);
+    return match ? new vscode.Position(index, match.index) : null;
+  };
+  if (line) {
+    const given = on(line - 1);
+    if (given) return given;
+  }
+  /** @type {any} */
+  let declared = null;
+  const visit = (/** @type {any[]} */ list) => {
+    for (const symbol of list) {
+      if (declared) return;
+      if (symbol?.name === name) declared = symbol;
+      else if (Array.isArray(symbol?.children)) visit(symbol.children);
+    }
+  };
+  visit(symbols);
+  const start = declared?.selectionRange?.start ?? declared?.range?.start ?? declared?.location?.range?.start;
+  if (start) {
+    const at = on(start.line);
+    if (at) return at;
+  }
+  for (let index = 0; index < document.lineCount; index++) {
+    const found = on(index);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Location and LocationLink results as {uri, range}, without repeats. @param {any} result */
+function locations(result) {
+  const list = Array.isArray(result) ? result : result ? [result] : [];
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const uri = item?.targetUri ?? item?.uri;
+    const range = item?.targetSelectionRange ?? item?.targetRange ?? item?.range;
+    if (!uri || !range) continue;
+    const key = `${uri.toString()}#${range.start.line}:${range.start.character}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ uri, range: item?.targetRange && item?.targetSelectionRange ? item.targetRange : range });
+  }
+  return out;
+}
+
+/** The innermost outline symbol declared on that line (so a definition shows its whole body). @param {any[]} symbols @param {number} line */
+function enclosing(symbols, line) {
+  /** @type {any} */
+  let best = null;
+  const visit = (/** @type {any[]} */ list) => {
+    for (const symbol of list) {
+      const range = symbol?.range ?? symbol?.location?.range;
+      if (!range || range.start.line > line || range.end.line < line) continue;
+      const declaredAt = (symbol.selectionRange ?? range).start.line;
+      if (declaredAt === line) best = range;
+      if (Array.isArray(symbol.children)) visit(symbol.children);
+    }
+  };
+  visit(symbols);
+  return best;
+}
+
+/** A promise's value, or undefined once `ms` pass (a provider that hangs counts as finding nothing). @param {any} promise @param {number} ms */
+function deadline(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    Promise.resolve(promise).then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(undefined); });
+  });
+}
+
+/**
+ * Runs git (one fixed program, never a shell) with GIT_SAFE first. Resolves with stdout; rejects with
+ * the first line of stderr (or the spawn error, whose code is ENOENT when git isn't there).
+ * @param {string} git @param {string} cwd @param {string[]} args @param {AbortSignal} [signal] @returns {Promise<string>}
+ */
+function runGit(git, cwd, args, signal) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(git, [...GIT_SAFE, ...args], { cwd, windowsHide: true, shell: false, signal,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", GIT_EXTERNAL_DIFF: "" } });
+    let out = "";
+    let errors = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { if (out.length < 4_000_000) out += chunk; });
+    child.stderr.on("data", (chunk) => { if (errors.length < 10_000) errors += chunk; });
+    const timer = setTimeout(() => child.kill(), GIT_MS);
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(Object.assign(new Error(errors.trim().split(/\r?\n/)[0] || `git stopped (exit ${code})`), { exit: code }));
+    });
+  });
+}
+
+/**
+ * git status --porcelain=v1 -z, as {path, state, label}: state "new" for untracked files.
+ * @param {string} text @returns {{path: string, state: string, label: string}[]}
+ */
+function parseStatus(text) {
+  const parts = text.split("\0");
+  const out = [];
+  for (let index = 0; index < parts.length; index++) {
+    const entry = parts[index];
+    if (entry.length < 4) continue;
+    const x = entry[0];
+    const y = entry[1];
+    const file = entry.slice(3);
+    if (x === "?" && y === "?") { out.push({ path: file, state: "new", label: "new, not in git yet" }); continue; }
+    if (x === "!" && y === "!") continue;
+    let label = x === "D" || y === "D" ? "deleted" : x === "A" ? "added" : x === "R" || x === "C" ? `renamed from ${parts[index + 1] ?? "?"}`
+      : x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D") ? "conflicted" : "modified";
+    if (x === "R" || x === "C") index++; // the old name follows
+    const staged = x !== " " && x !== "?";
+    const unstaged = y !== " " && y !== "?";
+    if (label !== "conflicted") label += staged && unstaged ? " (staged and unstaged)" : staged ? " (staged)" : "";
+    out.push({ path: file, state: x === "D" || y === "D" ? "deleted" : "changed", label });
+  }
+  return out;
+}
+
+/** git diff --numstat -z: path → "+12 −3" ("binary" for binary files). @param {string} text @returns {[string, string][]} */
+function parseNumstat(text) {
+  const parts = text.split("\0");
+  /** @type {[string, string][]} */
+  const out = [];
+  for (let index = 0; index < parts.length; index++) {
+    const match = /^(-|\d+)\t(-|\d+)\t(.*)$/s.exec(parts[index]);
+    if (!match) continue;
+    let file = match[3];
+    if (!file) { index += 2; file = parts[index]; } // a rename: "", then the old and new names
+    out.push([file, match[1] === "-" ? "binary" : `+${match[1]} −${match[2]}`]);
+  }
+  return out;
+}
+
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
 function within(full, folder) {
   const a = path.resolve(full).toLowerCase();
@@ -616,4 +927,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, outlineEntries };
+module.exports = { WorkspaceTools, ToolError, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

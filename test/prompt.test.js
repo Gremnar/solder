@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "eef03db9f6d8f7f5";
+const PINNED = "00658156ecd933ff";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -19,7 +19,10 @@ const SAMPLES = {
 };
 const RESULT_SAMPLES = {
   error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
-  notText: [["a.bin"]], outlineHead: [["a.js", 412], ["b.js", 1]], outlineCapped: [[52]], noOutline: [["a.txt", 3]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
+  notText: [["a.bin"]], outlineHead: [["a.js", 412], ["b.js", 1]], outlineCapped: [[52]], noOutline: [["a.txt", 3]], notInFile: [["total", "a.js"]], definitions: [["total", 1], ["total", 3]],
+  references: [["total", 1, 1], ["total", 1200, 9]], referencesCapped: [[1100]], noLanguageHits: [["total"]], noHitsAtAll: [["total"]],
+  notGit: [["src"]], gitFailed: [["bad"]], noChanges: [[""], ["src"]], changedFiles: [[1], [7]], changedCapped: [[30]],
+  newFiles: [[["a.js", "b.js"]]], unsaved: [[["a.js"]]], longLine: [[1, 250000]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
   notFound: [["a.js", 0], ["a.js", 7]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
@@ -59,7 +62,7 @@ test("the model-facing texts match the pinned fingerprint", () => {
 test("the tools: a fixed order, every argument described and typed, required ones defined", () => {
   const definitions = toolDefinitions();
   assert.deepEqual(definitions.map((d) => d.function.name),
-    ["read_file", "outline", "search", "find_files", "edit_file", "write_file", "remove_item", "problems"]);
+    ["read_file", "symbols", "search", "find_files", "changes", "edit_file", "write_file", "remove_item", "problems"]);
   assert.deepEqual(toolDefinitions(), definitions, "the same every time");
   for (const { type, function: fn } of definitions) {
     assert.equal(type, "function");
@@ -80,9 +83,9 @@ test("the rules name every tool, say there's no shell, and stay small", () => {
   assert.match(RULES, /can't run commands/);
   assert.match(RULES, /Never guess what a file says/);
   assert.match(RULES, /don't put your reasoning, drafts or second thoughts in it/);
-  // Every request resends these: keep the rules under ~600 tokens and the tools under ~1,000.
+  // Every request resends these: keep the rules under ~600 tokens and the 9 tools under ~1,250.
   assert.ok(RULES.length / 4 < 600, `RULES is ${Math.ceil(RULES.length / 4)} tokens`);
-  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1000, "the tool definitions grew");
+  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1250, "the tool definitions grew");
 });
 
 test("the system prompt is stable: no time, instructions and rules only when given", () => {

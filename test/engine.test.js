@@ -108,7 +108,7 @@ test("unknown tools, bad arguments and repeats are answered, and the rest still 
   await engine(client, host).ask(chat, "go");
   assert.deepEqual(host.ran.map((r) => r[0]), ["find_files"]);
   const texts = chat.messages.filter((m) => m.role === "tool").map((m) => m.content);
-  assert.match(texts[0], /There's no tool called delete_everything. The tools are: read_file, outline, search/);
+  assert.match(texts[0], /There's no tool called delete_everything. The tools are: read_file, symbols, search/);
   assert.equal(texts[1], TEXTS.badArguments);
   assert.equal(texts[3], TEXTS.repeat);
   assert.equal(texts[4], "read_file needs path; it wasn't run.");

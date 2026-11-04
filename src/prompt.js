@@ -17,8 +17,11 @@ something needs building, testing or running, say what to run and the user will.
 
 # How to work
 - If the question doesn't need the workspace, just answer.
-- Look with read_file, outline, search and find_files; change files with edit_file and write_file; check your \
-work with problems (VS Code's errors and warnings). remove_item deletes a file or folder, and asks the user first.
+- Look with read_file, symbols, search and find_files, and see what's changed since the last commit with \
+changes; change files with edit_file and write_file; check your work with problems (VS Code's errors and \
+warnings). remove_item deletes a file or folder, and asks the user first.
+- To find where a function, class or method is defined or used, use symbols rather than search: it follows \
+imports and skips comments, strings and look-alike names.
 - A working folder or open file named in the user's message tells you where they are, not what to do: read \
 it only when the request is about it.
 - Read only what the task needs. Start from what the user named, their selection or the active file.
@@ -30,7 +33,7 @@ before moving on.
 - Calls in one reply run in order and stop at the first that fails or is declined (a failed read doesn't \
 stop later reads). Make several at once only when you already know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
-big file you haven't seen, get its outline and read only the lines you need.
+big file you haven't seen, get its outline (symbols) and read only the lines you need.
 - If a change could lose the user's work, or the request is unclear, ask first.
 
 # How to answer
@@ -63,14 +66,18 @@ const RELATIVE = "a path relative to the workspace folder, or a full path";
 /** name → [description, {argument: schema}, required[]] */
 const TOOLS = {
   read_file: ["Returns a text file with line numbers (unsaved changes in the editor included). Up to 2,000 \
-lines at a time: for a longer file, ask for a range (outline shows where things are).", {
+lines at a time: for a longer file, ask for a range (symbols shows where things are).", {
     path: { type: "string", description: `The file: ${RELATIVE}.` },
     start_line: { type: "integer", description: "The first line to return (lines are numbered from 1)." },
     end_line: { type: "integer", description: "The last line to return." },
   }, ["path"]],
-  outline: ["Returns a file's structure from VS Code's language support: its classes, functions, methods \
-and so on, nested, each with its line range. Much smaller than the file: use it to find the lines to read.", {
-    path: { type: "string", description: `The file: ${RELATIVE}.` },
+  symbols: ["Uses VS Code's language support. With just a path: the file's outline (its classes, functions, \
+methods and so on, nested, with line ranges), much smaller than the file. With a name too: where that symbol is \
+defined, with its code, or (find: references) every place it's used.", {
+    path: { type: "string", description: `The file: ${RELATIVE}. With name, a file the name appears in.` },
+    name: { type: "string", description: "A function, class, method or variable name that appears in that file." },
+    find: { type: "string", enum: ["definition", "references"], description: "What to find for name: definition (the default) or references." },
+    line: { type: "integer", description: "The line where name appears, when it appears more than once in the file." },
   }, ["path"]],
   search: ["Searches file contents in the workspace (respecting .gitignore) and returns matching lines as \
 path:line: text, up to 200.", {
@@ -82,6 +89,11 @@ path:line: text, up to 200.", {
 up to 300.", {
     glob: { type: "string", description: "A glob such as **/*.json, src/**/test_*.py or **/README*." },
   }, ["glob"]],
+  changes: ["Shows what's changed in git since the last commit. With no path: the changed files (staged, \
+unstaged and new) with their line counts, and the diff too when it's small. With a path: the diff for that file \
+or folder. Unsaved editor changes aren't included.", {
+    path: { type: "string", description: `Just this file or folder: ${RELATIVE}.` },
+  }, []],
   edit_file: ["Replaces one exact piece of text in a file and saves it. old_text must appear exactly once: \
 include enough surrounding lines to make it unique. Returns any new problems in the file.", {
     path: { type: "string", description: `The file: ${RELATIVE}.` },
@@ -103,7 +115,7 @@ linters), for one file or the whole workspace.", {
 };
 
 /** Tools that only look: more of them fit in one reply, and one failing doesn't stop the rest. */
-const READ_ONLY = new Set(["read_file", "outline", "search", "find_files", "problems"]);
+const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems"]);
 
 /** The tools array, in a fixed order. */
 function toolDefinitions() {
@@ -172,6 +184,32 @@ const RESULTS = {
   noOutline: (/** @type {string} */ file, /** @type {number} */ lines) => `VS Code has no outline for ${file} (no \
 language support for this kind of file, or nothing in it to list). It has ${lines.toLocaleString("en-US")} \
 line${lines === 1 ? "" : "s"}: read it, or a range of it.`,
+  badFind: 'find must be "definition" or "references".',
+  notInFile: (/** @type {string} */ name, /** @type {string} */ file) =>
+    `${name} doesn't appear in ${file} as a whole word. Give a file it appears in (search finds one).`,
+  definitions: (/** @type {string} */ name, /** @type {number} */ count) =>
+    `${name} is defined in ${count === 1 ? "one place" : `${count} places`}:`,
+  references: (/** @type {string} */ name, /** @type {number} */ count, /** @type {number} */ files) =>
+    `${name} is used in ${count.toLocaleString("en-US")} place${count === 1 ? "" : "s"} in ${files} file${files === 1 ? "" : "s"}:`,
+  referencesCapped: (/** @type {number} */ more) =>
+    `(${more.toLocaleString("en-US")} more left out; narrow it down with search and a glob if you need them)`,
+  definitionCut: "(the rest of it is left out; read a range for more)",
+  noLanguageHits: (/** @type {string} */ name) => `VS Code's language support found nothing for ${name} (it may not cover \
+this kind of file, or may still be starting). Whole-word text matches instead, which can include comments, strings \
+and other things with the same name:`,
+  noHitsAtAll: (/** @type {string} */ name) => `VS Code's language support found nothing for ${name}, and there are no \
+whole-word text matches either.`,
+  noGit: "Git isn't available here (not installed, or blocked), so changes can't be shown.",
+  notGit: (/** @type {string} */ where) => `${where} isn't in a git repository, so there are no changes to show.`,
+  gitFailed: (/** @type {string} */ message) => `git couldn't show the changes: ${message}`,
+  noChanges: (/** @type {string} */ where) => `Nothing has changed since the last commit${where ? ` in ${where}` : ""}.`,
+  changedFiles: (/** @type {number} */ count, /** @type {boolean} */ withDiff) =>
+    `Changed since the last commit (${count} file${count === 1 ? "" : "s"})${withDiff
+      ? ", with the diff below (new files aren't in it: read them)" : "; call changes with a path for a diff"}:`,
+  changedCapped: (/** @type {number} */ more) => `(${more} more; call changes with a folder to narrow it down)`,
+  newFiles: (/** @type {string[]} */ files) => `New, not in git yet (read them to see them): ${files.join(", ")}`,
+  noCommits: "The repository has no commits yet, so everything in it is new.",
+  unsaved: (/** @type {string[]} */ files) => `Unsaved changes in the editor aren't included: ${files.join(", ")}.`,
   longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
     `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown; use search to find text in it)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>

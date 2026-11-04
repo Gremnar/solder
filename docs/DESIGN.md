@@ -9,7 +9,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 8 tools: read, outline, search, find, edit, write, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
+| 9 tools: read, symbols, search, find, changes, edit, write, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
@@ -50,9 +50,10 @@ VS Code extension host (Node)
 | Tool | Arguments | Built on | Approval |
 |---|---|---|---|
 | `read_file` | path, start_line?, end_line? | `workspace.openTextDocument` (it sees **unsaved** edits), with line numbers. 2,000 lines or 30k characters at most per read | none |
-| `outline` | path | `vscode.executeDocumentSymbolProvider`: classes, functions and methods, nested, with line ranges (400 entries at most; a cold language server gets a few seconds). With no language support it says so, and the model reads instead | none |
+| `symbols` | path, name?, find?, line? | With only a path, the outline from `vscode.executeDocumentSymbolProvider`: classes, functions and methods, nested, with line ranges (400 entries at most; a cold language server gets a few seconds). With a name, `executeDefinitionProvider` (the definition's whole body, from the outline's extent) or `executeReferenceProvider` (one line per use, 100 at most). Solder finds the name's position itself, because models are bad at columns. With no language support, it gives whole-word text matches, labelled as such | none |
 | `search` | query, regex?, glob? | VS Code's bundled ripgrep (see below), JS fallback | none |
 | `find_files` | glob | `workspace.findFiles`, which respects `files.exclude` and `.gitignore` | none |
+| `changes` | path? | `git` started directly: one fixed program, no shell. It uses the path VS Code's git extension found, with `--no-ext-diff --no-textconv`, no pager, no fsmonitor and no optional locks, so a repo's config can't make Solder run other programs. With no path: status plus line counts, and the diff when it's 12k characters or less. With a path: that file's or folder's diff against HEAD. New files are listed, and unsaved editor changes are flagged | none |
 | `edit_file` | path, old_text, new_text | one `WorkspaceEdit`, then save. `old_text` must be unique. Keeps the file's line endings. Accepts a match that differs only in trailing whitespace | none (Undo kept) |
 | `write_file` | path, content | create or overwrite through `WorkspaceEdit`, then save | none inside the workspace; asks outside it |
 | `problems` | path? | `languages.getDiagnostics` (errors and warnings, capped) | none |
