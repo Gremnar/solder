@@ -243,6 +243,25 @@ test("compaction: past the limit, the older part is summarised and replayed as a
   assert.ok(events.some((e) => e.type === "compacted"));
 });
 
+test("compaction goes by the server's token count when it reports one, not just characters ÷ 4", async () => {
+  const chat = Engine.newChat();
+  for (let i = 0; i < 6; i++) {
+    chat.messages.push({ role: "user", content: `question ${i} ` + "q".repeat(2400), meta: { typed: "q" } },
+      { role: "assistant", content: `answer ${i}` });
+  }
+  // About 4,500 estimated tokens with the tools: under 5,000, so the first message doesn't compact. Its reply says the
+  // prompt was 1.5 times that, so the next one does.
+  const client = fakeClient([(req) => ({ content: "first", usage: { prompt_tokens: Math.round(1.5 * (req.messages
+    .reduce((sum, m) => sum + Math.ceil(m.content.length / 4) + Math.ceil(JSON.stringify(m.tool_calls || "").length / 4) + 4, 0)
+    + Math.ceil(JSON.stringify(req.tools).length / 4))), total_tokens: 10 } }), { content: "SUMMARY" }, { content: "second" }]);
+  const e = engine(client, fakeHost(), [], { compactAt: 5000 });
+  await e.ask(chat, "one");
+  assert.equal(chat.compaction, null);
+  assert.ok(Math.abs(chat.tokenRatio - 1.5) < 0.01);
+  await e.ask(chat, "two");
+  assert.equal(chat.compaction?.summary, "SUMMARY");
+});
+
 test("argument checks coerce what's safe", () => {
   assert.deepEqual(parseArguments("read_file", '{"path":"a","start_line":"3"}', false).args, { path: "a", start_line: 3 });
   assert.match(parseArguments("read_file", '{"path":"a","start_line":"x"}', false).problem, /whole number/);

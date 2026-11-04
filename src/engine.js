@@ -37,7 +37,7 @@ function estimate(text) {
  * @typedef {{role: string, content: string, tool_calls?: any[], tool_call_id?: string, meta?: any}} Stored
  * @typedef {{id: string, title: string, created: number, updated: number, messages: Stored[],
  *            compaction: {through: number, summary: string} | null, usage: {tokens: number},
- *            effort?: string, model?: string, agentsSeen?: string[]}} Chat
+ *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number}} Chat
  * @typedef {{output: string, summary: string, failed?: boolean, change?: any}} ToolResult
  * @typedef {{
  *   systemPrompt(chat: Chat): Promise<string>,
@@ -172,6 +172,11 @@ class Engine {
         effort: effortOf(chat.effort || settings.effort), signal });
       const used = reply.usage?.total_tokens || ((reply.usage?.prompt_tokens || 0) + (reply.usage?.completion_tokens || 0));
       answerTokens += used;
+      // The server's count over our estimate, so compaction triggers on real tokens (code runs about 30% over).
+      const sentEstimate = estimateMessages(messages) + estimate(JSON.stringify(tools));
+      if (reply.usage?.prompt_tokens > 0 && sentEstimate > 0) {
+        chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
+      }
       chat.usage.tokens += used;
       this.emit({ type: "usage", chat: chat.id, answer: answerTokens, total: chat.usage.tokens,
         prompt: reply.usage?.prompt_tokens || 0, credits: reply.credits });
@@ -333,9 +338,10 @@ class Engine {
   async _compactIfDue(/** @type {Chat} */ chat, /** @type {AbortSignal} */ signal) {
     const settings = this.settings();
     const system = await this.host.systemPrompt(chat);
-    if (estimateMessages(outbound(chat, system)) < settings.compactAt) return;
+    const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions()));
+    if (size * (chat.tokenRatio || 1) < settings.compactAt) return;
     const start = chat.compaction ? chat.compaction.through : 0;
-    const keep = settings.compactAt / 5;
+    const keep = settings.compactAt / 5 / (chat.tokenRatio || 1); // in estimated tokens
     let kept = 0;
     let cut = chat.messages.length;
     for (let index = chat.messages.length - 1; index > start; index--) {
