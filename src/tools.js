@@ -15,6 +15,8 @@ const MAX_OUTPUT_CHARS = 30_000;
 const MAX_SEARCH_LINES = 200;
 const MAX_FOUND = 300;
 const DIAGNOSTICS_WAIT_MS = 2500;
+const MAX_REMOVE_BACKUP_BYTES = 200 * 1024 * 1024;
+const MAX_REMOVE_BACKUP_FILES = 20_000;
 
 class ToolError extends Error {}
 
@@ -24,6 +26,8 @@ class WorkspaceTools {
     this.context = context;
     /** @type {string | null | undefined} */
     this._rg = undefined;
+    /** The chat's working folder, relative to the workspace folder ("" for the workspace folder itself). */
+    this.folder = "";
   }
 
   /** The first workspace folder ("" when none is open). */
@@ -31,22 +35,50 @@ class WorkspaceTools {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   }
 
+  /** Where relative paths and searches start: the working folder, or the workspace folder. */
+  base() {
+    const root = this.root();
+    if (!root || !this.folder) return root;
+    const full = path.resolve(root, this.folder);
+    return within(full, root) && fs.existsSync(full) ? full : root;
+  }
+
+  /** @param {string} folder relative to the workspace folder */
+  useFolder(folder) { this.folder = folder || ""; }
+
+  /** A path as the model sees it: relative to the working folder when it's in the workspace. @param {string} full */
+  shown(full) {
+    const root = this.root();
+    if (!root || !within(full, root)) return full;
+    return path.relative(this.base(), full).split(path.sep).join("/") || ".";
+  }
+
   /** @param {string} given */
   resolve(given) {
     const root = this.root();
     const raw = String(given ?? "").trim().replace(/^["']|["']$/g, "");
     if (!raw) throw new ToolError("No path was given.");
-    const full = path.resolve(root || process.cwd(), raw);
-    const inside = !!root && (full === root || full.toLowerCase().startsWith(root.toLowerCase() + path.sep));
-    return { uri: vscode.Uri.file(full), full, inside, shown: inside ? path.relative(root, full).split(path.sep).join("/") || "." : full };
+    const full = path.resolve(this.base() || process.cwd(), raw);
+    const inside = !!root && within(full, root);
+    return { uri: vscode.Uri.file(full), full, inside, shown: this.shown(full) };
   }
 
-  /** Why a call needs asking about first, or null: only changes outside the workspace folder. */
+  /** Why a call needs asking about first, or null: removing anything, and changes outside the workspace. */
   needsApproval(/** @type {string} */ name, /** @type {any} */ args) {
+    let target;
+    try { target = this.resolve(args.path); } catch { return null; }
+    if (name === "remove_item") {
+      let what = "It deletes this file";
+      try {
+        if (fs.statSync(target.full).isDirectory()) {
+          const { files } = measure(target.full);
+          what = `It deletes this folder and the ${files.toLocaleString()} file${files === 1 ? "" : "s"} in it`;
+        }
+      } catch { return null; } // not there: the tool says so, nothing to ask about
+      return what + (target.inside ? "." : ", outside the workspace folder.");
+    }
     if (name !== "write_file" && name !== "edit_file") return null;
-    try {
-      return this.resolve(args.path).inside ? null : "It changes a file outside the workspace folder.";
-    } catch { return null; }
+    return target.inside ? null : "It changes a file outside the workspace folder.";
   }
 
   /** @param {string} name @param {any} args @param {{chat: any, signal: AbortSignal}} ctx */
@@ -58,6 +90,7 @@ class WorkspaceTools {
         case "find_files": return await this.findFiles(args);
         case "edit_file": return await this.editFile(args, ctx.chat);
         case "write_file": return await this.writeFile(args, ctx.chat);
+        case "remove_item": return await this.removeItem(args, ctx.chat);
         case "problems": return await this.problems(args);
         default: throw new ToolError(`There's no tool called ${name}.`);
       }
@@ -125,7 +158,7 @@ class WorkspaceTools {
   // --------------------------------------------------------------------- search --
 
   async search(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
-    const root = this.root();
+    const root = this.base();
     if (!root) throw new ToolError("No workspace folder is open.");
     const rg = this.ripgrep();
     const query = String(args.query);
@@ -196,7 +229,7 @@ class WorkspaceTools {
     } catch (error) {
       throw new ToolError("That regular expression isn't valid.");
     }
-    const files = await vscode.workspace.findFiles(globOf(glob || "**/*"), undefined, 5000);
+    const files = await vscode.workspace.findFiles(new vscode.RelativePattern(root, globOf(glob || "**/*")), undefined, 5000);
     const lines = [];
     for (const uri of files) {
       let text;
@@ -205,7 +238,7 @@ class WorkspaceTools {
         text = fs.readFileSync(uri.fsPath, "utf8");
       } catch { continue; }
       if (text.includes("\u0000")) continue;
-      const shown = vscode.workspace.asRelativePath(uri, false);
+      const shown = this.shown(uri.fsPath);
       text.split(/\r?\n/).forEach((line, index) => {
         if (lines.length <= MAX_SEARCH_LINES && pattern.test(line)) lines.push(`${shown}:${index + 1}:${line.slice(0, 300)}`);
       });
@@ -218,8 +251,8 @@ class WorkspaceTools {
 
   async findFiles(/** @type {any} */ args) {
     if (!this.root()) throw new ToolError("No workspace folder is open.");
-    const uris = await vscode.workspace.findFiles(globOf(String(args.glob)), undefined, MAX_FOUND + 1);
-    const shown = uris.map((uri) => vscode.workspace.asRelativePath(uri, false)).sort((a, b) => a.localeCompare(b));
+    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob))), undefined, MAX_FOUND + 1);
+    const shown = uris.map((uri) => this.shown(uri.fsPath)).sort((a, b) => a.localeCompare(b));
     if (!shown.length) return { output: `No files match ${args.glob}.`, summary: `Found no ${args.glob}` };
     const more = shown.length > MAX_FOUND;
     return { output: shown.slice(0, MAX_FOUND).join("\n") + (more ? `\n\n(The first ${MAX_FOUND}; narrow the glob.)` : ""),
@@ -304,7 +337,7 @@ class WorkspaceTools {
     for (const [uri, diagnostics] of /** @type {any[]} */ (list)) {
       for (const d of diagnostics) {
         if (d.severity > vscode.DiagnosticSeverity.Warning) continue;
-        lines.push(`${vscode.workspace.asRelativePath(uri, false)}:${d.range.start.line + 1}:${d.range.start.character + 1} ` +
+        lines.push(`${this.shown(uri.fsPath)}:${d.range.start.line + 1}:${d.range.start.character + 1} ` +
           `${d.severity === vscode.DiagnosticSeverity.Error ? "error" : "warning"}: ${d.message.split("\n")[0]}` + (d.source ? ` (${d.source})` : ""));
       }
     }
@@ -344,9 +377,46 @@ class WorkspaceTools {
     return target;
   }
 
+  // ---------------------------------------------------------------- remove_item --
+
+  async removeItem(/** @type {any} */ args, /** @type {any} */ chat) {
+    const target = this.resolve(args.path);
+    const root = this.root();
+    let stat;
+    try { stat = fs.statSync(target.full); } catch { throw new ToolError(`${target.shown} doesn't exist.`); }
+    if ((root && path.resolve(target.full).toLowerCase() === path.resolve(root).toLowerCase()) || path.parse(target.full).root === target.full) {
+      throw new ToolError("That's the workspace folder (or a drive) itself; Solder won't remove it.");
+    }
+    const folder = stat.isDirectory();
+    const { files, bytes } = folder ? measure(target.full) : { files: 1, bytes: stat.size };
+    // A copy first, so Undo can put it back (the Recycle Bin isn't there on every drive).
+    let backup = "";
+    if (bytes <= MAX_REMOVE_BACKUP_BYTES && files <= MAX_REMOVE_BACKUP_FILES) {
+      const store = path.join(this.context.globalStorageUri.fsPath, "backups", chat.id);
+      fs.mkdirSync(store, { recursive: true });
+      backup = path.join(store, `${Date.now().toString(36)}-${path.basename(target.full)}`);
+      fs.cpSync(target.full, backup, { recursive: true });
+    }
+    try {
+      await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: true });
+    } catch {
+      if (!backup) throw new ToolError(`${target.shown} couldn't be moved to the Recycle Bin, and it's too big to keep a copy of, so it wasn't removed.`);
+      await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: false });
+    }
+    const what = folder ? ` (a folder with ${files.toLocaleString()} file${files === 1 ? "" : "s"})` : "";
+    return { output: `Removed ${target.shown}${what}.`, summary: `Removed ${target.shown}` + (folder ? ` · ${files} files` : ""),
+      change: { path: target.full, shown: target.shown, backup, removed: true, folder } };
+  }
+
   /** Put a changed file back as it was before the step (or remove one the step created). */
   async undo(/** @type {any} */ change) {
     const uri = vscode.Uri.file(change.path);
+    if (change.removed) {
+      if (!change.backup || !fs.existsSync(change.backup)) throw new Error("There's no copy to put back (it was too big to keep).");
+      if (fs.existsSync(change.path)) throw new Error(`Something is already at ${change.shown}; move it first.`);
+      fs.cpSync(change.backup, change.path, { recursive: true });
+      return;
+    }
     if (change.created) {
       await vscode.workspace.fs.delete(uri, { useTrash: true });
       return;
@@ -372,6 +442,34 @@ class WorkspaceTools {
     if (stat.type & vscode.FileType.Directory) throw new ToolError(`${file.shown} is a folder; use find_files to list it.`);
     if (stat.size > 20 * 1024 * 1024) throw new ToolError(`${file.shown} is too large to read (${Math.round(stat.size / 1048576)} MB).`);
   }
+}
+
+/** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
+function within(full, folder) {
+  const a = path.resolve(full).toLowerCase();
+  const b = path.resolve(folder).toLowerCase();
+  return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+}
+
+/** How many files and bytes a folder holds (counting stops at a limit). @param {string} folder */
+function measure(folder) {
+  let files = 0;
+  let bytes = 0;
+  const stack = [folder];
+  while (stack.length && files <= MAX_REMOVE_BACKUP_FILES * 5) {
+    const current = /** @type {string} */ (stack.pop());
+    let entries;
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else {
+        files += 1;
+        try { bytes += fs.statSync(full).size; } catch { /* gone */ }
+      }
+    }
+  }
+  return { files, bytes };
 }
 
 /** A bare pattern like *.json matches anywhere, as people mean it. @param {string} glob */

@@ -147,7 +147,7 @@
       }
     }
     if (state.busy) {
-      if (state.live) parts.push(`<div class="answer" id="live">${markdown(state.live)}</div>`);
+      if (reveal.shown) parts.push(`<div class="answer" id="live">${markdown(closeOpenMarks(reveal.shown))}</div>`);
       else parts.push(`<div class="status" id="status"><span class="spinner"></span><span>${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
     }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
@@ -161,7 +161,7 @@
     const cls = item.pending ? (item.running ? "running" : "waiting") : item.failed ? "failed" : "ok";
     const mark = item.pending ? (item.running ? "" : "·") : item.failed ? "✕" : "✓";
     const acts = item.change && !item.pending
-      ? `<span class="acts"><button data-review="${item.id}">Review</button>${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
+      ? `<span class="acts">${item.removed ? "" : `<button data-review="${item.id}">Review</button>`}${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
     const label = item.pending ? item.label : (item.summary || item.label) + (item.undone ? " · undone" : "");
     const body = open.has(item.id) && item.output ? `<pre class="out"><code>${escape(item.output)}</code></pre>` : "";
     return `<div class="step ${cls}${item.undone ? " undone" : ""}"><div class="step-head" data-step="${item.id}" role="button" tabindex="0">` +
@@ -204,6 +204,11 @@
     } else banner.className = "banner hidden";
     // chips
     const chips = [];
+    if (state.workspace) {
+      chips.push(`<button class="chip folder" data-action="folder" title="The folder you're working in: relative paths and searches start here. Click to change.">` +
+        `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>${escape(state.folder || state.workspaceName || "Workspace")}</button>` +
+        (state.folder ? `<button class="chip clear" data-action="clearFolder" title="Back to the whole workspace">✕</button>` : ""));
+    }
     if (editor.selection) chips.push(`<button class="chip${chipsOn.selection ? " on" : ""}" data-chip="selection" title="Send the selected lines with your message">✂ ${escape(base(editor.file))}:${editor.selection}</button>`);
     else if (editor.file) chips.push(`<button class="chip${chipsOn.file ? " on" : ""}" data-chip="file" title="Tell Solder which file is open">${escape(base(editor.file))}</button>`);
     $("chips").innerHTML = chips.join("");
@@ -259,24 +264,122 @@
     if (label && seconds >= 15 && state?.effort === "high" && !state.status.includes("…")) label.textContent = "Thinking hard on High effort…";
   }, 1000);
 
+  // ------------------------------------------------- the fade-in (as Alloy) --
+  // One word per tick, each fading in where it lands in the formatted text. Only a backlog (a burst from
+  // the gateway, or the reply already finished) speeds it up, so the text never falls far behind.
+
+  const FADE_MS = 900; // keep in step with .fade in panel.css
+  const TICK_MS = 30;
+  const reveal = { received: "", shown: "", buffer: "", /** @type {{text: string, born: number}[]} */ spans: [],
+    /** @type {any} */ timer: null, /** @type {any} */ pending: null };
+
+  function resetReveal() {
+    if (reveal.timer) clearTimeout(reveal.timer);
+    Object.assign(reveal, { received: "", shown: "", buffer: "", spans: [], timer: null });
+  }
+
+  /** @param {any} message */
+  function applyState(message) {
+    const was = state;
+    if (!was || was.status !== message.status || !message.busy) thinkingSince = Date.now();
+    if (!was || was.chat.id !== message.chat.id) { open.clear(); stickToBottom = true; resetReveal(); }
+    if (!message.live) resetReveal(); // that stream is now a saved answer (or none has started)
+    state = message;
+    render();
+  }
+
+  function stepReveal() {
+    reveal.timer = null;
+    const now = performance.now();
+    if (reveal.buffer) {
+      const backlog = reveal.pending ? 120 : 360;
+      let take = reveal.buffer.length > backlog ? Math.min(18, Math.ceil(reveal.buffer.length / 30)) : 1;
+      const space = reveal.buffer.indexOf(" ", Math.max(1, take));
+      if (space !== -1 && space - take <= 14) take = space + 1;
+      else if (space === -1 && reveal.buffer.length <= 14) take = reveal.buffer.length;
+      const chunk = reveal.buffer.slice(0, take);
+      reveal.buffer = reveal.buffer.slice(take);
+      reveal.shown += chunk;
+      reveal.spans.push({ text: chunk, born: now });
+    }
+    reveal.spans = reveal.spans.filter((span) => now - span.born < FADE_MS);
+    paintLive(now);
+    if (reveal.buffer || (reveal.pending && reveal.spans.length)) {
+      reveal.timer = setTimeout(stepReveal, TICK_MS);
+    } else if (reveal.pending) {
+      const next = reveal.pending;
+      reveal.pending = null;
+      applyState(next);
+    }
+  }
+
+  /** @param {number} now */
+  function paintLive(now) {
+    let live = document.getElementById("live");
+    if (!live) { renderTranscript(); live = document.getElementById("live"); if (!live) return; }
+    const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+    live.innerHTML = markdown(closeOpenMarks(reveal.shown));
+    fadeNewest(live, reveal.spans, now);
+    if (atBottom) transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  /** A **bold** or `code` opened on the last line isn't closed yet: close it for showing. @param {string} text */
+  function closeOpenMarks(text) {
+    const opening = text.match(/(^|\n)[ \t]*`{1,3}[\w+#.-]*$/);
+    if (opening) text = text.slice(0, opening.index);
+    if (((text.match(/```/g) || []).length) % 2 === 1) return text;
+    const lastLine = text.slice(text.lastIndexOf("\n") + 1);
+    let closing = "";
+    if (((lastLine.replace(/```/g, "").match(/`/g) || []).length) % 2 === 1) closing += "`";
+    const outside = lastLine.replace(/`[^`]*`?/g, "");
+    if (((outside.match(/\*\*/g) || []).length) % 2 === 1) closing += "**";
+    return closing ? text + closing : text;
+  }
+
+  /** Wrap the newest characters in fading spans, each chunk on its own clock. */
+  function fadeNewest(/** @type {HTMLElement} */ container, /** @type {{text: string, born: number}[]} */ spans, /** @type {number} */ now) {
+    const shown = (/** @type {string} */ text) => text.replace(/^\s*(?:[-+*]|\d+\.)\s+/gm, "").replace(/^\s*#{1,6}\s+/gm, "")
+      .replace(/^\s*>\s?/gm, "").replace(/\*\*|__|`|\*/g, "").replace(/\s+/g, "");
+    const nodes = [];
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => node.parentElement?.closest("button") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    while (walker.nextNode()) nodes.push(/** @type {Text} */ (walker.currentNode));
+    let index = nodes.length - 1;
+    for (let s = spans.length - 1; s >= 0 && index >= 0; s--) {
+      let need = shown(spans[s].text).length;
+      const age = Math.max(0, Math.min(FADE_MS - 10, Math.round(now - spans[s].born)));
+      while (need > 0 && index >= 0) {
+        const node = nodes[index];
+        const text = node.nodeValue || "";
+        let cut = text.length;
+        let counted = 0;
+        while (cut > 0 && counted < need) { cut--; if (!/\s/.test(text[cut])) counted++; }
+        if (counted === 0) { index--; continue; }
+        const piece = cut > 0 ? node.splitText(cut) : node;
+        const wrap = document.createElement("span");
+        wrap.className = "fade";
+        wrap.style.animationDelay = `-${age}ms`;
+        piece.parentNode?.insertBefore(wrap, piece);
+        wrap.appendChild(piece);
+        need -= counted;
+        if (cut === 0) index--;
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ events --
 
   window.addEventListener("message", (event) => {
     const message = event.data;
     if (message.type === "state") {
-      const was = state;
-      if (!was || was.status !== message.status || was.live !== message.live || !message.busy) thinkingSince = Date.now();
-      if (!was || was.chat.id !== message.chat.id) { open.clear(); stickToBottom = true; }
-      state = message;
-      render();
+      // While words are still appearing, the next state (the finished answer, the next step) waits.
+      if (reveal.timer && state && message.chat.id === state.chat.id) { reveal.pending = message; return; }
+      applyState(message);
     } else if (message.type === "live" && state) {
-      state.live = message.text;
-      const live = document.getElementById("live");
-      if (live) {
-        const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
-        live.innerHTML = markdown(message.text);
-        if (atBottom) transcript.scrollTop = transcript.scrollHeight;
-      } else renderTranscript();
+      if (!message.text.startsWith(reveal.received)) resetReveal();
+      reveal.buffer += message.text.slice(reveal.received.length);
+      reveal.received = message.text;
+      if (!reveal.timer) stepReveal();
     } else if (message.type === "editor") {
       if (message.selection !== editor.selection) chipsOn.selection = true;
       editor.file = message.file;

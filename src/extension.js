@@ -27,6 +27,11 @@ function activate(context) {
     }),
     vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(context, output)),
     vscode.commands.registerCommand("solder.focus", () => vscode.commands.executeCommand("solder.chat.focus")),
+    vscode.commands.registerCommand("solder.useFolder", async (/** @type {vscode.Uri | undefined} */ uri) => {
+      await vscode.commands.executeCommand("solder.chat.focus");
+      if (uri) await panel.setFolder(uri.fsPath);
+      else await panel.chooseFolder();
+    }),
     vscode.commands.registerCommand("solder.newChat", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.onMessage({ type: "new" });
@@ -41,7 +46,7 @@ async function checkConnection(context, output) {
   const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
   let client;
   try {
-    client = new GatewayClient({ endpoint: config.get("endpoint", ""), modelsEndpoint: config.get("modelsEndpoint", ""),
+    client = new GatewayClient({ endpoint: config.get("endpoint", ""),
       apiKey: (await context.secrets.get(KEY)) ?? "" });
   } catch (error) {
     log(`Settings: ${message(error)}`);

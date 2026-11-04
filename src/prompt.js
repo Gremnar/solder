@@ -18,7 +18,9 @@ something needs building, testing or running, say what to run and the user will.
 # How to work
 - If the question doesn't need the workspace, just answer.
 - Look with read_file, search and find_files; change files with edit_file and write_file; check your work \
-with problems (VS Code's errors and warnings).
+with problems (VS Code's errors and warnings). remove_item deletes a file or folder, and asks the user first.
+- A working folder or open file named in the user's message tells you where they are, not what to do: read \
+it only when the request is about it.
 - Read only what the task needs. Start from what the user named, their selection or the active file.
 - Never guess what a file says: read it.
 - Follow the project's instructions (AGENTS.md) below; the user's message wins if they conflict.
@@ -42,7 +44,8 @@ Don't paste back files you edited.`;
  * @param {{workspace: string, os?: string, instructions?: {path: string, text: string}[], rules?: string}} context
  */
 function systemPrompt({ workspace, os = "Windows", instructions = [], rules = "" }) {
-  const facts = [`- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to it.`,
+  const facts = [`- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to the working folder \
+when the user's message names one, otherwise to this folder; searches start there too.`,
     `- OS: ${os}.`,
     "- Each of the user's messages starts with their local date and time."];
   let text = RULES + "\n\n# The workspace\n" + facts.join("\n");
@@ -84,6 +87,9 @@ part of an existing file, use edit_file. Returns any new problems in the file.",
     path: { type: "string", description: `The file: ${RELATIVE}.` },
     content: { type: "string", description: "The file's whole text." },
   }, ["path", "content"]],
+  remove_item: ["Deletes a file or a folder (with everything in it). The user is asked first, and can undo it.", {
+    path: { type: "string", description: `The file or folder: ${RELATIVE}.` },
+  }, ["path"]],
   problems: ["Returns the errors and warnings VS Code currently shows (from its language servers and \
 linters), for one file or the whole workspace.", {
     path: { type: "string", description: `Just this file: ${RELATIVE}.` },
@@ -108,7 +114,7 @@ const TEXTS = {
   notRunBatch: (/** @type {number} */ limit) =>
     `Not run: Solder runs up to ${limit} calls from one reply. Send it again if you still need it.`,
   repeat: "Not run again: it's the same call as an earlier one in this reply (see that result).",
-  declined: "The user declined this change.",
+  declined: "The user declined this.",
   userNote: (/** @type {string} */ note) => `The user's note: ${note}`,
   unknownTool: (/** @type {string} */ name, /** @type {string[]} */ offered) =>
     `There's no tool called ${name}. The tools are: ${offered.join(", ")}.`,

@@ -27,8 +27,12 @@
       { "command": "solder.newChat", "title": "New chat", "category": "Solder" },
       { "command": "solder.focus", "title": "Open chat", "category": "Solder" },
       { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
-      { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" }
+      { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" },
+      { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" }
     ],
+    "menus": {
+      "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" }]
+    },
     "keybindings": [
       { "command": "solder.focus", "key": "ctrl+shift+;", "mac": "cmd+shift+;" }
     ],
@@ -37,8 +41,6 @@
       "properties": {
         "solder.endpoint": { "type": "string", "default": "", "scope": "machine-overridable", "order": 0,
           "markdownDescription": "The full Chat Completions address, ending in `/chat/completions`. The key is set with **Solder: Set API key**." },
-        "solder.modelsEndpoint": { "type": "string", "default": "", "scope": "machine-overridable", "order": 1,
-          "description": "The models list address. Worked out from the endpoint when empty." },
         "solder.model": { "type": "string", "default": "", "order": 2,
           "description": "The model new chats use (each chat can pick its own beside Send)." },
         "solder.modelFilter": { "type": "string", "default": "", "order": 3,

@@ -107,8 +107,7 @@ class SolderPanel {
   client() {
     if (!this._client) {
       const config = vscode.workspace.getConfiguration("solder");
-      this._client = new GatewayClient({ endpoint: config.get("endpoint", ""), modelsEndpoint: config.get("modelsEndpoint", ""),
-        apiKey: this._key ?? "" });
+      this._client = new GatewayClient({ endpoint: config.get("endpoint", ""), apiKey: this._key ?? "" });
     }
     return this._client;
   }
@@ -178,9 +177,17 @@ class SolderPanel {
       case "ready": this.post(); this.postEditor(); return;
       case "send": return this.send(message);
       case "stop": this.engine.stop(); return;
-      case "resume": this.error = null; this.engine.resume(this.chat); return;
+      case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
-      case "new": if (!this.engine.busy) { this.chat = Engine.newChat(); this.error = null; this.post(); } return;
+      case "new":
+        if (!this.engine.busy) {
+          const folder = this.chat.folder || "";
+          this.chat = Engine.newChat();
+          if (folder) this.chat.folder = folder; // a new chat keeps working where you were
+          this.error = null;
+          this.post();
+        }
+        return;
       case "open": {
         if (this.engine.busy) return;
         const chat = this.store.load(message.id);
@@ -206,6 +213,8 @@ class SolderPanel {
         return;
       }
       case "openFile": return this.openFile(message.path, message.line);
+      case "folder": return this.chooseFolder();
+      case "clearFolder": return this.setFolder("");
       case "setKey": await vscode.commands.executeCommand("solder.setApiKey"); return;
       case "settings": await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:gremnar.solder"); return;
       case "refreshModels": return this.refreshModels();
@@ -220,7 +229,12 @@ class SolderPanel {
     if (!this.chat.model && !this.settings().model && this.models[0]) this.chat.model = this.models[0].id;
     const parts = [];
     const chips = [];
+    this.tools.useFolder(this.chat.folder);
     for (const note of this.chat.notes || []) parts.push(note);
+    if (this.chat.folder) {
+      // Where you are, not something to read: the model reads only what the request is about.
+      parts.push(`(I'm working in ${this.chat.folder}: relative paths and searches start there.)`);
+    }
     this.chat.notes = [];
     const editor = vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
@@ -234,12 +248,38 @@ class SolderPanel {
         parts.push(`(Selected in ${shown}, lines ${first}–${last}:)\n${fence}${editor.document.languageId}\n${selected}\n${fence}`);
         chips.push(`${path.basename(shown)}:${first}–${last}`);
       } else if (message.file) {
-        parts.push(`(The file open in my editor: ${shown})`);
+        parts.push(`(The file open in my editor, for reference: ${shown}.)`);
         chips.push(path.basename(shown));
       }
     }
     this.error = null;
     this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips });
+  }
+
+  /** Pick the chat's working folder (inside the workspace). */
+  async chooseFolder() {
+    const root = this.tools.root();
+    if (!root) { vscode.window.showWarningMessage("Solder: open a folder first."); return; }
+    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
+      defaultUri: vscode.Uri.file(this.tools.base()), openLabel: "Work in this folder", title: "Solder: the folder you're working in" });
+    if (picked?.[0]) await this.setFolder(picked[0].fsPath);
+  }
+
+  /** The working folder: relative paths and searches start there. @param {string} full "" for the workspace folder */
+  async setFolder(full) {
+    const root = this.tools.root();
+    let relative = "";
+    if (full && root) {
+      relative = path.relative(root, full);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        vscode.window.showWarningMessage("Solder: the working folder has to be inside the workspace.");
+        return;
+      }
+    }
+    this.chat.folder = relative.split(path.sep).join("/");
+    this.tools.useFolder(this.chat.folder);
+    await this.store.save(this.chat);
+    this.post();
   }
 
   /** @param {string} id a call's id */
@@ -262,6 +302,7 @@ class SolderPanel {
 
   /** @param {string} file @param {number} [line] */
   async openFile(file, line) {
+    this.tools.useFolder(this.chat.folder);
     const target = this.tools.resolve(file);
     try {
       const document = await vscode.workspace.openTextDocument(target.uri);
@@ -287,6 +328,8 @@ class SolderPanel {
       model: current,
       effort: chat.effort || this.settings().effort,
       busy: this.engine.busy,
+      folder: this.chat.folder || "",
+      workspaceName: vscode.workspace.workspaceFolders?.[0]?.name || "",
       status: this.status,
       live: this.live,
       approvals: this.approvals.map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "" })),
@@ -338,7 +381,7 @@ class SolderPanel {
         const meta = message.meta || {};
         Object.assign(step, { pending: false, summary: meta.summary, failed: !!meta.failed,
           output: message.content.length > SHOWN_OUTPUT_CHARS ? message.content.slice(0, SHOWN_OUTPUT_CHARS) + "\n…" : message.content,
-          change: !!meta.change, created: !!meta.change?.created, undone: !!meta.undone, steer: meta.steer || "" });
+          change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, undone: !!meta.undone, steer: meta.steer || "" });
       }
     }
     for (const step of steps.values()) if (step.pending) step.running = step.id === this.running;
