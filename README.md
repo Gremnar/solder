@@ -3,13 +3,13 @@
 A lean coding agent that lives in a VS Code side panel. It works with any OpenAI-compatible Chat Completions endpoint that supports tool calling.
 
 Solder is for people who want an agent beside the editor, not instead of it:
-- **7 tools:** read, search, find, edit, write, run, problems.
+- **6 tools:** read, search, find, edit, write, problems. No shell: Solder reads and edits code, and tells you what to build or test.
 - **VS Code's own diff and undo** for every edit.
-- **An approval** before every command.
+- **An approval** before any change outside the workspace.
 - **Follows `AGENTS.md`**, plus a few rules you set.
 - **A token meter** that shows what each answer costs.
 
-**Status: early.** The gateway client and `Solder: Check connection` work. The panel and the agent loop are next. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/LESSONS.md](docs/LESSONS.md) for the engine lessons it's built on.
+**Status: early (0.0.1).** The panel, the agent loop and the tools work; build the `.vsix` with `node build/vsix.js`. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/LESSONS.md](docs/LESSONS.md) for the engine lessons it's built on.
 
 ## Try the connection check
 

@@ -9,10 +9,10 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 7 tools: read, search, find, edit, write, run, problems | OneNote, reminders, scheduling, Excel, the Brain, web fetch |
+| 6 tools: read, search, find, edit, write, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
-| Approval before every command | Auto-approve for scripts (commands only, per chat, never destructive ones) |
+| Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
 | Token meter, allowance left, compaction | Telemetry, accounts, sign-in |
 
 ## Hard rules
@@ -33,19 +33,19 @@ VS Code extension host (Node)
 ├─ src/engine.js        the tool loop (no `vscode` import: tested under plain node)
 ├─ src/gateway.js       the HTTP client (done, tested)
 ├─ src/prompt.js        system prompt, tool definitions, every fixed text the model sees
-├─ src/history.js       chats saved as JSON per workspace; trimming; compaction plan
-├─ src/tools/*.js       the 7 tools, on the vscode API (behind a small interface the engine calls)
+├─ src/store.js         chats saved as JSON per workspace
+├─ src/tools.js         the 6 tools, on the vscode API (the Host the engine calls)
 └─ media/               panel.html / panel.css / panel.js: plain DOM, strict CSP, no frameworks
 ```
 
 - **The engine is separate from VS Code.**
-  - `engine.js` takes a `Host` interface: `readFile`, `search`, `applyEdit`, `run`, `problems`, `askApproval`, `now`.
-  - It emits events: `{type: "text" | "call" | "result" | "approval" | "usage" | "done" | "error" , ...}`.
+  - `engine.js` takes a `Host` interface: `systemPrompt`, `runTool`, `needsApproval`, `save`.
+  - It emits events: `delta`, `thinking`, `message`, `running`, `approval`, `usage`, `retrying`, `compacting`, `done`, `stopped`, `error`.
   - Tests drive it with a fake host and a fake gateway.
 - **The panel is a client of engine state.** The webview holds no truth: it renders what the extension posts, and it can be rebuilt from the saved chat at any time. VS Code's Agent Host Protocol uses the same split, which keeps a later AHP adapter possible (see [below](#vs-codes-agent-host-protocol-ahp)).
 - **Placement.** Contribute a view container to the activity bar. Users can drag it to the secondary side bar, where it stays, and the README says how.
 
-## The 7 tools
+## The 6 tools
 
 | Tool | Arguments | Built on | Approval |
 |---|---|---|---|
@@ -54,13 +54,12 @@ VS Code extension host (Node)
 | `find_files` | glob | `workspace.findFiles`, which respects `files.exclude` and `.gitignore` | none |
 | `edit_file` | path, old_text, new_text | one `WorkspaceEdit`, then save. `old_text` must be unique. Keeps the file's line endings. Accepts a match that differs only in trailing whitespace | none (Undo kept) |
 | `write_file` | path, content | create or overwrite through `WorkspaceEdit`, then save | none inside the workspace; asks outside it |
-| `run` | command, purpose | `child_process.spawn` PowerShell (or the user's shell), with a timeout and capped output, shown live in a Solder terminal (`Pseudoterminal`) | **always asks**; "always in this chat" never covers destructive commands |
 | `problems` | path? | `languages.getDiagnostics` (errors and warnings, capped) | none |
 
 Details that matter:
 - **After every edit or write, include the file's new problems.** Wait up to about 2 s for `onDidChangeDiagnostics` on that file, then add any new errors to the result: "New problems in app.ts: 42: Cannot find name 'x'". This is the biggest token saver available. The model sees a broken edit at once instead of running a build to find out.
 - **Ripgrep.** VS Code ships `rg.exe` inside its install. In 1.141 it is at `<appRoot>/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/win32-x64/rg.exe`; older builds have `@vscode/ripgrep/bin/rg.exe`. Probe both from `vscode.env.appRoot`. If neither exists, or policy blocks it, fall back to a JS search over `findFiles` with size caps. Output: `path:line: text`, at most 200 matches.
-- **Run uses `child_process`, not the integrated terminal's shell integration.** Shell integration injects a script, which Constrained Language mode can break, and output capture is less dependable. Solder mirrors the output into its own pseudoterminal, so the user still watches it live.
+- **No shell (decided 2026-11-04).** Solder never starts PowerShell or any other shell, so Constrained Language mode, AppLocker and endpoint security have nothing to trip over, and the model can't fall into script loops (Alloy's worst token burns). It checks its work through `problems`, and says what to build or test for the user to run. If running things is missed later, add narrow, read-only tools that start one program directly (`git diff`, `git status`), never a general shell.
 - **Undo.** Before the first change a step makes to a file, keep its text (in memory and in `globalStorageUri/backups`). The step's **Undo** restores it. **Review** opens `vscode.diff(backup, current)`. VS Code's own Ctrl+Z also works, because edits go through the editor.
 - **Paths.** Everything resolves against the workspace folder. Writes outside it ask first. Reads outside it are allowed but shown in the step line.
 
@@ -69,50 +68,22 @@ Details that matter:
 - **System prompt:** a short set of rules (draft below), then:
   1. **`AGENTS.md`** at the workspace root, if there is one. When a task touches files in a subfolder that has its own `AGENTS.md`, that file is added to the result of the first read in that folder ("This folder's AGENTS.md says: …"). This follows the agents.md convention: the nearest file wins.
   2. **The user's rules:** the `solder.rules` setting, a few plain lines. It can be set by org policy.
-  3. **The workspace:** its folder name, OS and shell, and Constrained Language mode when detected.
+  3. **The workspace:** its folder and the OS.
 
   It stays the same from request to request: no time and no file listing.
 - **Each user message** starts with `(date, time)`. Then come any context chips the user kept: the **selection** (file and lines plus the text), the **active file** (path only; the model reads it if it needs to), and **problems** (the current errors in the active file).
 - **Instruction files.** The `solder.instructionFiles` setting defaults to `["AGENTS.md"]`. Users can add `CLAUDE.md`, `.github/copilot-instructions.md` and so on.
 
-### System prompt draft (`src/prompt.js`)
+### System prompt
 
-```text
-You are Solder, a coding agent in the user's VS Code. You work in their workspace with the tools
-below; Solder runs each call and sends you the result.
-
-# How to work
-- If the question doesn't need the workspace, just answer.
-- Use the dedicated tools: read_file, search and find_files to look; edit_file and write_file to
-  change files. Use run only for what they can't do (build, test, git, package managers), never to
-  read, list or search files.
-- Read only what the task needs. Start from what the user named, the selection or the active file.
-- Never guess what a file says or what a command did: wait for the result.
-- Follow the project's instructions (AGENTS.md) below; the user's message wins if they conflict.
-- Make the smallest change that does the job, in the style of the code around it. Edits are saved
-  at once and the user can undo them; after each edit you'll see any new problems in that file. Fix
-  what you broke before moving on.
-- Calls in one reply run in order and stop at the first that fails or is declined (a failed read
-  doesn't stop later reads). Make several at once only when you know everything each needs.
-- Every result is sent again with each later step: keep outputs small (filter inside a command,
-  read ranges of big files).
-- run asks the user every time; say why in purpose. If a step could lose work, ask first.
-
-# How to answer
-- The user reads your reply as it is: don't put reasoning, drafts or second thoughts in it.
-- Before a tool call, one short sentence at most, or nothing.
-- When done, say what you changed or found in a few sentences, with file paths. Don't paste back
-  files you edited.
-```
-
-That comes to about 400 tokens, before `AGENTS.md`.
+The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS.md`, and it tells the model it can't run commands: when something needs building or testing, it says what to run.
 
 ## The panel
 
 - **Transcript**
   - Your messages and the model's answers, with Markdown rendered by our own small, safe renderer: an escape-first port of Alloy's. No `innerHTML` of model text without escaping.
   - **Step lines:** one per call, with an icon, a summary and the time. Click one to expand its output. Edits get **Review** and **Undo**.
-  - **Approval cards** show the command, the model's purpose and the working folder. The buttons are Run, Always in this chat (shown only when the command isn't destructive) and Decline, with an optional note sent back to the model.
+  - **Approval cards** (only for a change outside the workspace) show the file and a preview, with Allow and Decline, and an optional note sent back to the model.
 - **Composer**
   - A text box. Enter sends; Shift+Enter adds a new line.
   - Context chips: selection, active file and problems, each removable.
@@ -137,8 +108,6 @@ That comes to about 400 tokens, before `AGENTS.md`.
 | `solder.compactAtTokens` | 100,000 | 30,000 at least; see Decisions |
 | `solder.rules` | "" | plain lines added to the system prompt |
 | `solder.instructionFiles` | ["AGENTS.md"] | |
-| `solder.runShell` | "powershell" | `powershell` (5.1), `pwsh` (7) or `auto` (pwsh when it's on the PATH, else 5.1) |
-| `solder.runTimeoutSeconds` | 120 | per command |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.
@@ -204,7 +173,7 @@ Sources:
 | Phase | Done when |
 |---|---|
 | **0: Connection** (started: `src/gateway.js` done and tested; `Solder: Check connection` scaffolded) | On a work PC, `Solder: Check connection` lists models and makes one tool round trip **from inside the extension host**, through the proxy |
-| **1: MVP** | Panel, chat, the 7 tools, approvals, Undo/Review, AGENTS.md, saved chats, status-bar meter. Engine tests with a fake host and gateway; live test over a local test proxy |
+| **1: MVP** | Panel, chat, the 6 tools, approvals, Undo/Review, AGENTS.md, saved chats, status-bar meter. Engine tests with a fake host and gateway; live test over a local test proxy |
 | **2: Token discipline** | Result trimming, compaction, problems after edits, steer, Resume, allowance-exhausted message |
 | **3: Polish** | Model names, effort picker, context chips, the step clock on High, keyboard shortcuts |
 | **4: Ship** | `build/vsix.js`, icon, README for the Marketplace, first upload to `gremnar` |
@@ -214,7 +183,7 @@ Sources:
 Made 2026-11-04.
 
 1. **Compaction at 100k tokens** by default, configurable from 30k up. Alloy's 225k is too high when every step resends the whole chat.
-2. **Shell:** Windows PowerShell 5.1 (`powershell.exe`) by default, because it is always there. PowerShell 7 (`pwsh.exe`) is a supported choice in settings. `auto` uses pwsh when it's on the PATH.
+2. **No shell at all:** Solder only reads and edits code. (Before this, the plan was PowerShell 5.1 by default with pwsh supported.)
 3. **Tool-calling models only** in v1. A text-protocol lane for models without tool calling waits until usage asks for it.
 4. **License:** MIT.
 

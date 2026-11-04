@@ -8,30 +8,56 @@
   "private": true,
   "engines": { "vscode": "^1.100.0" },
   "categories": ["AI", "Programming Languages"],
+  "keywords": ["agent", "chat", "coding", "openai-compatible", "tool calling"],
   "main": "./src/extension.js",
   "extensionKind": ["workspace"],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": false, "description": "Solder edits files and runs commands." },
+    "untrustedWorkspaces": { "supported": false, "description": "Solder edits files in the workspace." },
     "virtualWorkspaces": false
   },
   "activationEvents": [],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "solder", "title": "Solder", "icon": "media/solder.svg" }]
+    },
+    "views": {
+      "solder": [{ "type": "webview", "id": "solder.chat", "name": "Chat" }]
+    },
     "commands": [
+      { "command": "solder.newChat", "title": "New chat", "category": "Solder" },
+      { "command": "solder.focus", "title": "Open chat", "category": "Solder" },
       { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
       { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" }
+    ],
+    "keybindings": [
+      { "command": "solder.focus", "key": "ctrl+shift+;", "mac": "cmd+shift+;" }
     ],
     "configuration": {
       "title": "Solder",
       "properties": {
-        "solder.endpoint": { "type": "string", "default": "", "scope": "machine-overridable",
-          "markdownDescription": "The full Chat Completions address, ending in `/chat/completions`." },
-        "solder.modelsEndpoint": { "type": "string", "default": "", "scope": "machine-overridable",
+        "solder.endpoint": { "type": "string", "default": "", "scope": "machine-overridable", "order": 0,
+          "markdownDescription": "The full Chat Completions address, ending in `/chat/completions`. The key is set with **Solder: Set API key**." },
+        "solder.modelsEndpoint": { "type": "string", "default": "", "scope": "machine-overridable", "order": 1,
           "description": "The models list address. Worked out from the endpoint when empty." },
-        "solder.model": { "type": "string", "default": "", "description": "The model to use." },
-        "solder.modelFilter": { "type": "string", "default": "",
-          "description": "A regular expression: only models whose id matches it are offered." }
+        "solder.model": { "type": "string", "default": "", "order": 2,
+          "description": "The model new chats use (each chat can pick its own beside Send)." },
+        "solder.modelFilter": { "type": "string", "default": "", "order": 3,
+          "description": "A regular expression: only models whose id matches it are offered (for example, only tool-calling ones)." },
+        "solder.modelNames": { "type": "object", "default": {}, "additionalProperties": { "type": "string" }, "order": 4,
+          "markdownDescription": "Short names for the model picker: `{ \"<model id>\": \"<name>\" }`." },
+        "solder.effort": { "type": "string", "enum": ["default", "low", "medium", "high"], "default": "default", "order": 5,
+          "enumDescriptions": ["The model's own default (sends nothing).", "Quick answers.", "More thought.", "Much more thought: slower, and uses significantly more tokens."],
+          "description": "How hard new chats think (reasoning_effort)." },
+        "solder.compactAtTokens": { "type": "number", "default": 100000, "minimum": 30000, "order": 6,
+          "description": "Summarise the older part of a chat once it passes this many tokens. Every step resends the whole chat, so lower costs less." },
+        "solder.maxRounds": { "type": "number", "default": 30, "minimum": 1, "maximum": 100, "order": 7,
+          "description": "The most replies with tool calls for one message." },
+        "solder.rules": { "type": "string", "default": "", "editPresentation": "multilineText", "order": 8,
+          "description": "Your rules for the model, a few plain lines, added to every chat." },
+        "solder.instructionFiles": { "type": "array", "items": { "type": "string" }, "default": ["AGENTS.md"], "order": 9,
+          "description": "Project instruction files the model follows: the one at the workspace root, and the nearest one when it reads files in a subfolder." }
       }
     }
   },
-  "scripts": { "test": "node --test" }
+  "scripts": { "test": "node --test", "package": "node build/vsix.js" }
 }

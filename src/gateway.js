@@ -400,8 +400,10 @@ class ChatStream {
     if (!this.text.trim() && !calls.length) {
       const why = this.reason === "length" ? " It ran out of room (the output limit)."
         : this.reason === "content_filter" ? " The gateway filtered it." : "";
-      throw new GatewayError("The model sent an empty reply." + why,
+      const error = new GatewayError("The model sent an empty reply." + why,
         { transient: this.reason !== "length" && this.reason !== "content_filter" });
+      /** @type {any} */ (error).empty = true;
+      throw error;
     }
     return { content: this.text, calls, finishReason: this.reason, usage: this.usage };
   }

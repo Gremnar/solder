@@ -1,20 +1,21 @@
 // @ts-check
 "use strict";
 /**
- * Solder's entry point. Phase 0: set the key, and check the connection from inside the extension
- * host (which is what matters behind a corporate proxy): list the models, then make one tool round
- * trip with a pretend tool. The panel and the engine come next (docs/DESIGN.md).
+ * Solder's entry point: the chat panel in its own side bar view, the commands, and the connection
+ * check (it lists the models, then makes one tool round trip with a pretend tool, from inside the
+ * extension host: what matters behind a corporate proxy).
  */
 const vscode = require("vscode");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-
-const KEY = "solder.apiKey";
+const { SolderPanel, KEY } = require("./panel.js");
 
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
   const output = vscode.window.createOutputChannel("Solder");
+  const panel = new SolderPanel(context);
   context.subscriptions.push(
     output,
+    vscode.window.registerWebviewViewProvider("solder.chat", panel, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("solder.setApiKey", async () => {
       const key = await vscode.window.showInputBox({ prompt: "The API key for your endpoint", password: true,
         ignoreFocusOut: true });
@@ -22,8 +23,14 @@ function activate(context) {
       if (key.trim()) await context.secrets.store(KEY, key.trim());
       else await context.secrets.delete(KEY);
       vscode.window.showInformationMessage(key.trim() ? "Solder: API key saved." : "Solder: API key removed.");
+      await panel.refreshModels();
     }),
     vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(context, output)),
+    vscode.commands.registerCommand("solder.focus", () => vscode.commands.executeCommand("solder.chat.focus")),
+    vscode.commands.registerCommand("solder.newChat", async () => {
+      await vscode.commands.executeCommand("solder.chat.focus");
+      await panel.onMessage({ type: "new" });
+    }),
   );
 }
 

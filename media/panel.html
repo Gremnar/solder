@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="{{csp}}">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="{{css}}">
+<title>Solder</title>
+</head>
+<body>
+<header class="bar">
+  <button id="chat-title" class="title" title="Your chats"><span id="chat-title-text">New chat</span><span class="chev">▾</span></button>
+  <div class="bar-actions">
+    <button id="btn-new" class="icon" title="New chat" aria-label="New chat"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
+    <button id="btn-more" class="icon" title="More" aria-label="More"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/></svg></button>
+  </div>
+  <div id="chat-menu" class="menu hidden" role="menu"></div>
+  <div id="more-menu" class="menu right hidden" role="menu">
+    <button data-action="delete">Delete this chat</button>
+    <button data-action="refreshModels">Refresh models</button>
+    <button data-action="setKey">Set API key…</button>
+    <button data-action="settings">Settings</button>
+  </div>
+</header>
+
+<main id="transcript" aria-live="polite"></main>
+
+<section id="composer">
+  <div id="approvals"></div>
+  <div id="banner" class="banner hidden"></div>
+  <div class="box">
+    <div id="chips" class="chips"></div>
+    <textarea id="input" rows="1" placeholder="Ask Solder to read or change your code…" aria-label="Message"></textarea>
+    <div class="row">
+      <div id="model" class="model">
+        <button id="model-button" class="model-button" title="Model"><span id="model-name">Model</span><span class="chev">▾</span></button>
+        <div id="model-menu" class="menu up hidden" role="menu"></div>
+      </div>
+      <div id="effort" class="effort" title="How hard the model thinks">
+        <button data-level="low" data-tip="Quick answers. The default.">Low</button>
+        <button data-level="medium" data-tip="More thought, a little slower.">Medium</button>
+        <button data-level="high" data-tip="Consumes significantly more usage and will take longer to answer.">High</button>
+      </div>
+      <span class="grow"></span>
+      <button id="send" class="send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button>
+      <button id="stop" class="send stop hidden" title="Stop (Esc)" aria-label="Stop"><svg viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg></button>
+    </div>
+  </div>
+  <div id="footer" class="footer"></div>
+</section>
+<script nonce="{{nonce}}" src="{{js}}"></script>
+</body>
+</html>
