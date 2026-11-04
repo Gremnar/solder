@@ -1,0 +1,7 @@
+# Never in this public repo: deployment notes, logs, keys, builds.
+private/
+*.log
+*.vsix
+.env*
+node_modules/
+.vscode-test/

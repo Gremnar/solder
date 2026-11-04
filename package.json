@@ -1,0 +1,36 @@
+{
+  "name": "solder",
+  "displayName": "Solder",
+  "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint with tool calling.",
+  "version": "0.0.1",
+  "publisher": "gremnar",
+  "private": true,
+  "engines": { "vscode": "^1.100.0" },
+  "categories": ["AI", "Programming Languages"],
+  "main": "./src/extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false, "description": "Solder edits files and runs commands." },
+    "virtualWorkspaces": false
+  },
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
+      { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" }
+    ],
+    "configuration": {
+      "title": "Solder",
+      "properties": {
+        "solder.endpoint": { "type": "string", "default": "", "scope": "machine-overridable",
+          "markdownDescription": "The full Chat Completions address, ending in `/chat/completions`." },
+        "solder.modelsEndpoint": { "type": "string", "default": "", "scope": "machine-overridable",
+          "description": "The models list address. Worked out from the endpoint when empty." },
+        "solder.model": { "type": "string", "default": "", "description": "The model to use." },
+        "solder.modelFilter": { "type": "string", "default": "",
+          "description": "A regular expression: only models whose id matches it are offered." }
+      }
+    }
+  },
+  "scripts": { "test": "node --test" }
+}

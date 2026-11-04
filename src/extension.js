@@ -1,0 +1,93 @@
+// @ts-check
+"use strict";
+/**
+ * Solder's entry point. Phase 0: set the key, and check the connection from inside the extension
+ * host (which is what matters behind a corporate proxy): list the models, then make one tool round
+ * trip with a pretend tool. The panel and the engine come next (docs/DESIGN.md).
+ */
+const vscode = require("vscode");
+const { GatewayClient, GatewayError } = require("./gateway.js");
+
+const KEY = "solder.apiKey";
+
+/** @param {vscode.ExtensionContext} context */
+function activate(context) {
+  const output = vscode.window.createOutputChannel("Solder");
+  context.subscriptions.push(
+    output,
+    vscode.commands.registerCommand("solder.setApiKey", async () => {
+      const key = await vscode.window.showInputBox({ prompt: "The API key for your endpoint", password: true,
+        ignoreFocusOut: true });
+      if (key === undefined) return;
+      if (key.trim()) await context.secrets.store(KEY, key.trim());
+      else await context.secrets.delete(KEY);
+      vscode.window.showInformationMessage(key.trim() ? "Solder: API key saved." : "Solder: API key removed.");
+    }),
+    vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(context, output)),
+  );
+}
+
+/** @param {vscode.ExtensionContext} context @param {vscode.OutputChannel} output */
+async function checkConnection(context, output) {
+  const config = vscode.workspace.getConfiguration("solder");
+  output.show(true);
+  const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
+  let client;
+  try {
+    client = new GatewayClient({ endpoint: config.get("endpoint", ""), modelsEndpoint: config.get("modelsEndpoint", ""),
+      apiKey: (await context.secrets.get(KEY)) ?? "" });
+  } catch (error) {
+    log(`Settings: ${message(error)}`);
+    vscode.window.showErrorMessage(`Solder: ${message(error)} (Settings → Solder)`);
+    return;
+  }
+  try {
+    log("Listing models…");
+    let models = await client.models();
+    const filter = config.get("modelFilter", "");
+    if (filter) {
+      try { const pattern = new RegExp(filter, "i"); models = models.filter((id) => pattern.test(id)); }
+      catch { log("The model filter isn't a valid regular expression; showing every model."); }
+    }
+    log(`${models.length} model(s): ${models.join(", ") || "none"}`);
+    const model = config.get("model", "") || (models.length ? await vscode.window.showQuickPick(models,
+      { placeHolder: "A model for the tool round trip" }) : "");
+    if (!model) return;
+    const tools = [{ type: "function", function: { name: "read_file", description: "Returns a text file with line numbers.",
+      parameters: { type: "object", properties: { path: { type: "string", description: "The file to read." } },
+        required: ["path"] } } }];
+    /** @type {any[]} */
+    const messages = [
+      { role: "system", content: "You are a coding agent. Use read_file to look at files; never guess what one says." },
+      { role: "user", content: "What does version.txt say? Read it, then tell me in one line." }];
+    log(`Asking ${model} to call a tool…`);
+    const first = await client.reply({ model, messages, tools });
+    log(`Reply in ${first.ms} ms: ${first.calls.length} call(s) ${first.calls.map((c) => c.name).join(", ")}; ` +
+      `${first.usage?.total_tokens ?? "?"} tokens${first.credits ? `; ${first.credits.remaining} of ${first.credits.limit} ${first.credits.bucket} left` : ""}`);
+    if (!first.calls.length) {
+      log("The model answered without calling the tool: tool calling may not be on for this model.");
+      return;
+    }
+    messages.push({ role: "assistant", content: first.content, tool_calls: first.calls.map((call) => ({ id: call.id,
+      type: "function", function: { name: call.name, arguments: call.arguments },
+      ...(call.extra ? { extra_content: call.extra } : {}) })) });
+    for (const call of first.calls) messages.push({ role: "tool", tool_call_id: call.id, content: "1\tcanary WREN-12" });
+    const second = await client.reply({ model, messages, tools });
+    const used = /WREN-12/.test(second.content);
+    log(`Answer in ${second.ms} ms: ${used ? "it used the tool's result" : "it did NOT use the tool's result"}.`);
+    vscode.window.showInformationMessage(used ? `Solder: ${model} works, tool calls included.`
+      : `Solder: ${model} answered but ignored the tool result. See the Solder output.`);
+  } catch (error) {
+    log(`Failed: ${message(error)}`);
+    vscode.window.showErrorMessage(`Solder: ${message(error)}`);
+  }
+}
+
+/** @param {unknown} error */
+function message(error) {
+  return error instanceof GatewayError ? error.message : "Something went wrong (see the developer tools console).";
+}
+
+function deactivate() {}
+
+module.exports = { activate, deactivate };
