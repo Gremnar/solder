@@ -25,7 +25,7 @@ function fakeGateway(script) {
   }));
 }
 
-const CREDITS = { "x-ratelimit-limit-tokens": "5000000", "x-ratelimit-remaining-tokens": "4200000",
+const CREDITS = { "x-ratelimit-limit-tokens": "1000000", "x-ratelimit-remaining-tokens": "420000",
   "x-ratelimit-reset-tokens": "3600", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "99" };
 
 function sse(res, events, { done = true, headers = CREDITS } = {}) {
@@ -52,7 +52,7 @@ test("text streams, usage and credits come back, the payload is shaped like Allo
   assert.equal(reply.content, "Hello");
   assert.deepEqual(pieces, ["Hel", "lo"]);
   assert.equal(reply.usage.total_tokens, 12);
-  assert.deepEqual(reply.credits, { bucket: "tokens", limit: 5000000, remaining: 4200000, resetSeconds: 3600 });
+  assert.deepEqual(reply.credits, { bucket: "tokens", limit: 1000000, remaining: 420000, resetSeconds: 3600 });
   const sent = gw.seen[0].body;
   assert.deepEqual(Object.keys(sent), ["model", "messages", "stream", "tools", "tool_choice", "reasoning_effort", "max_tokens"]);
   assert.equal(sent.max_tokens, 32768);
