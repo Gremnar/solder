@@ -583,7 +583,11 @@
     });
     if (state.busy) {
       const stepRunning = items.some((/** @type {any} */ i) => i.kind === "step" && i.running);
-      if (reveal.shown) { endSteps(); parts.push(`<div class="answer" id="live" aria-busy="true">${markdown(closeOpenMarks(reveal.shown))}</div>`); }
+      if (reveal.shown) {
+        endSteps();
+        parts.push(`<div class="answer" id="live" aria-busy="true">${markdown(closeOpenMarks(reveal.shown))}</div>`);
+        parts.push(`<div class="status after-live${state.status ? "" : " waiting"}" id="after-live"><span class="spinner"></span><span class="what">${escape(state.status || quietLabel())}</span><span class="clock"></span></div>`);
+      }
       else if (!stepRunning || state.status) {
         // after steps, the status is the timeline's next node
         timeline.push(`<div class="status" id="status" data-enter="s:status"><span class="spinner"></span><span class="what">${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
@@ -817,8 +821,25 @@
     return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
   }
 
+  const STILL_WORKING = "Still working: a long file or answer can take a minute or two…";
+  /** When the streamed words last moved: a reply that's gone quiet after them is writing a tool call. */
+  let liveMovedAt = Date.now();
+  /** @param {number} [seconds] */
+  function quietLabel(seconds = (Date.now() - liveMovedAt) / 1000) {
+    return seconds >= 20 ? STILL_WORKING : "Thinking…";
+  }
+
   // the "Thinking…" clock: after 15 s of quiet, show how long it's been
   setInterval(() => {
+    const after = document.getElementById("after-live");
+    if (after) {
+      const quiet = (Date.now() - liveMovedAt) / 1000;
+      after.classList.toggle("waiting", !state?.status && (quiet < 2 || !!reveal.buffer));
+      const what = after.querySelector(".what");
+      if (what && !state?.status) what.textContent = quietLabel(quiet);
+      const clock = after.querySelector(".clock");
+      if (clock) clock.textContent = quiet >= 15 ? `${Math.floor(quiet / 60)}:${String(Math.floor(quiet % 60)).padStart(2, "0")}` : "";
+    }
     for (const time of document.querySelectorAll(".step .time[data-since]")) {
       time.textContent = elapsed(Date.now() - Number(/** @type {HTMLElement} */ (time).dataset.since));
     }
@@ -828,6 +849,7 @@
     clock.textContent = seconds >= 15 ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}` : "";
     const label = document.querySelector("#status .what");
     if (label && seconds >= 15 && state?.effort === "high" && !state.status.includes("…")) label.textContent = "Thinking hard on High effort…";
+    else if (label && seconds >= 20 && (!state?.status || state.status === "Thinking…")) label.textContent = STILL_WORKING;
   }, 1000);
 
   // ------------------------------------------------- the fade-in (as Alloy) --
@@ -867,6 +889,7 @@
       const chunk = reveal.buffer.slice(0, take);
       reveal.buffer = reveal.buffer.slice(take);
       reveal.shown += chunk;
+      liveMovedAt = Date.now();
       reveal.spans.push({ text: chunk, born: now });
     }
     reveal.spans = reveal.spans.filter((span) => now - span.born < FADE_MS);

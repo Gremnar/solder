@@ -25,6 +25,8 @@ const TRIM_SLACK_TOKENS = 10_000;
 const MAX_BATCH_RESULT_CHARS = 90_000;
 /** Compaction runs only when what it can summarise is at least this share of the limit. */
 const MIN_COMPACT_SHARE = 0.15;
+/** How often the panel hears that a tool call is still being written. */
+const DRAFTING_EVERY_MS = 400;
 /** The most of /compact's "what to keep" that goes into the summary request. */
 const MAX_FOCUS_CHARS = 500;
 /** This task's results are cut only past this many times the compaction limit (a runaway task). */
@@ -416,10 +418,16 @@ class Engine {
     let emptyTried = false;
     for (;;) {
       let shown = "";
+      let told = 0;
       try {
         return await this.client.reply({ ...request, onText: (/** @type {string} */ text) => {
           shown += text;
           if (!side) this.emit({ type: "delta", chat: chat.id, text });
+        }, onCalls: (/** @type {{name: string, chars: number, path: string}[]} */ calls) => {
+          // A tool call being written (a long file can take minutes): the panel says so, a few times a second at most.
+          if (side || Date.now() - told < DRAFTING_EVERY_MS) return;
+          told = Date.now();
+          this.emit({ type: "drafting", chat: chat.id, calls });
         } });
       } catch (error) {
         const e = /** @type {any} */ (error);

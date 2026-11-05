@@ -168,10 +168,11 @@ class SolderPanel {
     switch (event.type) {
       case "delta": this.live += event.text; this.status = ""; this.postLive(); return;
       case "thinking": this.status = "Thinking…"; this.running = ""; break;
+      case "drafting": this.status = draftingLabel(event.calls); break;
       case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
       case "compacting": this.status = "Summarising the older part of this chat to save tokens…"; break;
       case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; this.compactProblem = event.message || ""; break;
-      case "message": this.live = ""; this.running = ""; break;
+      case "message": this.live = ""; this.running = ""; this.status = ""; break;
       case "running": this.running = event.id; this.runningSince = Date.now(); this.status = ""; break;
       case "titled": break; // the new title goes out with the state below
       case "approval": this.approvals.push(event); break;
@@ -621,6 +622,17 @@ class SolderPanel {
 }
 
 /** 12345 → "12.3k". @param {number} n */
+/** What a reply's tool calls are, while they're still being written: "Writing src/app.ps1 · 4.2 KB so far". */
+function draftingLabel(/** @type {{name: string, chars: number, path: string}[]} */ calls) {
+  const last = calls[calls.length - 1];
+  if (!last) return "Thinking…";
+  const size = last.chars >= 1024 ? `${(last.chars / 1024).toFixed(1)} KB` : `${last.chars} characters`;
+  const what = { write_file: "Writing", edit_file: "Editing", move_item: "Moving", remove_item: "Removing" }[last.name] || "Preparing";
+  const target = last.path ? last.path.split(/[\\/]/).slice(-2).join("/") : last.name || "a step";
+  const more = calls.length > 1 ? ` (step ${calls.length})` : "";
+  return `${what} ${target}${more} · ${size} so far`;
+}
+
 function compact(n) {
   return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n);
 }

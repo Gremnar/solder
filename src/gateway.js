@@ -144,7 +144,7 @@ class GatewayClient {
    *          onText?: (text: string) => void, signal?: AbortSignal}} request
    * @returns {Promise<Reply>}
    */
-  async reply({ model, messages, tools, effort, onText = () => {}, signal }) {
+  async reply({ model, messages, tools, effort, onText = () => {}, onCalls = () => {}, signal }) {
     if (typeof model !== "string" || !model.trim() || model.length > 500) {
       throw new GatewayError("Choose a model before sending a message.");
     }
@@ -166,7 +166,7 @@ class GatewayClient {
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) throw new Cancelled();
       try {
-        const result = await this._streamOnce(body, (text) => { streamed = true; onText(text); }, signal);
+        const result = await this._streamOnce(body, (text) => { streamed = true; onText(text); }, signal, onCalls);
         return { ...result, ms: Date.now() - started };
       } catch (error) {
         if (error instanceof Cancelled || !(error instanceof GatewayError)) throw error;
@@ -199,8 +199,11 @@ class GatewayClient {
       .filter(Boolean))].sort((a, b) => a.localeCompare(b));
   }
 
-  /** @param {Buffer} body @param {(text: string) => void} emit @param {AbortSignal} [signal] */
-  _streamOnce(body, emit, signal) {
+  /**
+   * @param {Buffer} body @param {(text: string) => void} emit @param {AbortSignal} [signal]
+   * @param {(calls: {name: string, chars: number, path: string}[]) => void} [onCalls] tool calls as they're written
+   */
+  _streamOnce(body, emit, signal, onCalls) {
     return new Promise((resolve, reject) => {
       const url = new URL(this.endpoint);
       const lib = url.protocol === "https:" ? https : http;
@@ -242,7 +245,7 @@ class GatewayClient {
           fail(new GatewayError("The gateway didn't answer with a stream. Check the endpoint."));
           return;
         }
-        const stream = reader = new ChatStream(emit);
+        const stream = reader = new ChatStream(emit, onCalls);
         const sse = new SseParser(MAX_EVENT_BYTES);
         let total = 0;
         /** Feed events; true once the reply is complete (and resolved). @param {string[]} events */
@@ -369,9 +372,14 @@ class GatewayClient {
 
 /** Reads Chat Completions SSE events: text deltas, tool-call pieces (by index), usage, finish. */
 class ChatStream {
-  /** @param {(text: string) => void} emit */
-  constructor(emit) {
+  /**
+   * @param {(text: string) => void} emit
+   * @param {(calls: {name: string, chars: number, path: string}[]) => void} [onCalls] the tool calls so far, as
+   *   pieces arrive (from gateways that stream them; others send each call whole, at the end)
+   */
+  constructor(emit, onCalls = () => {}) {
     this.emit = emit;
+    this.onCalls = onCalls;
     this.text = "";
     this.reason = "";
     this.usage = {};
@@ -414,6 +422,10 @@ class ChatStream {
         if (typeof fn.arguments === "string") entry.arguments += fn.arguments;
         else if (fn.arguments && typeof fn.arguments === "object") entry.arguments = JSON.stringify(fn.arguments);
         this.calls.set(index, entry);
+      }
+      if (pieces.length) {
+        this.onCalls([...this.calls.values()].map((call) => ({ name: call.name, chars: call.arguments.length,
+          path: (/"(?:path|to)"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(call.arguments)?.[1] ?? "").replace(/\\\\/g, "\\") })));
       }
       for (const text of [delta.content, delta.refusal]) {
         if (typeof text === "string" && text) {

@@ -88,6 +88,20 @@ test("a call split over chunks is put back together", async () => {
   assert.equal(reply.calls[0].arguments, "{\"path\":\"b\"}");
 });
 
+test("a call being written is reported as it grows: its name, its size so far, and its path once it's there", async () => {
+  const gw = await fakeGateway([(res) => sse(res, [
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "w", function: { name: "write_file", arguments: "{\"path\":\"src\\\\ui\\\\app.ps1\",\"con" } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "tent\":\"" + "x".repeat(3000) + "\"}" } }] }, finish_reason: "tool_calls" }] },
+  ])]);
+  const seen = [];
+  await new GatewayClient({ endpoint: gw.endpoint, apiKey: "" }).reply({ model: "m", messages: ask, onCalls: (calls) => seen.push(calls) });
+  gw.server.closeAllConnections();
+  gw.server.close();
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen[0], [{ name: "write_file", chars: 31, path: "src\\ui\\app.ps1" }]);
+  assert.ok(seen[1][0].chars > 3000);
+});
+
 test("a stream without [DONE] fails, keeping what came", async () => {
   const gw = await fakeGateway([(res) => sse(res, [{ choices: [{ index: 0, delta: { content: "par" } }] }], { done: false })]);
   const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
