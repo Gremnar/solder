@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased: the first release
+## 0.1.0 (2026-11-04): the first release
 
 Solder is a lean coding agent in VS Code's side bar. It works with any OpenAI-compatible Chat Completions endpoint that supports tool calling.
 
