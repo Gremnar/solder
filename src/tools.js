@@ -596,9 +596,23 @@ class WorkspaceTools {
     const folders = this.docsFolders().map((folder) => folder.path);
     if (index.active) { index.active.finally(() => this.refreshDocs()); return; } // the folders changed meanwhile: again after
     const model = this.semantic();
-    const embed = model && this.embedder ? { model, fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal) } : undefined;
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: model ? "Solder: indexing docs, with meaning" : "Solder: indexing docs" },
-      () => index.refresh(folders, { ms: 30 * 60_000, embed })).then(() => {}, () => {});
+      (progress) => {
+        // The status bar counts the passages as they get their vectors; the log has a line every 320 or so.
+        let logged = 0;
+        const embed = model && this.embedder ? { model,
+          fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal),
+          onBatch: () => {
+            const { passages, embedded } = index.vectorCount(model);
+            progress?.report({ message: `${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages` });
+            if (index.embedding.done - logged >= 320) {
+              logged = index.embedding.done;
+              this.onDocsLog?.(`docs embeddings: ${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages · ${index.embedding.runTokens.toLocaleString("en-US")} tokens so far this run`);
+            }
+          } } : undefined;
+        return index.refresh(folders, { ms: 30 * 60_000, embed });
+      }).then(() => {}, () => {});
+    const embed = model && this.embedder;
     if (embed) {
       // What it cost, for the log (Copy diagnostics): the gateway's own token count.
       const counts = index.vectorCount(model);
