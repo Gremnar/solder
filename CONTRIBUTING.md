@@ -29,6 +29,7 @@ Start with [AGENTS.md](AGENTS.md), which has the hard rules and the layout. Then
    `.vsix` to the Marketplace using only the runner's `gh` and `curl`. To run it again for a tag: Actions →
    Publish to the Marketplace → Run workflow.
 
-It needs one repository secret, **VSCE_PAT**: an Azure DevOps personal access token (dev.azure.com → User settings
-→ Personal access tokens). Give it **All accessible organizations** and the **Marketplace → Manage** scope, add it
-under the repository's Settings → Secrets and variables → Actions, and renew it before it expires.
+It uses **Trusted Publishing**, so there's no token to keep or renew: GitHub vouches for the workflow, and the
+Marketplace hands it a credential that lasts 15 minutes. That needs one policy on the publisher, made once:
+marketplace.visualstudio.com/manage → **gremnar** → **Trusted Publishing** → Create, with repository owner
+**Gremnar**, repository **solder**, workflow **marketplace.yml**, and no environment.
