@@ -1,0 +1,70 @@
+# Publishes a GitHub release's .vsix to the VS Code Marketplace.
+#
+# Runs when a release is published (or by hand, for a tag). It uses nothing but the runner's own gh and curl: no
+# actions from anyone else, no npm, no vsce. The upload is the request vsce itself makes (PUT the package to the
+# gallery's publishers/<publisher>/extensions/<name>, with a Marketplace token).
+#
+# Needs one repository secret, VSCE_PAT: an Azure DevOps personal access token with the Marketplace (Manage)
+# scope, for "All accessible organizations". See CONTRIBUTING.md.
+name: Publish to the Marketplace
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release tag to publish, such as v0.1.4"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download the release's .vsix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "solder-*.vsix" --dir out
+          file=$(ls out/solder-*.vsix)
+          # The package's version must be the tag's: v0.1.4 publishes solder-0.1.4.vsix, nothing else.
+          if [ "$(basename "$file")" != "solder-${TAG#v}.vsix" ]; then
+            echo "::error::The release $TAG holds $(basename "$file"), not solder-${TAG#v}.vsix."
+            exit 1
+          fi
+          echo "FILE=$file" >> "$GITHUB_ENV"
+          ls -l "$file"
+
+      - name: Upload it to the Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::The VSCE_PAT secret isn't set. See CONTRIBUTING.md."
+            exit 1
+          fi
+          version="7.2-preview.2"
+          status=$(curl --silent --show-error --max-time 300 --output response.json --write-out "%{http_code}" \
+            --request PUT --user ":$VSCE_PAT" \
+            --header "Content-Type: application/octet-stream" \
+            --header "Accept: application/json;api-version=$version" \
+            --data-binary "@$FILE" \
+            "https://marketplace.visualstudio.com/_apis/gallery/publishers/gremnar/extensions/solder?api-version=$version")
+          echo "The Marketplace answered HTTP $status."
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            # Its message says why (a version that's already there, a token without the scope); never the token.
+            head -c 2000 response.json | sed "s/$VSCE_PAT/***/g"; echo
+            exit 1
+          fi
+          echo "Published $(basename "$FILE"). The Marketplace verifies it before it's live, usually within minutes."

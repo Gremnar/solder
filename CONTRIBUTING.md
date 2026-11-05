@@ -19,3 +19,16 @@ Start with [AGENTS.md](AGENTS.md), which has the hard rules and the layout. Then
 - **Package:** `node build/vsix.js` writes `solder-<version>.vsix`, using a hand-written zip and no tools. Install it with `code --install-extension solder-<version>.vsix --force`, then reload the window.
 - **Development:** open this folder in VS Code and press **F5**.
 - **Version numbers** change only for a release.
+
+## Releasing
+
+1. Set the version in `package.json`, and turn the changelog's **Unreleased** heading into that version and the date.
+2. Build it with `node build/vsix.js`, then commit, tag (`v0.1.4`) and push both.
+3. Publish a GitHub release for the tag with `solder-<version>.vsix` attached: `gh release create v0.1.4 solder-0.1.4.vsix`.
+4. Publishing the release runs **Publish to the Marketplace** (`.github/workflows/marketplace.yml`). It uploads that
+   `.vsix` to the Marketplace using only the runner's `gh` and `curl`. To run it again for a tag: Actions →
+   Publish to the Marketplace → Run workflow.
+
+It needs one repository secret, **VSCE_PAT**: an Azure DevOps personal access token (dev.azure.com → User settings
+→ Personal access tokens). Give it **All accessible organizations** and the **Marketplace → Manage** scope, add it
+under the repository's Settings → Secrets and variables → Actions, and renew it before it expires.
