@@ -501,3 +501,36 @@ test("Stop ends the wait for a slow read-only tool at once; a slow edit is let f
   assert.ok(finished);
   assert.equal(other.messages.find((m) => m.role === "tool").content, "Edited a.");
 });
+
+test("one reply's results have a total size limit: past it, its other reads wait for the next step", async () => {
+  const host = fakeHost({ tools: { read_file: () => ({ output: "x".repeat(39_000), summary: "read" }) } });
+  const reads = ["a", "b", "c", "d", "e", "f"].map((p, i) => call(String(i), "read_file", { path: p }));
+  const client = fakeClient([{ calls: reads }, { content: "done" }]);
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "read them all");
+  const results = chat.messages.filter((m) => m.role === "tool").map((m) => m.content === TEXTS.notRunFull ? "waits" : "read");
+  assert.deepEqual(results, ["read", "read", "read", "waits", "waits", "waits"]);
+  assert.ok(JSON.stringify(client.sent[1]).length < 140_000, "the next request stays bounded");
+});
+
+test("Resume after a stop during a step asks for the stopped step again, not just to carry on", async () => {
+  let e;
+  const host = fakeHost({ tools: { read_file: () => new Promise(() => {}) } });
+  const client = fakeClient([{ calls: [call("1", "read_file", { path: "a" })] }, { content: "carried on" }]);
+  const chat = Engine.newChat();
+  e = engine(client, host);
+  setTimeout(() => e.stop(), 20);
+  await e.ask(chat, "go");
+  await e.resume(chat);
+  assert.match(client.sent[1].at(-1).content, /run again whatever was stopped/);
+});
+
+test("compaction doesn't run when what it could summarise is a sliver", async () => {
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "hi", meta: { typed: "hi" } }, { role: "assistant", content: "hello" });
+  const client = fakeClient([{ content: "answer" }]);
+  const events = [];
+  await engine(client, fakeHost(), events, { compactAt: 30_000 }).ask(chat, "z".repeat(140_000));
+  assert.ok(!events.some((x) => x.type === "compacting"), "no request spent summarising two short messages");
+  assert.equal(client.sent.length, 1);
+});

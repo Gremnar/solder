@@ -21,6 +21,10 @@ const CHARS_PER_TOKEN = 4;
 const KEEP_RESULTS_TOKENS = 30_000;
 /** …and may run this far past it before the older ones are cut, all at once (a stable prefix for longer). */
 const TRIM_SLACK_TOKENS = 10_000;
+/** One reply's results together: past this (in characters, scaled by the chat's token ratio), its other reads wait. */
+const MAX_BATCH_RESULT_CHARS = 90_000;
+/** Compaction runs only when what it can summarise is at least this share of the limit. */
+const MIN_COMPACT_SHARE = 0.15;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
 const MAX_RESULT_CHARS = 40_000;
 /** Earlier turns' write and edit texts longer than this are left out of what's sent. */
@@ -119,10 +123,14 @@ class Engine {
       await this._compactIfDue(chat, signal, chat.messages.length);
       const last = chat.messages[chat.messages.length - 1];
       const summarisedAll = !!chat.compaction && chat.compaction.through >= chat.messages.length;
-      if (last.role === "assistant" || summarisedAll) {
+      // Results that say a step was stopped read like "the user said no": say plainly to run them again.
+      let tail = chat.messages.length - 1;
+      while (tail >= 0 && chat.messages[tail].role === "tool") tail--;
+      const stoppedSteps = chat.messages.slice(tail + 1).some((m) => m.content === TEXTS.stoppedRunning || m.content.startsWith(TEXTS.notRunStopped));
+      if (last.role === "assistant" || summarisedAll || stoppedSteps) {
         // It stopped mid-answer (or all of it is in the recap): ask it to carry on, since the history
         // can't end with its own turn.
-        chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\nPlease carry on from where you stopped.`,
+        chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${stoppedSteps ? TEXTS.resumeStopped : TEXTS.resume}`,
           meta: { typed: "Carry on", resume: true } });
         await this._save(chat);
         this.emit({ type: "message", chat: chat.id });
@@ -250,6 +258,8 @@ class Engine {
     let skip = null;
     /** @type {Stored[]} */
     const added = [];
+    let batchChars = 0;
+    const batchLimit = MAX_BATCH_RESULT_CHARS / (chat.tokenRatio || 1);
     for (let index = 0; index < calls.length; index++) {
       const call = calls[index];
       const name = call.function.name;
@@ -262,6 +272,8 @@ class Engine {
         result = { output: skip, summary: "Not run: " + label, failed: true };
       } else if (index >= limit) {
         result = { output: TEXTS.notRunBatch(limit), summary: "Not run: " + label, failed: true };
+      } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
+        result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
       } else if (seen.has(fingerprint(name, parsed.args))) {
@@ -274,6 +286,7 @@ class Engine {
       }
       // `keep` (a folder's AGENTS.md, your note) isn't tool output: it survives the result being cut.
       const output = capped(result.output);
+      batchChars += output.length;
       /** @type {Stored} */
       const message = { role: "tool", tool_call_id: call.id, content: result.keep ? output + "\n\n" + result.keep : output,
         meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.keep ? { keep: result.keep } : {}),
@@ -411,6 +424,9 @@ class Engine {
       if (message.role === "user" && !message.meta?.resume) cut = index;
     }
     if (cut <= start) return;
+    // Summarising a sliver (a warm-up turn before a huge one) costs a request and saves nothing.
+    const summarisable = chat.messages.slice(start, cut).reduce((sum, m) => sum + sizeOf(m), 0) * ratio;
+    if (summarisable < settings.compactAt * MIN_COMPACT_SHARE) return;
     this.emit({ type: "compacting", chat: chat.id });
     let reply;
     try {
@@ -449,7 +465,7 @@ class Engine {
     Promise.resolve().then(() => this.client.reply({ model: chat.model || settings.model, signal: controller.signal,
       messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
       .then(async (/** @type {any} */ reply) => {
-        chat.usage.tokens += reply.usage?.total_tokens || 0;
+        if (reply.usage) { this._spend(chat, reply.usage, reply.credits); await this._save(chat); }
         const title = cleanTitle(reply.content || "");
         if (!title || chat.titleSource === "user" || title === chat.title) return;
         chat.title = title;
@@ -565,14 +581,15 @@ function trim(/** @type {Chat} */ chat) {
   let latest = chat.messages.length - 1;
   while (latest >= start && chat.messages[latest].role === "tool") latest--;
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
-  const whole = results.reduce((sum, m) => sum + estimate(m.content), 0);
+  const ratio = chat.tokenRatio || 1;
+  const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
   if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return false;
   const fresh = new Set(chat.messages.slice(latest + 1));
   let kept = 0;
   let cut = false;
   for (let index = results.length - 1; index >= 0; index--) {
     const message = results[index];
-    kept += estimate(message.content);
+    kept += estimate(message.content) * ratio;
     if (!fresh.has(message) && kept > KEEP_RESULTS_TOKENS && message.content.length > STUB_MIN_CHARS) {
       message.meta.stub = true;
       cut = true;

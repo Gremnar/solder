@@ -17,8 +17,8 @@ something needs building, testing or running, say what to run and the user will.
 
 # How to work
 - If the question doesn't need the workspace, just answer.
-- Look with read_file, symbols, search and find_files, and see what's changed since the last commit with \
-changes; change files with edit_file and write_file; check your work with problems (VS Code's errors and \
+- Look with read_file, symbols, search and find_files (and, when the task is about recent work, changes \
+shows what's changed since the last commit); change files with edit_file and write_file; check your work with problems (VS Code's errors and \
 warnings). move_item moves, renames or copies a file or folder; remove_item deletes one, and asks the user \
 first. There's no separate tool for folders: write_file and move_item create any folders a path needs.
 - To find where a function, class or method is defined or used, use symbols rather than search: it follows \
@@ -79,13 +79,13 @@ lines at a time: for a longer file, ask for a range (symbols shows where things 
     end_line: { type: "integer", description: "The last line to return." },
   }, ["path"]],
   symbols: ["Uses VS Code's language support. With just a path: the file's outline (its classes, functions, \
-methods and so on, nested, with line ranges), much smaller than the file. With a name too: where that symbol is \
-defined, with its code, or (find: references) every place it's used.", {
-    path: { type: "string", description: `The file: ${RELATIVE}. With name, a file the name appears in.` },
-    name: { type: "string", description: "A function, class, method or variable name that appears in that file." },
+methods and so on, nested, with line ranges), much smaller than the file. With a name: where that symbol is \
+defined, with its code, or (find: references) every place it's used; give a file it appears in if you know one.", {
+    path: { type: "string", description: `The file: ${RELATIVE}. With name, a file it appears in (optional).` },
+    name: { type: "string", description: "A function, class, method or variable name." },
     find: { type: "string", enum: ["definition", "references"], description: "What to find for name: definition (the default) or references." },
     line: { type: "integer", description: "The line where name appears, when it appears more than once in the file." },
-  }, ["path"]],
+  }, []],
   search: ["Searches file contents in the workspace (respecting .gitignore) and returns matching lines as \
 path:line: text, up to 200.", {
     query: { type: "string", description: "The text to find." },
@@ -143,6 +143,11 @@ function toolDefinitions() {
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
+  notRunFull: "Not run: this reply's results already reached the size limit for one step. Ask for it in your next \
+step, a range at a time if it's big.",
+  resume: "Please carry on from where you stopped.",
+  resumeStopped: "Please carry on from where you stopped. I stopped it, but I didn't mean to cancel anything: run \
+again whatever was stopped or not run, then go on.",
   stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",
   notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
@@ -203,6 +208,16 @@ const RESULTS = {
 language support for this kind of file, or nothing in it to list). It has ${lines.toLocaleString("en-US")} \
 line${lines === 1 ? "" : "s"}: read it, or a range of it.`,
   badFind: 'find must be "definition" or "references".',
+  symbolsNeedsPath: "symbols needs a path (for an outline) or a name.",
+  alsoText: (/** @type {string} */ name) => `Also, whole-word text matches for ${name} that VS Code didn't count as uses (comments, \
+strings, or uses it missed, such as through require):`,
+  notChecked: (/** @type {string} */ file) => `VS Code hasn't checked ${file}: its language support only checks files open in an editor, and this one isn't. Its problems are unknown, not necessarily none; the user can open it to have it checked.`,
+  pastEnd: (/** @type {string} */ file, /** @type {number} */ lines) => `${file} has only ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}.`,
+  sameText: "old_text and new_text are the same, so there's nothing to change.",
+  changedOnDisk: (/** @type {string} */ file) => `${file} changed on disk a moment ago and VS Code hasn't caught up yet, so nothing \
+was changed. Read it again, then make the change.`,
+  notSaved: (/** @type {string} */ file) => `VS Code couldn't save ${file} (it may have changed on disk), so the change was undone \
+in the editor too. Read it again, then make the change.`,
   notInFile: (/** @type {string} */ name, /** @type {string} */ file) =>
     `${name} doesn't appear in ${file} as a whole word. Give a file it appears in (search finds one).`,
   definitions: (/** @type {string} */ name, /** @type {number} */ count) =>
@@ -235,8 +250,8 @@ whole-word text matches either.`,
 in the docs for ${query}, best first. [Brackets] mark the matching words; read_file the lines shown for the whole passage:`,
   docsLoose: (/** @type {number} */ best, /** @type {number} */ of) => `(Loose matches: the best of these has only ${best} of \
 your ${of} words, so they may be about something else.)`,
-  docsNoMatches: (/** @type {string} */ query) => `Nothing in the docs matches ${query}. If it should be there, try once \
-with other words (a name, a part number); otherwise carry on without it.`,
+  docsNoMatches: (/** @type {string} */ query) => `Nothing in the docs matches ${query}, so it's probably not in them: carry \
+on without it rather than searching again with other words (unless you have an exact name or number to try).`,
   docsBuilding: (/** @type {number} */ files) => `(The docs index is still being built, ${files.toLocaleString("en-US")} \
 files so far, so these results may be incomplete.)`,
   docsTruncated: `(Some docs folders hold more than 20,000 files; the rest aren't searched.)`,
@@ -267,7 +282,8 @@ searching again with other words.`,
     `${existed ? "Wrote" : "Created"} ${file} (${lines} line${lines === 1 ? "" : "s"}).`,
   newProblems: (/** @type {string} */ file, /** @type {string[]} */ lines, /** @type {number} */ more) =>
     `\n\nNew problems in ${file} now:\n${lines.join("\n")}` + (more > 0 ? `\n- and ${more} more` : ""),
-  noProblems: (/** @type {string} */ file) => "No errors or warnings" + (file ? ` in ${file}.` : "."),
+  noProblems: (/** @type {string} */ file) => file ? `No errors or warnings in ${file}.`
+    : "No errors or warnings in the files VS Code has checked (mostly the open ones). To check a file that isn't open, give its path.",
   moreProblems: (/** @type {number} */ more) => `(${more} more)`,
   removeRoot: "That's the workspace folder (or a drive) itself; Solder won't remove it.",
   moveRoot: "That's the workspace folder (or a drive) itself; Solder won't move it.",

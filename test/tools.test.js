@@ -52,7 +52,7 @@ test("flat symbol lists (SymbolInformation) work too, and odd names are tidied",
     { name: "", kind: SymbolKind.Function, location: { range: at(20, 21) } },
     { name: "no range", kind: SymbolKind.Function },
   ];
-  assert.deepEqual(outlineEntries(symbols, kind), ["string Heading with a break 1–8", "function b 9–12", "function (unnamed) 20–21"]);
+  assert.deepEqual(outlineEntries(symbols, kind), ["Heading with a break 1–8", "function b 9–12", "function (unnamed) 20–21"]);
 });
 
 test("a symbol's position: the given line, else where the outline declares it, else its first whole-word use", () => {

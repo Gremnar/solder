@@ -9,6 +9,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
 const { DocsIndex, available: docsAvailable, documentText, isOffice, loose } = require("./docs.js");
@@ -18,6 +19,15 @@ const MAX_OUTPUT_CHARS = 30_000;
 const MAX_SEARCH_LINES = 200;
 const MAX_FOUND = 300;
 const DIAGNOSTICS_WAIT_MS = 2500;
+/** Languages that have never reported diagnostics (plain JavaScript, Markdown) get a short wait instead. */
+const DIAGNOSTICS_SHORT_MS = 600;
+/** problems with a path: how long to wait for the file's diagnostics to arrive (or refresh). */
+const PROBLEMS_WAIT_MS = 1500;
+const PROBLEMS_COLD_MS = 3000;
+/** A definition's code: at most this many characters (a minified line can be enormous). */
+const MAX_DEFINITION_CHARS = 8_000;
+/** Whole-word text matches added to references the language server didn't count. */
+const MAX_EXTRA_MATCHES = 30;
 const MAX_OUTLINE = 400;
 /** A language server that's still starting answers with nothing: how long to keep asking. */
 const OUTLINE_WAITS_MS = [500, 1000, 1500];
@@ -56,6 +66,14 @@ class WorkspaceTools {
     this._outlined = new Set();
     /** @type {DocsIndex | null | undefined} the docs index, once opened (null: no SQLite here) */
     this._docs = undefined;
+    /** Languages whose diagnostics VS Code has reported: an edit there is worth waiting for. */
+    this._diagnosed = new Set();
+    context.subscriptions?.push(vscode.languages.onDidChangeDiagnostics((event) => {
+      for (const uri of event.uris) {
+        const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+        if (doc) this._diagnosed.add(doc.languageId);
+      }
+    }));
     /** The chat's working folder, relative to the workspace folder ("" for the workspace folder itself). */
     this.folder = "";
   }
@@ -112,10 +130,19 @@ class WorkspaceTools {
           what = `It deletes this folder and the ${files.toLocaleString()} file${files === 1 ? "" : "s"} in it`;
         }
       } catch { return null; } // not there: the tool says so, nothing to ask about
-      return what + (target.inside ? "." : ", outside the workspace folder.");
+      const unsaved = this.dirty(target.full) ? " Its unsaved changes in the editor will be lost." : "";
+      return what + (target.inside ? "." : ", outside the workspace folder.") + unsaved;
     }
     if (name !== "write_file" && name !== "edit_file") return null;
-    return target.inside ? null : "It changes a file outside the workspace folder.";
+    if (!target.inside) return "It changes a file outside the workspace folder.";
+    // Solder saves what it changes: unsaved typing in that file would be saved along with it.
+    if (this.dirty(target.full)) return "This file has unsaved changes in the editor: they'll be saved along with Solder's change.";
+    return null;
+  }
+
+  /** Whether an open editor has unsaved changes in this file, or in a file inside this folder. @param {string} full */
+  dirty(full) {
+    return vscode.workspace.textDocuments.some((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, full));
   }
 
   /** @param {string} name @param {any} args @param {{chat: any, signal: AbortSignal}} ctx */
@@ -161,6 +188,7 @@ class WorkspaceTools {
       }
     }
     const total = document.lineCount;
+    if (args.start_line > total) return { output: RESULTS.pastEnd(file.shown, total), summary: `Read ${file.shown} · past the end` };
     const start = Math.max(1, Math.min(args.start_line || 1, total));
     let end = Math.min(total, args.end_line || start + MAX_READ_LINES - 1, start + MAX_READ_LINES - 1);
     if (end < start) end = start;
@@ -215,10 +243,20 @@ class WorkspaceTools {
 
   /** The outline, or (with a name) its definition or references. */
   async symbols(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
-    if (!args.name) return this.outline(args);
+    if (!args.name) {
+      if (!args.path) throw new ToolError(RESULTS.symbolsNeedsPath);
+      return this.outline(args);
+    }
     const find = args.find ?? "definition";
     if (find !== "definition" && find !== "references") throw new ToolError(RESULTS.badFind);
     const name = String(args.name).trim();
+    if (!args.path) {
+      // No file given: VS Code's workspace symbols find where the name is declared.
+      const found = await deadline(vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", name), LOOKUP_MS);
+      const exact = (Array.isArray(found) ? found : []).filter((s) => s?.name === name && s.location?.uri?.scheme === "file");
+      if (!exact.length) return this.textMatches(name, signal);
+      args = { ...args, path: exact[0].location.uri.fsPath, line: exact[0].location.range.start.line + 1 };
+    }
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
     let document;
@@ -229,7 +267,7 @@ class WorkspaceTools {
     const command = find === "definition" ? "vscode.executeDefinitionProvider" : "vscode.executeReferenceProvider";
     const found = locations(await deadline(vscode.commands.executeCommand(command, document.uri, position), LOOKUP_MS));
     if (!found.length) return this.textMatches(name, signal);
-    return find === "definition" ? this.definitions(name, found) : this.references(name, found);
+    return find === "definition" ? this.definitions(name, found) : this.references(name, found, signal);
   }
 
   /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */
@@ -245,15 +283,22 @@ class WorkspaceTools {
       const last = Math.min(Math.max(extent.end.line, place.range.end.line), document.lineCount - 1);
       const end = Math.min(last, first + MAX_DEFINITION_LINES - 1);
       const lines = [];
-      for (let line = first; line <= end; line++) lines.push(`${line + 1}\t${document.lineAt(line).text}`);
-      blocks.push(`${shown} ${first + 1}–${last + 1}:\n${lines.join("\n")}` + (end < last ? "\n" + RESULTS.definitionCut : ""));
+      let size = 0;
+      let cut = end < last;
+      for (let line = first; line <= end; line++) {
+        const text = `${line + 1}\t${document.lineAt(line).text}`;
+        if (size + text.length > MAX_DEFINITION_CHARS) { lines.push(text.slice(0, Math.max(200, MAX_DEFINITION_CHARS - size))); cut = true; break; }
+        lines.push(text);
+        size += text.length + 1;
+      }
+      blocks.push(`${shown} ${first + 1}–${last + 1}:\n${lines.join("\n")}` + (cut ? "\n" + RESULTS.definitionCut : ""));
     }
     return { output: RESULTS.definitions(name, found.length) + "\n\n" + blocks.join("\n\n"),
       summary: `Definition of ${short(name)} · ${found.length === 1 ? this.shown(found[0].uri.fsPath) : found.length + " places"}` };
   }
 
   /** Every use, one line each, grouped by file. */
-  async references(/** @type {string} */ name, /** @type {{uri: vscode.Uri, range: vscode.Range}[]} */ found) {
+  async references(/** @type {string} */ name, /** @type {{uri: vscode.Uri, range: vscode.Range}[]} */ found, /** @type {AbortSignal} */ signal) {
     /** @type {Map<string, {uri: vscode.Uri, lines: number[]}>} */
     const files = new Map();
     for (const place of found) {
@@ -274,18 +319,29 @@ class WorkspaceTools {
         out.push(`${this.shown(uri.fsPath)}:${line + 1}: ${text}`);
       }
     }
+    // Language servers miss uses (plain JavaScript through require, dynamic access): whole-word text matches it
+    // didn't count go along, labelled, so the list is never silently short.
+    const counted = new Set(out.map((line) => line.slice(0, line.indexOf(": "))));
+    const extra = (await this.wordMatches(name, signal).catch(() => []))
+      .filter((line) => !counted.has(line.slice(0, line.indexOf(":", line.indexOf(":") + 1)))).slice(0, MAX_EXTRA_MATCHES);
     return { output: RESULTS.references(name, count, files.size) + "\n" + out.join("\n")
-      + (count > out.length ? "\n" + RESULTS.referencesCapped(count - out.length) : ""),
+      + (count > out.length ? "\n" + RESULTS.referencesCapped(count - out.length) : "")
+      + (extra.length ? "\n\n" + RESULTS.alsoText(name) + "\n" + extra.join("\n") : ""),
       summary: `Uses of ${short(name)} · ${count} in ${files.size} file${files.size === 1 ? "" : "s"}` };
+  }
+
+  /** Whole-word, case-sensitive text matches for a name under the working folder, as path:line:text. */
+  async wordMatches(/** @type {string} */ name, /** @type {AbortSignal} */ signal) {
+    const root = this.base();
+    if (!root) return [];
+    const query = "\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b";
+    const rg = this.ripgrep();
+    return rg ? this.searchWithRipgrep(rg, root, query, true, undefined, signal, true) : this.searchInJs(root, query, true, undefined, true);
   }
 
   /** No language support answered: whole-word text matches, clearly labelled as such (saves the model a search). */
   async textMatches(/** @type {string} */ name, /** @type {AbortSignal} */ signal) {
-    const root = this.base();
-    const query = "\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b";
-    const rg = this.ripgrep();
-    let lines = root ? (rg ? await this.searchWithRipgrep(rg, root, query, true, undefined, signal)
-      : await this.searchInJs(root, query, true, undefined)) : [];
+    let lines = await this.wordMatches(name, signal);
     if (!lines.length) return { output: RESULTS.noHitsAtAll(name), summary: `${short(name)} · not found` };
     const more = lines.length > MAX_SEARCH_LINES;
     lines = lines.slice(0, MAX_SEARCH_LINES);
@@ -304,6 +360,8 @@ class WorkspaceTools {
       let stat;
       try { stat = fs.statSync(target.full); } catch { stat = null; }
       folder = stat?.isDirectory() ? target.full : path.dirname(target.full);
+      // A path that's gone (a removed folder): git runs from the nearest folder that's still there.
+      while (!fs.existsSync(folder) && path.dirname(folder) !== folder) folder = path.dirname(folder);
     }
     const git = this.gitPath();
     let top;
@@ -318,7 +376,7 @@ class WorkspaceTools {
     const scope = target ? target.full : this.base();
     const spec = path.relative(top, scope).split(path.sep).join("/");
     const pathspec = ["--", spec && spec !== "." ? spec : "."];
-    const where = target ? target.shown : (this.folder ? this.shown(this.base()) : "");
+    const where = target ? target.shown : (this.folder || "");
     const hasHead = await runGit(git, top, ["rev-parse", "--verify", "--quiet", "HEAD"], signal).then(() => true, () => false);
     const fail = (/** @type {any} */ error) => { throw new ToolError(RESULTS.gitFailed(error.message)); };
     const entries = parseStatus(await runGit(git, top, ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...pathspec], signal).catch(fail));
@@ -511,8 +569,8 @@ class WorkspaceTools {
 
   /** @returns {Promise<string[]>} */
   searchWithRipgrep(/** @type {string} */ rg, /** @type {string} */ root, /** @type {string} */ query,
-    /** @type {boolean} */ regex, /** @type {string | undefined} */ glob, /** @type {AbortSignal} */ signal) {
-    const args = ["--line-number", "--no-heading", "--color", "never", "--smart-case", "--max-columns", "300",
+    /** @type {boolean} */ regex, /** @type {string | undefined} */ glob, /** @type {AbortSignal} */ signal, caseSensitive = false) {
+    const args = ["--line-number", "--no-heading", "--color", "never", caseSensitive ? "--case-sensitive" : "--smart-case", "--max-columns", "300",
       "--max-columns-preview", "--max-filesize", "5M", "--max-count", "50", "--no-messages"];
     if (!regex) args.push("--fixed-strings");
     if (glob) args.push("--glob", String(glob));
@@ -528,11 +586,17 @@ class WorkspaceTools {
         clearTimeout(timer);
         if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
         this._rg = null; // blocked or missing: fall back from now on
-        this.searchInJs(root, query, regex, glob).then(resolve, reject);
+        this.searchInJs(root, query, regex, glob, caseSensitive).then(resolve, reject);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
-        if (code === 2 && !out) { reject(new ToolError(errors.trim().split("\n")[0] || RESULTS.searchFailed)); return; }
+        if (code === 2 && !out) {
+          const lines = errors.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+          // ripgrep explains a bad pattern on the lines after "regex parse error:"; keep the explanation.
+          if (/regex parse error/i.test(errors)) { reject(new ToolError(RESULTS.badRegex + (lines.length > 1 ? ` (${lines[lines.length - 1].replace(/^error:\s*/i, "")})` : ""))); return; }
+          reject(new ToolError(lines[0] || RESULTS.searchFailed));
+          return;
+        }
         resolve(out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/")));
       });
     });
@@ -540,11 +604,11 @@ class WorkspaceTools {
 
   /** @returns {Promise<string[]>} */
   async searchInJs(/** @type {string} */ root, /** @type {string} */ query, /** @type {boolean} */ regex,
-    /** @type {string | undefined} */ glob) {
+    /** @type {string | undefined} */ glob, caseSensitive = false) {
     let pattern;
+    const flags = caseSensitive || /[A-Z]/.test(query) ? "" : "i";
     try {
-      pattern = regex ? new RegExp(query, /[A-Z]/.test(query) ? "" : "i")
-        : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), /[A-Z]/.test(query) ? "" : "i");
+      pattern = regex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
     } catch (error) {
       throw new ToolError(RESULTS.badRegex);
     }
@@ -570,7 +634,11 @@ class WorkspaceTools {
 
   async findFiles(/** @type {any} */ args) {
     if (!this.root()) throw new ToolError(RESULTS.noWorkspace);
-    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob))), undefined, MAX_FOUND + 1);
+    let uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob))), undefined, MAX_FOUND + 1);
+    // A plain name ("lib") with no files of that name: the folder of that name, if there is one.
+    if (!uris.length && !/[*?[\]{}]/.test(String(args.glob))) {
+      uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob)).replace(/\/+$/, "") + "/**"), undefined, MAX_FOUND + 1);
+    }
     const shown = uris.map((uri) => this.shown(uri.fsPath)).sort((a, b) => a.localeCompare(b));
     if (!shown.length) return { output: RESULTS.noFiles(args.glob), summary: `Found no ${args.glob}` };
     const more = shown.length > MAX_FOUND;
@@ -584,11 +652,13 @@ class WorkspaceTools {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
     const document = await vscode.workspace.openTextDocument(file.uri);
+    stale(document, file);
     const text = document.getText();
     const eol = document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
     const old = toEol(String(args.old_text), eol);
     const replacement = toEol(String(args.new_text), eol);
     if (!old) throw new ToolError(RESULTS.emptyOldText);
+    if (old === replacement) throw new ToolError(RESULTS.sameText);
     let start = -1;
     let length = old.length;
     const count = occurrences(text, old);
@@ -606,13 +676,13 @@ class WorkspaceTools {
     const edit = new vscode.WorkspaceEdit();
     edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replacement);
     if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
-    await document.save();
-    const removed = old.split(eol).length;
-    const added = replacement ? replacement.split(eol).length : 0;
+    await saveOrRevert(document, file, text);
+    const removed = lineCount(old);
+    const added = lineCount(replacement);
     const problems = await this.newProblems(file, before);
     return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + problems.text,
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
-      change: { path: file.full, shown: file.shown, backup, created: false } };
+      change: { path: file.full, shown: file.shown, backup, created: false, after: hash(document.getText()) } };
   }
 
   // ----------------------------------------------------------------- write_file --
@@ -630,28 +700,49 @@ class WorkspaceTools {
     const previous = exists ? (open ? open.getText() : fs.readFileSync(file.full, "utf8")) : "";
     const backup = exists ? await this.backup(chat, file, previous) : "";
     const before = exists ? problemKeys(file.uri) : new Set();
+    const madeFolder = exists ? "" : firstMissing(path.dirname(file.full));
     if (open) {
+      stale(open, file);
       const edit = new vscode.WorkspaceEdit();
       edit.replace(file.uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), toEol(content, open.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n"));
       if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
-      await open.save();
+      await saveOrRevert(open, file, previous);
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file.full)));
       await vscode.workspace.fs.writeFile(file.uri, Buffer.from(content, "utf8"));
       await vscode.workspace.openTextDocument(file.uri).then(() => {}, () => {}); // lets language servers look
     }
-    const lines = content ? content.split(/\r?\n/).length : 0;
+    const lines = lineCount(content);
     const problems = await this.newProblems(file, before);
     return { output: RESULTS.written(exists, file.shown, lines) + problems.text,
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
-      change: { path: file.full, shown: file.shown, backup, created: !exists } };
+      change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder,
+        after: hash(open ? open.getText() : content) } };
   }
 
   // ------------------------------------------------------------------- problems --
 
   async problems(/** @type {any} */ args) {
-    const list = args.path ? [[this.resolve(args.path).uri, vscode.languages.getDiagnostics(this.resolve(args.path).uri)]]
-      : vscode.languages.getDiagnostics();
+    /** @type {any[]} */
+    let list;
+    if (args.path) {
+      const file = this.resolve(args.path);
+      await this.mustBeFile(file);
+      // VS Code only checks open files: open it, and give its language server a moment (a file it hasn't
+      // seen yet takes longer: up to 5 s, sooner if its diagnostics arrive).
+      const wasOpen = vscode.workspace.textDocuments.some((d) => d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+      const doc = await vscode.workspace.openTextDocument(file.uri).then((d) => d, () => null);
+      const reports = !!doc && this._diagnosed.has(doc.languageId);
+      const heard = await this.diagnosticsFor(file, wasOpen ? PROBLEMS_WAIT_MS : reports ? PROBLEMS_COLD_MS : DIAGNOSTICS_SHORT_MS);
+      list = [[file.uri, vscode.languages.getDiagnostics(file.uri)]];
+      // Some language servers (TypeScript's among them) only check files shown in an editor: silence about
+      // a file that wasn't open means "not checked", not "no problems".
+      if (!wasOpen && !heard && !list[0][1].length) {
+        return { output: RESULTS.notChecked(file.shown), summary: `Problems · ${file.shown} not checked` };
+      }
+    } else {
+      list = vscode.languages.getDiagnostics();
+    }
     const lines = [];
     for (const [uri, diagnostics] of /** @type {any[]} */ (list)) {
       for (const d of diagnostics) {
@@ -667,15 +758,26 @@ class WorkspaceTools {
       summary: `Problems · ${errors} error${errors === 1 ? "" : "s"}, ${lines.length - errors} warning${lines.length - errors === 1 ? "" : "s"}` };
   }
 
+  /**
+   * Wait until this file's diagnostics change (and a moment more), or `ms` pass.
+   * @param {any} file @param {number} ms @returns {Promise<boolean>} whether they changed
+   */
+  diagnosticsFor(file, ms) {
+    return new Promise((resolve) => {
+      let heard = false;
+      const timer = setTimeout(done, ms);
+      const listener = vscode.languages.onDidChangeDiagnostics((event) => {
+        if (!heard && event.uris.some((uri) => uri.fsPath.toLowerCase() === file.full.toLowerCase())) { heard = true; setTimeout(done, 250); }
+      });
+      function done() { clearTimeout(timer); listener.dispose(); resolve(heard); }
+    });
+  }
+
   /** The file's errors that weren't there before the change (VS Code's language servers need a moment). */
   async newProblems(/** @type {any} */ file, /** @type {Set<string>} */ before) {
-    await new Promise((resolve) => {
-      const timer = setTimeout(done, DIAGNOSTICS_WAIT_MS);
-      const listener = vscode.languages.onDidChangeDiagnostics((event) => {
-        if (event.uris.some((uri) => uri.fsPath.toLowerCase() === file.full.toLowerCase())) setTimeout(done, 250);
-      });
-      function done() { clearTimeout(timer); listener.dispose(); resolve(undefined); }
-    });
+    // A language that has never reported diagnostics (plain JavaScript, Markdown) isn't worth the full wait.
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+    await this.diagnosticsFor(file, doc && this._diagnosed.has(doc.languageId) ? DIAGNOSTICS_WAIT_MS : DIAGNOSTICS_SHORT_MS);
     const fresh = vscode.languages.getDiagnostics(file.uri)
       .filter((d) => d.severity === vscode.DiagnosticSeverity.Error && !before.has(keyOf(d)));
     if (!fresh.length) return { text: "", summary: "" };
@@ -720,6 +822,7 @@ class WorkspaceTools {
     const dirty = vscode.workspace.textDocuments.find((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, source.full));
     if (dirty) throw new ToolError(RESULTS.moveUnsaved(this.shown(dirty.uri.fsPath)));
     const copy = !!args.copy;
+    const madeFolder = firstMissing(path.dirname(target.full));
     await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target.full)));
     // Plain file operations, not a rename with import updates: those could change other files Undo doesn't know about.
     if (copy) await vscode.workspace.fs.copy(source.uri, target.uri, { overwrite: false });
@@ -738,8 +841,9 @@ class WorkspaceTools {
       }
     }
     return { output: RESULTS.moved(copy, source.shown, target.shown, files) + mentions,
-      summary: `${copy ? "Copied" : "Moved"} ${source.shown} → ${target.shown}` + (folder ? ` · ${files} files` : ""),
-      change: { path: target.full, shown: target.shown, from: source.full, fromShown: source.shown, moved: !copy, copied: copy, folder } };
+      summary: `${copy ? "Copied" : "Moved"} ${source.shown} → ${target.shown}` + (folder ? ` · ${files} file${files === 1 ? "" : "s"}` : ""),
+      change: { path: target.full, shown: target.shown, from: source.full, fromShown: source.shown, moved: !copy, copied: copy, folder,
+        madeFolder, stamp: folder ? "" : stampOf(target.full) } };
   }
 
   // ---------------------------------------------------------------- remove_item --
@@ -768,21 +872,34 @@ class WorkspaceTools {
       if (!backup) throw new ToolError(RESULTS.removeNoTrash(target.shown));
       await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: false });
     }
-    return { output: RESULTS.removed(target.shown, folder ? files : null), summary: `Removed ${target.shown}` + (folder ? ` · ${files} files` : ""),
+    return { output: RESULTS.removed(target.shown, folder ? files : null), summary: `Removed ${target.shown}` + (folder ? ` · ${files} file${files === 1 ? "" : "s"}` : ""),
       change: { path: target.full, shown: target.shown, backup, removed: true, folder } };
   }
 
   /** Put a changed file back as it was before the step (or remove one the step created). */
   async undo(/** @type {any} */ change) {
     const uri = vscode.Uri.file(change.path);
+    // Undo puts back what the step found; if the file has changed since, that would throw the later work away.
+    const changedSince = () => {
+      if (change.after) {
+        const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === change.path.toLowerCase());
+        let now = null;
+        try { now = open ? open.getText() : fs.readFileSync(change.path, "utf8"); } catch { now = null; }
+        return now !== null && hash(now) !== change.after;
+      }
+      return !!change.stamp && fs.existsSync(change.path) && stampOf(change.path) !== change.stamp;
+    };
+    if ((change.after || change.stamp) && changedSince()) throw new Error(`${change.shown} has changed since that step, so undoing it would lose those changes. Use Review to compare, and change it by hand.`);
     if (change.moved) {
       if (fs.existsSync(change.from)) throw new Error(`Something is already at ${change.fromShown}; move it first.`);
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.from)));
       await vscode.workspace.fs.rename(uri, vscode.Uri.file(change.from), { overwrite: false });
+      removeEmpty(path.dirname(change.path), change.madeFolder);
       return;
     }
     if (change.copied) {
       await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
+      removeEmpty(path.dirname(change.path), change.madeFolder);
       return;
     }
     if (change.removed) {
@@ -793,14 +910,21 @@ class WorkspaceTools {
     }
     if (change.created) {
       await vscode.workspace.fs.delete(uri, { useTrash: true });
+      removeEmpty(path.dirname(change.path), change.madeFolder);
       return;
     }
     const text = fs.readFileSync(change.backup, "utf8");
     const document = await vscode.workspace.openTextDocument(uri);
+    const now = document.getText();
     const edit = new vscode.WorkspaceEdit();
-    edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), text);
+    edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(now.length)), text);
     if (!await vscode.workspace.applyEdit(edit)) throw new Error("VS Code didn't apply the undo.");
-    await document.save();
+    if (!await document.save() || document.isDirty) {
+      const back = new vscode.WorkspaceEdit();
+      back.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), now);
+      await vscode.workspace.applyEdit(back);
+      throw new Error(`VS Code couldn't save ${change.shown}, so it wasn't undone. Save or reload the file, then try again.`);
+    }
   }
 
   /** VS Code's diff: before the step ↔ the file now. */
@@ -839,7 +963,10 @@ function outlineEntries(symbols, kindName) {
       const first = range.start.line + 1;
       const last = range.end.line + 1;
       const name = String(symbol.name ?? "").replace(/\s+/g, " ").trim().slice(0, 100) || "(unnamed)";
-      out.push(`${"  ".repeat(depth)}${kind.toLowerCase()} ${name} ${last > first ? `${first}–${last}` : first}`);
+      if (/ callback$/.test(name)) continue; // "reduce() callback" and the like: noise
+      // Markdown headings come as "string" symbols: their name ("# Demo") says enough.
+      const what = kind === "String" ? "" : kind.toLowerCase() + " ";
+      out.push(`${"  ".repeat(depth)}${what}${name} ${last > first ? `${first}–${last}` : first}`);
       if (Array.isArray(symbol.children) && symbol.children.length && depth < 2) walk(symbol.children, depth + 1, kind);
     }
   };
@@ -991,6 +1118,58 @@ function parseNumstat(text) {
     out.push([file, match[1] === "-" ? "binary" : `+${match[1]} −${match[2]}`]);
   }
   return out;
+}
+
+/**
+ * The editor's copy of a file it hasn't changed is the disk's; if the disk changed a moment ago and VS Code
+ * hasn't caught up, editing that copy would overwrite the change. @param {vscode.TextDocument} document @param {any} file
+ */
+function stale(document, file) {
+  if (document.isDirty) return;
+  let disk;
+  try { disk = fs.readFileSync(file.full, "utf8"); } catch { return; }
+  if (disk.charCodeAt(0) === 0xfeff) disk = disk.slice(1);
+  if (disk !== document.getText() && !disk.includes("\uFFFD")) throw new ToolError(RESULTS.changedOnDisk(file.shown));
+}
+
+/** Save, or put the editor back as it was and say so: a change only counts once it's on disk. */
+async function saveOrRevert(/** @type {vscode.TextDocument} */ document, /** @type {any} */ file, /** @type {string} */ was) {
+  if (await document.save() && !document.isDirty) return;
+  const back = new vscode.WorkspaceEdit();
+  back.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), was);
+  await vscode.workspace.applyEdit(back);
+  throw new ToolError(RESULTS.notSaved(file.shown));
+}
+
+/** @param {string} text */
+function hash(text) {
+  return crypto.createHash("sha1").update(text).digest("hex");
+}
+
+/** A file's time and size, to tell later whether it changed. @param {string} full */
+function stampOf(full) {
+  try { const stat = fs.statSync(full); return `${stat.mtimeMs}:${stat.size}`; } catch { return ""; }
+}
+
+/** Lines in a piece of text, not counting the empty one after a final newline. @param {string} text */
+function lineCount(text) {
+  return text ? text.replace(/\r?\n$/, "").split(/\r?\n/).length : 0;
+}
+
+/** The highest folder on the way to `folder` that doesn't exist yet ("" if it all does). @param {string} folder */
+function firstMissing(folder) {
+  let missing = "";
+  for (let at = folder; !fs.existsSync(at) && path.dirname(at) !== at; at = path.dirname(at)) missing = at;
+  return missing;
+}
+
+/** Remove folders a step made, from `from` up to `top`, while they're empty. @param {string} from @param {string} [top] */
+function removeEmpty(from, top) {
+  if (!top) return;
+  for (let at = from; within(at, top); at = path.dirname(at)) {
+    try { if (fs.readdirSync(at).length) return; fs.rmdirSync(at); } catch { return; }
+    if (at.toLowerCase() === top.toLowerCase()) return;
+  }
 }
 
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
