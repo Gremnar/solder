@@ -679,7 +679,7 @@ class WorkspaceTools {
     } catch (error) {
       throw new ToolError(RESULTS.badRegex);
     }
-    const files = await vscode.workspace.findFiles(new vscode.RelativePattern(root, globOf(glob || "**/*")), undefined, 5000);
+    const files = await this.listFiles(root, globOf(glob || "**/*"), 5000);
     const lines = [];
     for (const uri of files) {
       let text;
@@ -699,13 +699,26 @@ class WorkspaceTools {
 
   // ----------------------------------------------------------------- find_files --
 
+  /**
+   * Files under `root` matching a glob, regardless of case. VS Code's file search first (it knows files.exclude);
+   * when it finds nothing, a direct walk of the folder (bounded), since on some network shares it came back empty
+   * for files that were there. @param {string} root @param {string} glob @param {number} max
+   * @returns {Promise<{fsPath: string}[]>}
+   */
+  async listFiles(root, glob, max) {
+    let found = [];
+    try { found = await vscode.workspace.findFiles(new vscode.RelativePattern(root, caseless(glob)), undefined, max); } catch { /* walk instead */ }
+    if (found.length) return found;
+    return walkFiles(root, globPattern(glob), max).map((fsPath) => ({ fsPath }));
+  }
+
   async findFiles(/** @type {any} */ args) {
     const roots = this.searchRoots();
     if (!roots.length) throw new ToolError(RESULTS.noWorkspace);
     const find = async (/** @type {string} */ glob) => {
       const uris = [];
       for (const root of roots) {
-        uris.push(...await vscode.workspace.findFiles(new vscode.RelativePattern(root, glob), undefined, MAX_FOUND + 1));
+        uris.push(...await this.listFiles(root, glob, MAX_FOUND + 1));
         if (uris.length > MAX_FOUND) break;
       }
       return uris;
@@ -1399,6 +1412,67 @@ function measure(folder) {
 }
 
 /** A bare pattern like *.json matches anywhere, as people mean it. @param {string} glob */
+/** A glob that matches regardless of case: each letter as [xX] (outside a [...] class). @param {string} glob */
+function caseless(glob) {
+  let out = "";
+  let inClass = false;
+  for (const char of glob) {
+    if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    out += !inClass && /[a-z]/i.test(char) && char.toLowerCase() !== char.toUpperCase() ? `[${char.toLowerCase()}${char.toUpperCase()}]` : char;
+  }
+  return out;
+}
+
+/** A glob as a regular expression over "/"-separated relative paths, regardless of case: ** * ? [..] {a,b}. @param {string} glob */
+function globPattern(glob) {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < glob.length; i++) {
+    const char = glob[i];
+    if (char === "*" && glob[i + 1] === "*") {
+      const slash = glob[i + 2] === "/";
+      out += slash ? "(?:.*/)?" : ".*";
+      i += slash ? 2 : 1;
+    } else if (char === "*") out += "[^/]*";
+    else if (char === "?") out += "[^/]";
+    else if (char === "[") { const end = glob.indexOf("]", i); if (end < 0) { out += "\\["; continue; } out += "[" + glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\") + "]"; i = end; }
+    else if (char === "{") { depth++; out += "(?:"; }
+    else if (char === "}" && depth) { depth--; out += ")"; }
+    else if (char === "," && depth) out += "|";
+    else out += char.replace(/[.+^$()|\\]/g, "\\$&");
+  }
+  return new RegExp("^" + out + "$", "i");
+}
+
+/** Folders a direct walk never goes into. */
+const WALK_SKIP = new Set([".git", "node_modules", "$recycle.bin", "system volume information"]);
+
+/**
+ * The files under `root` whose relative path matches, by walking the folder: at most `max` matches, 50,000
+ * entries and 10 seconds (a big share stays bounded). @param {string} root @param {RegExp} pattern @param {number} max
+ */
+function walkFiles(root, pattern, max) {
+  const found = [];
+  const stack = [root];
+  const until = Date.now() + 10_000;
+  let entries = 0;
+  while (stack.length && found.length < max && entries < 50_000 && Date.now() < until) {
+    const folder = /** @type {string} */ (stack.pop());
+    let list;
+    try { list = fs.readdirSync(folder, { withFileTypes: true }); } catch { continue; }
+    for (const entry of list) {
+      entries++;
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) { if (!WALK_SKIP.has(entry.name.toLowerCase())) stack.push(full); continue; }
+      if (!entry.isFile()) continue;
+      if (pattern.test(path.relative(root, full).split(path.sep).join("/"))) found.push(full);
+      if (found.length >= max) break;
+    }
+  }
+  return found.sort();
+}
+
 function globOf(glob) {
   const clean = glob.trim().replace(/\\/g, "/").replace(/^\.\//, "");
   return clean.includes("/") ? clean : "**/" + clean;
@@ -1459,4 +1533,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

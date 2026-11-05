@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: find_files missed files whose name differed in case.** VS Code's file search matches case exactly, even on Windows, so looking for newdomainnetbioscheck.ps1 found nothing when the file was NewDomainNetbiosCheck.ps1. Names now match regardless of case, and when VS Code's file search finds nothing, Solder walks the folder itself before saying there are none. Content search's fallback uses the same.
+
 ## 0.1.4 (2026-11-05)
 
 - **Multi-folder workspaces.** Every folder in the window counts as the workspace: searches and file lists cover them all, edits in any of them don't ask, and each folder's AGENTS.md is followed. The working folder can be in any of them; choosing one outside the window offers to add it to the workspace.

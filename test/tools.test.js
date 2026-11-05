@@ -275,3 +275,30 @@ test("several workspace folders: each is inside; paths in the others are shown i
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("file names match regardless of case (VS Code's findFiles doesn't, even on Windows), and the walk finds them too", () => {
+  const { caseless, globPattern, walkFiles } = require("../src/tools.js");
+  assert.equal(caseless("**/*net*.ps1"), "**/*[nN][eE][tT]*.[pP][sS]1");
+  assert.equal(caseless("src/[A-C]x.js"), "[sS][rR][cC]/[A-C][xX].[jJ][sS]", "a [...] class is left as it is");
+  const cases = [
+    ["**/*newdomainnetbioscheck*", "Scripts/AD/Checks/NewDomainNetbiosCheck.ps1", true],
+    ["**/newdomainnetbioscheck.ps1", "a/b/c/NewDomainNetBIOSCheck.PS1", true],
+    ["**/*.{ps1,psm1}", "x/y.psm1", true],
+    ["src/*.js", "src/a/b.js", false],
+    ["**/test_?.py", "t/test_1.py", true],
+    ["**/*.ps1", "a.ps1", true],
+    ["**/*.ps1", "a.ps1.bak", false],
+  ];
+  for (const [glob, file, expected] of cases) assert.equal(globPattern(glob).test(file), expected, glob + " vs " + file);
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-walk-"));
+  try {
+    fs.mkdirSync(path.join(top, "Scripts", "AD", "Checks"), { recursive: true });
+    fs.mkdirSync(path.join(top, "node_modules", "x"), { recursive: true });
+    fs.writeFileSync(path.join(top, "Scripts", "AD", "Checks", "NewDomainNetbiosCheck.ps1"), "x");
+    fs.writeFileSync(path.join(top, "node_modules", "x", "newdomainnetbioscheck.ps1"), "x");
+    const found = walkFiles(top, globPattern("**/*newdomainnetbioscheck*"), 10).map((file) => path.relative(top, file).split(path.sep).join("/"));
+    assert.deepEqual(found, ["Scripts/AD/Checks/NewDomainNetbiosCheck.ps1"], "node_modules is skipped");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
