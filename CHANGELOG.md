@@ -3,6 +3,8 @@
 ## Unreleased
 
 - **Docs search by meaning (optional).** Settings → Your docs → **Keywords + meaning**, with your gateway's embeddings model (**Test** checks it). Each passage gets a vector from the gateway, kept in the same local SQLite index; a search ranks passages by meaning as well as by keywords and merges the two, so it finds passages that say the same thing in other words. Only new and changed files are sent again. Each run's token count is in the log. Off by default: it sends your docs' text to the gateway once.
+- **Scripts are cut into better passages.** A `#` line starts a new passage only in Markdown and Office files; in a script it's a comment, so commented scripts are no longer split into fragments. Passages also end at a blank line once they're reasonably full, so code tends to break between functions. The docs index is rebuilt once to re-cut existing files.
+- **Docs search returns the best 5 passages,** not 10: less to resend with every step.
 
 ## 0.1.5 (2026-11-05)
 

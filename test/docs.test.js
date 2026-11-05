@@ -231,3 +231,37 @@ test("search by meaning: vectors in the same index, found by meaning, merged wit
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("in a script, a # line is a comment, not a heading; a well-filled passage ends at a blank line", () => {
+  const fn = (/** @type {number} */ n) => [`# Step ${n}: what this part does`, `function Step${n} {`, ...Array.from({ length: 12 }, (_, i) => `  Write-Host "line ${i} of step ${n}, padded to a realistic length"`), "}", ""];
+  const script = [0, 1, 2, 3].flatMap(fn).join("\n");
+  const asScript = docs.sections(script, false);
+  assert.ok(asScript.every((piece) => piece.heading === ""), "no headings from comments");
+  assert.ok(asScript.length <= 4, `${asScript.length} pieces, not one per comment`);
+  assert.ok(asScript.every((piece) => /^# Step \d/.test(piece.body) && /\}$/.test(piece.body)), "each piece starts at a function's comment and ends after it");
+  const asMarkdown = docs.sections("# One\ntext\n# Two\nmore", true);
+  assert.deepEqual(asMarkdown.map((piece) => piece.heading), ["One", "Two"], "in Markdown, # is still a heading");
+});
+
+test("an index cut the old way is rebuilt once, and searches return the best 5", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-version-"));
+  const folder = path.join(base, "docs");
+  fs.mkdirSync(folder);
+  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(folder, `note${i}.md`), `# Note ${i}\nThe spooler restarts at night.`);
+  const file = path.join(base, "index", "docs.sqlite");
+  const index = new docs.DocsIndex(file);
+  try {
+    await index.refresh([folder], { ms: 20_000 });
+    assert.equal((await index.search("spooler")).length, 5);
+    index._open().exec("PRAGMA user_version = 1"); // as an index from before
+    index.close();
+    const again = new docs.DocsIndex(file);
+    assert.equal(again.count(), 0, "emptied, so every file is read again");
+    await again.refresh([folder], { ms: 20_000 });
+    assert.equal(again.count(), 8);
+    again.close();
+  } finally {
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

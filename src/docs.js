@@ -25,7 +25,11 @@ const MAX_OFFICE_BYTES = 40 * 1024 * 1024;
 const MAX_UNZIPPED_BYTES = 100 * 1024 * 1024;
 const MAX_LINE_CHARS = 4_000;
 const MAX_SHEET_ROWS = 20_000;
-const RESULT_COUNT = 10;
+const RESULT_COUNT = 5;
+/** The index's layout: a lower one (passages cut the old way) is rebuilt once. 2: "#" is a heading only in Markdown and Office. */
+const INDEX_VERSION = 2;
+/** Files whose "# " lines are headings (Office files are converted to Markdown). */
+const MARKDOWN = new Set([".md", ".markdown", ".mdx", ".mdown"]);
 /** Passages sent to the embeddings model at once. */
 const EMBED_BATCH = 32;
 /** How many each search takes from the keyword ranking and from the meaning ranking before they're merged. */
@@ -264,10 +268,12 @@ function slidesText(files) {
 
 /**
  * Pieces of about SECTION_CHARS, each with where it is ("lines 12–40", as read_file numbers them) and
- * the heading above it. A Markdown heading (which Office files are converted to) starts a new piece.
- * @param {string} text @returns {{location: string, heading: string, body: string}[]}
+ * the heading above it. With `headings` (Markdown, and Office files, which are converted to it), a "# " line starts
+ * a new piece; anywhere else it's a comment. A piece over 40% full ends at a blank line, so code tends to break
+ * between functions rather than inside one.
+ * @param {string} text @param {boolean} [headings] @returns {{location: string, heading: string, body: string}[]}
  */
-function sections(text) {
+function sections(text, headings = true) {
   const lines = text.split(/\r\n|\r|\n/);
   /** @type {{location: string, heading: string, body: string}[]} */
   const out = [];
@@ -284,8 +290,9 @@ function sections(text) {
   };
   lines.forEach((raw, index) => {
     const line = raw.length > MAX_LINE_CHARS ? raw.slice(0, MAX_LINE_CHARS) : raw;
-    const title = /^#{1,6}\s+(.+)$/.exec(line)?.[1];
+    const title = headings ? /^#{1,6}\s+(.+)$/.exec(line)?.[1] : undefined;
     if ((title && size > 0) || size + line.length > SECTION_CHARS) flush(index);
+    else if (!line.trim() && size > SECTION_CHARS * 0.4) { flush(index); return; } // a blank line ends a well-filled piece
     if (!current.length) { start = index + 1; pieceHeading = title ? title.trim() : heading; }
     if (title) heading = title.trim();
     current.push(line);
@@ -358,10 +365,14 @@ class DocsIndex {
     };
     try {
       this.db = create();
+      if (Number(this.db.prepare("PRAGMA user_version").get().user_version) < INDEX_VERSION) {
+        this.db.exec(`DELETE FROM vectors; DELETE FROM sections; DELETE FROM files; PRAGMA user_version = ${INDEX_VERSION};`);
+      }
     } catch {
       // A damaged index is only a cache: start it again.
       for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(this.file + suffix, { force: true });
       this.db = create();
+      this.db.exec(`PRAGMA user_version = ${INDEX_VERSION};`);
     }
     return this.db;
   }
@@ -514,7 +525,8 @@ class DocsIndex {
             if (db.prepare("DELETE FROM vectors WHERE key = ?").run(key).changes) this.version++;
             db.prepare("DELETE FROM sections WHERE key = ?").run(key);
             const add = db.prepare("INSERT INTO sections (key, path, location, heading, body) VALUES (?, ?, ?, ?, ?)");
-            for (const piece of text ? sections(text) : []) add.run(key, file.full, piece.location, piece.heading, piece.body);
+            const ext = path.extname(file.full).toLowerCase();
+            for (const piece of text ? sections(text, MARKDOWN.has(ext) || OFFICE.has(ext)) : []) add.run(key, file.full, piece.location, piece.heading, piece.body);
             db.prepare("INSERT OR REPLACE INTO files (key, root, stamp) VALUES (?, ?, ?)").run(key, rootKey, stamp);
             db.exec("COMMIT");
           } catch (error) {
