@@ -159,7 +159,7 @@ test("asked first: git's and VS Code's files, links out of the workspace, reads 
     fs.writeFileSync(path.join(ws, "a.js"), "a");
     fs.symlinkSync(outside, path.join(ws, "out"), "junction");
     const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
-    tools.root = () => ws;
+    tools.roots = () => [ws];
     tools.docsFolders = () => [];
     const ask = (/** @type {string} */ name, /** @type {any} */ args) => tools.needsApproval(name, args);
     assert.equal(ask("write_file", { path: "a.js" }), null);
@@ -189,7 +189,7 @@ test("read_file shows a signed script with its signature as one line, and later 
     const base64 = Array.from({ length: 150 }, (_, i) => "# MIIfZwYJKoZIhvcNAQcCoIIfWDCCH1QCAQExCzAJBgUrDgMCGgUAMGkGCisG" + String(i).padStart(4, "A"));
     fs.writeFileSync(path.join(top, "run.ps1"), ["Write-Host 'one'", "Write-Host 'two'", "# SIG # Begin signature block", ...base64, "# SIG # End signature block", ""].join("\r\n"));
     const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
-    tools.root = () => top;
+    tools.roots = () => [top];
     const { output } = await tools.readFile({ path: "run.ps1" }, {});
     const lines = output.split("\n");
     assert.equal(lines.length, 6, output.slice(0, 300));
@@ -233,6 +233,44 @@ test("an edit isn't refused as 'changed on disk' for mixed line endings, a BOM o
     const changed = file("changed.ps1", "Write-Host 'changed outside'\r\n");
     assert.throws(() => stale(editor("Write-Host 'a'\r\n"), changed), /changed on disk a moment ago/);
     assert.doesNotThrow(() => stale({ isDirty: true, getText: () => "unsaved typing" }, changed), "unsaved changes are the editor's, not stale");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("several workspace folders: each is inside; paths in the others are shown in full; the working folder can be in any", () => {
+  const { WorkspaceTools } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-roots-"));
+  try {
+    const share = path.join(top, "share");
+    const local = path.join(top, "local");
+    const outside = path.join(top, "outside");
+    for (const dir of [path.join(share, "src"), path.join(local, "lib"), outside]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(local, "lib", "a.ps1"), "x");
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [share, local];
+    tools.docsFolders = () => [];
+    assert.equal(tools.root(), share, "the first is the main one");
+    assert.equal(tools.rootOf(path.join(local, "lib", "a.ps1")), local);
+    assert.equal(tools.rootOf(outside), "");
+    // No working folder: relative paths start in the main folder; the other folder's files are shown in full.
+    assert.equal(tools.resolve("src/x.js").full, path.join(share, "src", "x.js"));
+    assert.equal(tools.resolve(path.join(local, "lib", "a.ps1")).inside, true);
+    assert.equal(tools.shown(path.join(local, "lib", "a.ps1")), path.join(local, "lib", "a.ps1"));
+    assert.equal(tools.resolve(path.join(outside, "b.txt")).inside, false);
+    assert.equal(tools.needsApproval("write_file", { path: path.join(local, "lib", "a.ps1") }), null, "no asking in another workspace folder");
+    assert.match(String(tools.needsApproval("write_file", { path: path.join(outside, "b.txt") })), /outside the workspace/);
+    assert.deepEqual(tools.searchRoots(), [share, local], "searches cover every folder");
+    // Working in the other folder (kept as its full path): relative paths and searches start there.
+    tools.useFolder(path.join(local, "lib"));
+    assert.equal(tools.base(), path.join(local, "lib"));
+    assert.equal(tools.resolve("a.ps1").full, path.join(local, "lib", "a.ps1"));
+    assert.equal(tools.shown(path.join(local, "lib", "a.ps1")), "a.ps1");
+    assert.equal(tools.shown(path.join(share, "src", "x.js")), path.join(share, "src", "x.js"), "the main folder's files, in full from there");
+    assert.deepEqual(tools.searchRoots(), [path.join(local, "lib")]);
+    // A relative working folder is in the main folder, as before.
+    tools.useFolder("src");
+    assert.equal(tools.base(), path.join(share, "src"));
   } finally {
     fs.rmSync(top, { recursive: true, force: true });
   }

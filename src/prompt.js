@@ -45,16 +45,21 @@ Don't paste back files you edited.`;
 
 /**
  * The system message.
- * @param {{workspace: string, os?: string, instructions?: {path: string, text: string}[], rules?: string,
+ * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
  *          docs?: {path: string, about?: string}[]}} context
  */
-function systemPrompt({ workspace, os = "Windows", instructions = [], rules = "", docs = [] }) {
-  const facts = [`- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to the working folder \
+function systemPrompt({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [] }) {
+  const several = folders.length > 1;
+  const facts = [several
+    ? `- Workspace folders: ${folders[0]} (the main one), ${folders.slice(1).join(", ")}. Relative paths are relative \
+to the working folder when the user's message names one, otherwise to the main folder; use full paths for the others. \
+Searches cover all of them, or just the working folder when there is one.`
+    : `- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to the working folder \
 when the user's message names one, otherwise to this folder; searches start there too.`,
     `- OS: ${os}.`,
     "- Each of the user's messages starts with their local date and time."];
-  if (!instructions.length) facts.push("- There's no project instructions file (AGENTS.md) at the workspace root, so \
-don't look for one. One in a subfolder is added to your first read there.");
+  if (!instructions.length) facts.push(`- There's no project instructions file (AGENTS.md) at the ${several ? "top of any workspace folder" : "workspace root"}, so \
+don't look for one. One in a subfolder is added to your first read there.`);
   let text = RULES + "\n\n# The workspace\n" + facts.join("\n");
   for (const file of instructions) {
     text += `\n\n# Project instructions (${file.path})\n${file.text.trim()}`;

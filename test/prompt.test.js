@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "a3e15111893edc68";
+const PINNED = "dcd6db2be7b5d45d";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -48,6 +48,7 @@ function everything() {
     system: systemPrompt({ workspace: "C:\\work", os: "Windows", instructions: [{ path: "AGENTS.md", text: "AGENTS" }], rules: "RULE" }),
     bare: systemPrompt({ workspace: "C:\\work" }),
     withDocs: systemPrompt({ workspace: "C:\\work", docs: [{ path: "D:\\Docs", about: "ABOUT" }, { path: "E:\\Specs" }] }),
+    severalFolders: systemPrompt({ workspace: "S:\\repo", folders: ["S:\\repo", "C:\\local\\tools", "C:\\local\\site"] }),
     tools: toolDefinitions(),
     starters: STARTERS,
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js")],

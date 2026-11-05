@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Multi-folder workspaces.** Every folder in the window counts as the workspace: searches and file lists cover them all, edits in any of them don't ask, and each folder's AGENTS.md is followed. The working folder can be in any of them; choosing one outside the window offers to add it to the workspace.
+- **Chats follow their folder.** They're kept in Solder's global storage, marked with the folder they were started in, so adding a folder to the window (which makes it a new workspace to VS Code) no longer hides them. Existing chats are copied over the first time; the old files are left as they were.
+
 ## 0.1.3 (2026-11-05)
 
 - **The chats list is grouped and has a right-click menu.** Pinned chats come first, then today, the last 7 days, the last 30 days and older; archived chats are folded away at the end. Right-click a chat (or Shift+F10) to pin, rename, fork, archive or delete it.

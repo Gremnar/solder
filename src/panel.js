@@ -10,7 +10,7 @@ const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
-const { ChatStore } = require("./store.js");
+const { ChatStore, adoptChats } = require("./store.js");
 const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
@@ -27,7 +27,12 @@ class SolderPanel {
     this.context = context;
     this.log = new Log(channel);
     this.tools = new WorkspaceTools(context);
-    this.store = new ChatStore((context.storageUri ?? context.globalStorageUri).fsPath);
+    // Chats live in the global storage, each with its home folder: a window shows its folders' chats.
+    this.store = new ChatStore(context.globalStorageUri.fsPath, { homes: () => this.tools.roots(),
+      homeOf: (/** @type {any} */ chat) => (chat.folder && path.isAbsolute(chat.folder) && this.tools.rootOf(chat.folder)) || this.tools.root() });
+    if (context.storageUri) {
+      try { adoptChats(context.storageUri.fsPath, this.store, this.tools.root()); } catch { /* the old ones stay where they were */ }
+    }
     /** @type {vscode.WebviewView | null} */
     this.view = null;
     /** @type {any} */
@@ -89,7 +94,7 @@ class SolderPanel {
 
   host() {
     return {
-      systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), instructions: this.instructions(),
+      systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
         rules: vscode.workspace.getConfiguration("solder").get("rules", ""), docs: this.tools.docsFolders() }),
       runTool: (/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) => this.tools.run(name, args, ctx),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
@@ -97,17 +102,19 @@ class SolderPanel {
     };
   }
 
-  /** The workspace root's instruction files (AGENTS.md by default). */
+  /** The instruction files (AGENTS.md by default) at the top of each workspace folder. */
   instructions() {
-    const root = this.tools.root();
-    if (!root) return [];
+    const roots = this.tools.roots();
     const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
     const found = [];
-    for (const name of names) {
-      try {
-        const text = fs.readFileSync(path.join(root, name), "utf8").slice(0, 40_000);
-        if (text.trim()) found.push({ path: name, text });
-      } catch { /* not there */ }
+    for (const root of roots) {
+      for (const name of names) {
+        try {
+          const text = fs.readFileSync(path.join(root, name), "utf8").slice(0, 40_000);
+          // With several folders, each is named by its folder, so the model knows which one it's for.
+          if (text.trim()) found.push({ path: roots.length > 1 ? `${path.basename(root)}/${name}` : name, text });
+        } catch { /* not there */ }
+      }
     }
     return found;
   }
@@ -487,7 +494,7 @@ class SolderPanel {
       chip: `${path.basename(shown)}:${first}–${last}` };
   }
 
-  /** Pick the chat's working folder (inside the workspace). */
+  /** Pick the chat's working folder (in the workspace, or added to it). */
   async chooseFolder() {
     const root = this.tools.root();
     if (!root) { vscode.window.showWarningMessage("Solder: open a folder first."); return; }
@@ -496,18 +503,34 @@ class SolderPanel {
     if (picked?.[0]) await this.setFolder(picked[0].fsPath);
   }
 
-  /** The working folder: relative paths and searches start there. @param {string} full "" for the workspace folder */
+  /**
+   * The working folder: relative paths and searches start there. One outside the workspace can be added to it, as
+   * VS Code's File → Add Folder to Workspace does. @param {string} full "" for the whole workspace
+   */
   async setFolder(full) {
     const root = this.tools.root();
-    let relative = "";
+    let folder = "";
     if (full && root) {
-      relative = path.relative(root, full);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        vscode.window.showWarningMessage("Solder: the working folder has to be inside the workspace.");
-        return;
+      if (!this.tools.rootOf(full)) {
+        const name = path.basename(full) || full;
+        const pick = await vscode.window.showInformationMessage(`"${name}" isn't in this window's workspace. Add it, so Solder can work there?`,
+          { modal: true, detail: "It's added as another folder of the workspace, as File → Add Folder to Workspace does. Save the workspace (File → Save Workspace As…) to open it this way again." },
+          "Add to workspace");
+        if (pick !== "Add to workspace") return;
+        const count = vscode.workspace.workspaceFolders?.length ?? 0;
+        // Watched for, not waited on as an event: in a real VS Code the change event didn't always come.
+        const asked = vscode.workspace.updateWorkspaceFolders(count, 0, { uri: vscode.Uri.file(full) });
+        for (let waited = 0; asked && !this.tools.rootOf(full) && waited < 10_000; waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
+        if (!asked || !this.tools.rootOf(full)) {
+          vscode.window.showWarningMessage("Solder: VS Code didn't add that folder to the workspace. Try File → Add Folder to Workspace.");
+          return;
+        }
       }
+      // In the main folder: relative to it. In another workspace folder: its full path.
+      const relative = path.relative(root, full);
+      folder = relative.startsWith("..") || path.isAbsolute(relative) ? path.resolve(full) : relative.split(path.sep).join("/");
     }
-    this.chat.folder = relative.split(path.sep).join("/");
+    this.chat.folder = folder;
     this.tools.useFolder(this.chat.folder);
     await this.store.save(this.chat);
     this.post();
@@ -579,7 +602,7 @@ class SolderPanel {
       effort: chat.effort || this.settings().effort,
       busy: this.engine.busy,
       folder: this.chat.folder || "",
-      workspaceName: vscode.workspace.workspaceFolders?.[0]?.name || "",
+      workspaceName: (vscode.workspace.workspaceFolders || []).map((folder) => folder.name).join(" + "),
       status: this.status,
       live: this.live,
       approvals: this.approvals.map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "" })),

@@ -81,25 +81,47 @@ class WorkspaceTools {
 
   /** The first workspace folder ("" when none is open). */
   root() {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+    return this.roots()[0] ?? "";
   }
 
-  /** Where relative paths and searches start: the working folder, or the workspace folder. */
+  /** Every folder in the window's workspace (on disk), the first being the main one. */
+  roots() {
+    return (vscode.workspace.workspaceFolders || []).filter((folder) => folder.uri.scheme === "file").map((folder) => folder.uri.fsPath);
+  }
+
+  /** The workspace folder a path is in (the innermost, if they nest), or "". @param {string} full */
+  rootOf(full) {
+    return this.roots().filter((root) => within(full, root)).sort((a, b) => b.length - a.length)[0] ?? "";
+  }
+
+  /**
+   * Where relative paths and searches start: the working folder, or the main workspace folder. A working folder
+   * in the main folder is kept relative to it; one in another workspace folder, as its full path.
+   */
   base() {
     const root = this.root();
     if (!root || !this.folder) return root;
-    const full = path.resolve(root, this.folder);
-    return within(full, root) && fs.existsSync(full) ? full : root;
+    const full = path.isAbsolute(this.folder) ? path.resolve(this.folder) : path.resolve(root, this.folder);
+    return this.rootOf(full) && fs.existsSync(full) ? full : root;
+  }
+
+  /** Where a search with no folder of its own looks: the working folder, or every workspace folder. */
+  searchRoots() {
+    return this.folder ? [this.base()].filter(Boolean) : this.roots();
   }
 
   /** @param {string} folder relative to the workspace folder */
   useFolder(folder) { this.folder = folder || ""; }
 
-  /** A path as the model sees it: relative to the working folder when it's in the workspace. @param {string} full */
+  /**
+   * A path as the model sees it: relative to the working folder when it's in the same workspace folder, else its
+   * full path (another workspace folder, or outside). @param {string} full
+   */
   shown(full) {
-    const root = this.root();
-    if (!root || !within(full, root)) return full;
-    return path.relative(this.base(), full).split(path.sep).join("/") || ".";
+    const base = this.base();
+    const home = base ? this.rootOf(base) || base : "";
+    if (!home || !within(full, home)) return full;
+    return path.relative(base, full).split(path.sep).join("/") || ".";
   }
 
   /** @param {string} given */
@@ -108,8 +130,8 @@ class WorkspaceTools {
     const raw = String(given ?? "").trim().replace(/^["']|["']$/g, "");
     if (!raw) throw new ToolError(RESULTS.noPath);
     const full = path.resolve(this.base() || process.cwd(), raw);
-    // Inside means inside once links are followed: a link in the workspace can point anywhere.
-    const inside = !!root && within(full, root) && within(realPath(full), realPath(root));
+    // Inside means inside one of the workspace's folders once links are followed: a link in it can point anywhere.
+    const inside = !!root && this.roots().some((folder) => within(full, folder) && within(realPath(full), realPath(folder)));
     // A network path can hand your Windows sign-in to that server, so only the workspace's own are opened.
     if (!inside && /^(\\\\|\/\/)/.test(full)) throw new ToolError(RESULTS.networkPath);
     return { uri: vscode.Uri.file(full), full, inside, shown: this.shown(full) };
@@ -251,7 +273,7 @@ class WorkspaceTools {
 
   /** The first read in a folder with its own AGENTS.md brings that file along (the nearest one wins). */
   nestedAgents(/** @type {any} */ file, /** @type {any} */ chat) {
-    const root = this.root();
+    const root = this.rootOf(file.full);
     if (!file.inside || !root) return "";
     const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
     chat.agentsSeen = chat.agentsSeen || [];
@@ -494,12 +516,23 @@ class WorkspaceTools {
 
   async search(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
     if (args.docs) return this.searchDocs(String(args.query), signal);
-    const root = this.base();
-    if (!root) throw new ToolError(RESULTS.noWorkspace);
+    const roots = this.searchRoots();
+    if (!roots.length) throw new ToolError(RESULTS.noWorkspace);
     const rg = this.ripgrep();
     const query = String(args.query);
-    let lines = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal)
-      : await this.searchInJs(root, query, !!args.regex, args.glob);
+    const base = this.base();
+    /** @type {string[]} */
+    let lines = [];
+    for (const root of roots) {
+      const found = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal)
+        : await this.searchInJs(root, query, !!args.regex, args.glob);
+      // ripgrep's paths are relative to where it ran: as the model sees paths, for the other folders.
+      lines.push(...(root === base || !rg ? found : found.map((line) => {
+        const cut = line.indexOf(":");
+        return cut > 0 ? this.shown(path.join(root, line.slice(0, cut))) + line.slice(cut) : line;
+      })));
+      if (lines.length > MAX_SEARCH_LINES) break;
+    }
     const count = lines.length;
     if (!count) {
       return { output: RESULTS.noMatches(query, args.glob || ""), summary: `Searched "${short(query)}" · no matches` };
@@ -667,11 +700,20 @@ class WorkspaceTools {
   // ----------------------------------------------------------------- find_files --
 
   async findFiles(/** @type {any} */ args) {
-    if (!this.root()) throw new ToolError(RESULTS.noWorkspace);
-    let uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob))), undefined, MAX_FOUND + 1);
+    const roots = this.searchRoots();
+    if (!roots.length) throw new ToolError(RESULTS.noWorkspace);
+    const find = async (/** @type {string} */ glob) => {
+      const uris = [];
+      for (const root of roots) {
+        uris.push(...await vscode.workspace.findFiles(new vscode.RelativePattern(root, glob), undefined, MAX_FOUND + 1));
+        if (uris.length > MAX_FOUND) break;
+      }
+      return uris;
+    };
+    let uris = await find(globOf(String(args.glob)));
     // A plain name ("lib") with no files of that name: the folder of that name, if there is one.
     if (!uris.length && !/[*?[\]{}]/.test(String(args.glob))) {
-      uris = await vscode.workspace.findFiles(new vscode.RelativePattern(this.base(), globOf(String(args.glob)).replace(/\/+$/, "") + "/**"), undefined, MAX_FOUND + 1);
+      uris = await find(globOf(String(args.glob)).replace(/\/+$/, "") + "/**");
     }
     const shown = uris.map((uri) => this.shown(uri.fsPath)).sort((a, b) => a.localeCompare(b));
     if (!shown.length) return { output: RESULTS.noFiles(args.glob), summary: `Found no ${args.glob}` };
@@ -844,7 +886,7 @@ class WorkspaceTools {
     const root = this.root();
     let stat;
     try { stat = fs.statSync(source.full); } catch { throw new ToolError(RESULTS.missing(source.shown)); }
-    if ((root && path.resolve(source.full).toLowerCase() === path.resolve(root).toLowerCase()) || path.parse(source.full).root === source.full) {
+    if (this.roots().some((folder) => path.resolve(source.full).toLowerCase() === path.resolve(folder).toLowerCase()) || path.parse(source.full).root === source.full) {
       throw new ToolError(RESULTS.moveRoot);
     }
     const given = String(args.to ?? "").trim();
@@ -891,7 +933,7 @@ class WorkspaceTools {
     const root = this.root();
     let stat;
     try { stat = fs.statSync(target.full); } catch { throw new ToolError(RESULTS.missing(target.shown)); }
-    if ((root && path.resolve(target.full).toLowerCase() === path.resolve(root).toLowerCase()) || path.parse(target.full).root === target.full) {
+    if (this.roots().some((folder) => path.resolve(target.full).toLowerCase() === path.resolve(folder).toLowerCase()) || path.parse(target.full).root === target.full) {
       throw new ToolError(RESULTS.removeRoot);
     }
     const folder = stat.isDirectory();

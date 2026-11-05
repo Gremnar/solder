@@ -751,7 +751,7 @@
     const chips = [];
     if (state.workspace) {
       chips.push(`<button class="chip folder" data-action="folder" title="The folder you're working in: relative paths and searches start here. Click to change.">` +
-        `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>${escape(state.folder || state.workspaceName || "Workspace")}</button>` +
+        `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>${escape(folderLabel(state.folder) || state.workspaceName || "Workspace")}</button>` +
         (state.folder ? `<button class="chip clear" data-action="clearFolder" title="Back to the whole workspace" aria-label="Use the whole workspace">✕</button>` : ""));
     }
     if (editor.selection) chips.push(`<button class="chip${chipsOn.selection ? " on" : ""}" data-chip="selection" aria-pressed="${chipsOn.selection}" title="Send the selected lines with your message"><span aria-hidden="true">✂</span> ${escape(base(editor.file))}:${editor.selection}</button>`);
@@ -803,6 +803,12 @@
 
   /** @param {string} file */
   function base(file) { return file.split("/").pop() || file; }
+
+  /** The working folder on its chip: relative as it is; a full path (another workspace folder) by its last two parts. @param {string} folder */
+  function folderLabel(folder) {
+    if (!/^([A-Za-z]:)?[\\/]/.test(folder)) return folder;
+    return folder.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+  }
 
   /** @param {number} n */
   function compact(n) {

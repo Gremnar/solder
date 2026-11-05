@@ -25,6 +25,7 @@
 
 - **What it looks at.** Chips above the box tell Solder where you are:
   - **The working folder:** relative paths and searches start there. Click the chip to change it, or right-click a folder in the Explorer and choose **Work in this folder**.
+  - **Several folders:** every folder in the window counts as the workspace (add one with **File → Add Folder to Workspace…**): Solder searches them all and edits in any of them without asking. Pick a folder that isn't in the window as the working folder and Solder offers to add it. Your chats follow their folder, so they're there whichever window you open it in.
   - **The open file, or your selection:** click a chip to include it, or click it again to leave it out.
 - **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
 - **From the editor:** select some code, right-click, and choose **Solder → Explain this**, **Fix this** (it sends the problems VS Code shows in the selection too) or **Add to chat** (the selection goes with your next message).
