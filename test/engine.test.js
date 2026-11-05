@@ -584,3 +584,55 @@ test("a message queued while it works keeps its selection, and goes as the next 
   assert.equal(unsent.context, "(Selected in a.js, lines 1–2:)");
   assert.deepEqual(unsent.chips, ["a.js:1–2"]);
 });
+
+test("/compact summarises the whole chat now, small or not, with what you asked it to keep; then nothing's left to do", async () => {
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "rename priceOf", meta: { typed: "rename priceOf" } }, { role: "assistant", content: "Done." });
+  const client = fakeClient([(req) => {
+    assert.ok(!req.tools, "a summary request has no tools");
+    assert.ok(req.messages[1].content.endsWith(TEXTS.compactionFocus("the API names")));
+    return { content: "SUMMARY" };
+  }, { content: "next answer" }]);
+  const events = [];
+  const e = engine(client, fakeHost(), events);
+  assert.equal(await e.compactNow(chat, "the API names"), "done");
+  assert.deepEqual(chat.compaction, { through: 2, summary: "SUMMARY" });
+  assert.equal(client.sent.length, 1, "no reply loop after it");
+  assert.equal(await e.compactNow(chat), "nothing", "nothing new since: no request");
+  assert.equal(client.sent.length, 1);
+  await e.ask(chat, "go on");
+  assert.deepEqual(client.sent[1].slice(1, 3), [{ role: "user", content: TEXTS.compaction }, { role: "assistant", content: "SUMMARY" }]);
+  assert.equal(client.sent[1].length, 4, "the summary, then your new message");
+  assert.match(client.sent[1][3].content, /go on$/);
+  assert.ok(events.some((x) => x.type === "busy" && x.busy === false));
+});
+
+test("/compact that fails leaves the chat as it was", async () => {
+  const chat = Engine.newChat();
+  chat.messages.push({ role: "user", content: "hi", meta: { typed: "hi" } }, { role: "assistant", content: "hello" });
+  const client = fakeClient([() => { throw new GatewayError("The gateway answered HTTP 500.", { status: 500, retryable: false }); }]);
+  const events = [];
+  assert.equal(await engine(client, fakeHost(), events).compactNow(chat), "failed");
+  assert.equal(chat.compaction, null);
+  assert.ok(events.some((x) => x.type === "compaction-failed"));
+});
+
+test("/fork copies the chat to carry on in: its own id and title, the same history, the original untouched", () => {
+  const chat = Engine.newChat();
+  chat.title = "Fix the cart";
+  chat.model = "model-b";
+  chat.messages.push({ role: "user", content: "fix it", meta: { typed: "fix it" } }, { role: "assistant", content: "Fixed." });
+  chat.compaction = { through: 0, summary: "S" };
+  const copy = Engine.fork(chat);
+  assert.notEqual(copy.id, chat.id);
+  assert.equal(copy.title, "Fix the cart (fork)");
+  assert.equal(copy.titleSource, "user", "not renamed automatically");
+  assert.deepEqual(copy.messages, chat.messages);
+  assert.equal(copy.model, "model-b");
+  assert.deepEqual(copy.forkedFrom, { id: chat.id, title: "Fix the cart" });
+  copy.messages.push({ role: "user", content: "more" });
+  copy.compaction.summary = "changed";
+  assert.equal(chat.messages.length, 2, "a deep copy");
+  assert.equal(chat.compaction.summary, "S");
+  assert.equal(Engine.fork(copy).title, "Fix the cart (fork)", "a fork of a fork isn't (fork) (fork)");
+});

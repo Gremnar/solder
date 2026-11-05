@@ -962,9 +962,98 @@
     }
   });
 
+  // ------------------------------------------------------------ slash commands --
+
+  /** What "/" offers. The extension runs them (src/panel.js, command); /help and a bare /model stay here. */
+  const COMMANDS = [
+    { name: "new", about: "Start a new chat" },
+    { name: "fork", about: "Carry on in a copy of this chat" },
+    { name: "compact", hint: "what to keep", about: "Summarise this chat now, to save tokens" },
+    { name: "rename", hint: "name", about: "Rename this chat" },
+    { name: "model", hint: "name", about: "Switch this chat's model" },
+    { name: "effort", hint: "low, medium or high", about: "How hard this chat thinks" },
+    { name: "review", about: "Review what's changed since the last commit" },
+    { name: "settings", about: "Open Solder's settings" },
+    { name: "help", about: "List these commands" },
+  ];
+  const slash = $("slash");
+  /** @type {typeof COMMANDS} the commands the list shows now */
+  let slashShown = [];
+  let slashAt = 0;
+
+  /** The list follows the box: open while it holds just "/" and the start of a command's name. */
+  function renderSlash() {
+    const typed = /^\/(\S*)$/.exec(input.value);
+    if (!typed || !state) { hideSlash(); return; }
+    const word = typed[1].toLowerCase();
+    slashShown = COMMANDS.filter((c) => c.name.startsWith(word));
+    slashAt = Math.min(slashAt, Math.max(0, slashShown.length - 1));
+    slash.innerHTML = slashShown.length
+      ? slashShown.map((c, i) => `<div role="option" id="slash-${i}" class="slash-item${i === slashAt ? " active" : ""}" aria-selected="${i === slashAt}" data-slash="${i}">` +
+          `<span class="cmd">/${c.name}${c.hint ? ` <i>${escape(c.hint)}</i>` : ""}</span><span class="about">${escape(c.about)}</span></div>`).join("")
+      : `<div class="slash-none">No command starts with that: Enter sends it as a message.</div>`;
+    slash.classList.remove("hidden");
+    if (slashShown.length) input.setAttribute("aria-activedescendant", `slash-${slashAt}`);
+    else input.removeAttribute("aria-activedescendant");
+    // Keep the chosen one in view by scrolling the list only (scrollIntoView would move the whole panel).
+    const active = /** @type {HTMLElement | null} */ (slash.querySelector(".active"));
+    if (active) {
+      if (active.offsetTop < slash.scrollTop) slash.scrollTop = active.offsetTop;
+      else if (active.offsetTop + active.offsetHeight > slash.scrollTop + slash.clientHeight) slash.scrollTop = active.offsetTop + active.offsetHeight - slash.clientHeight;
+    }
+  }
+  function hideSlash() {
+    slash.classList.add("hidden");
+    slashShown = [];
+    slashAt = 0;
+    input.removeAttribute("aria-activedescendant");
+  }
+  /** Picking one: a command that takes something is completed in the box; the others run at once. @param {number} index */
+  function pickSlash(index) {
+    const command = slashShown[index];
+    if (!command) return;
+    hideSlash();
+    if (command.hint) {
+      input.value = `/${command.name} `;
+      autosize();
+      vscode.setState({ draft: input.value });
+      input.focus();
+      return;
+    }
+    clearBox();
+    runCommand(command.name, "");
+  }
+  /** @param {string} name @param {string} arg */
+  function runCommand(name, arg) {
+    if (name === "help") { input.value = "/"; autosize(); input.focus(); renderSlash(); return; }
+    if (name === "model" && !arg) { toggle("model-menu"); return; }
+    if (name === "new" || name === "fork" || name === "review") stickToBottom = true;
+    vscode.postMessage({ type: "command", name, arg });
+  }
+  function clearBox() {
+    input.value = "";
+    autosize();
+    vscode.setState({ draft: "" });
+  }
+  // Clicking a command: mousedown, so the box keeps its focus.
+  slash.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const item = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-slash]"));
+    if (item) pickSlash(Number(item.dataset.slash));
+  });
+  input.addEventListener("blur", hideSlash);
+
   function send() {
     const text = input.value.trim();
     if (!text || !state) return;
+    // "/name what" for a command we have runs it; anything else that starts with "/" goes as a message.
+    const typed = /^\/(\w+)(?:\s+([\s\S]*))?$/.exec(text);
+    if (typed && COMMANDS.some((c) => c.name === typed[1].toLowerCase())) {
+      hideSlash();
+      clearBox();
+      runCommand(typed[1].toLowerCase(), (typed[2] || "").trim());
+      return;
+    }
     vscode.postMessage({ type: "send", text, selection: !!editor.selection && chipsOn.selection, file: !!editor.file && chipsOn.file });
     replay($("send"), "launch");
     input.value = "";
@@ -980,8 +1069,23 @@
     $("send").classList.toggle("idle", !input.value.trim());
   }
 
-  input.addEventListener("input", () => { autosize(); vscode.setState({ draft: input.value }); });
+  input.addEventListener("input", () => { autosize(); vscode.setState({ draft: input.value }); renderSlash(); });
   input.addEventListener("keydown", (event) => {
+    const open = !slash.classList.contains("hidden");
+    if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideSlash(); return; } // not Stop
+    if (open && slashShown.length) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        slashAt = (slashAt + (event.key === "ArrowDown" ? 1 : slashShown.length - 1)) % slashShown.length;
+        renderSlash();
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.isComposing) || event.key === "Tab") {
+        event.preventDefault();
+        pickSlash(slashAt);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
   });
   document.addEventListener("keydown", (event) => {

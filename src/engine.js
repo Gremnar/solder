@@ -25,6 +25,8 @@ const TRIM_SLACK_TOKENS = 10_000;
 const MAX_BATCH_RESULT_CHARS = 90_000;
 /** Compaction runs only when what it can summarise is at least this share of the limit. */
 const MIN_COMPACT_SHARE = 0.15;
+/** The most of /compact's "what to keep" that goes into the summary request. */
+const MAX_FOCUS_CHARS = 500;
 /** This task's results are cut only past this many times the compaction limit (a runaway task). */
 const IN_TASK_CEILING = 1.5;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
@@ -104,6 +106,33 @@ class Engine {
   }
 
   /**
+   * /fork: a copy of the chat to carry on in separately. Same history, summary, model and working folder; its own
+   * id, title and token count. Its Undo buttons share the original's backups (Undo checks the file first).
+   * @param {Chat} chat
+   */
+  static fork(chat) {
+    const fresh = Engine.newChat();
+    const copy = JSON.parse(JSON.stringify(chat));
+    const base = String(chat.title || "New chat").replace(/ \(fork\)$/, "");
+    return { ...copy, id: fresh.id, created: fresh.created, updated: fresh.updated, usage: { tokens: 0 },
+      title: `${base} (fork)`, titleSource: "user", forkedFrom: { id: chat.id, title: chat.title } };
+  }
+
+  /**
+   * /compact: summarise the whole chat now, whatever its size; the next message starts from the summary.
+   * @param {Chat} chat @param {string} [focus] what you want the summary to keep in particular
+   * @returns {Promise<"done" | "nothing" | "failed" | "stopped">}
+   */
+  async compactNow(chat, focus = "") {
+    /** @type {"done" | "nothing" | "failed" | "stopped"} */
+    let result = "stopped";
+    await this._run(chat, async (signal) => {
+      result = await this._compactIfDue(chat, signal, chat.messages.length, { force: true, focus });
+    }, false);
+    return result;
+  }
+
+  /**
    * Your message, then the loop until the model answers.
    * @param {Chat} chat @param {string} text what you typed @param {{context?: string, chips?: string[]}} [extra]
    */
@@ -174,7 +203,7 @@ class Engine {
   }
 
   /** @param {Chat} chat @param {(signal: AbortSignal) => Promise<void>} start */
-  async _run(chat, start) {
+  async _run(chat, start, loop = true) {
     if (this.busy) throw new Error("Solder is already working on a reply.");
     this.busy = true;
     this.steers = [];
@@ -185,7 +214,7 @@ class Engine {
     try {
       this._settle(chat, TEXTS.notRunStopped); // a reply that died mid-batch last time
       await start(controller.signal);
-      await this._loop(chat, controller.signal);
+      if (loop) await this._loop(chat, controller.signal);
     } catch (error) {
       stopped = error instanceof Cancelled || controller.signal.aborted;
       this._settle(chat, stopped ? TEXTS.notRunStopped : TEXTS.notRunFailed);
@@ -422,17 +451,21 @@ class Engine {
    * Summarise the older part of the chat once it's past the limit. Whole recent turns are kept word for
    * word, up to about a fifth of the limit; the message at `limit` and after (your new one) always is.
    * If the summary request fails, the chat goes on as it is: compaction only saves tokens.
+   * With `force` (/compact) it runs whatever the size, keeps nothing word for word, and can be told what to keep.
    * @param {Chat} chat @param {AbortSignal} signal @param {number} limit
+   * @param {{force?: boolean, focus?: string}} [options]
+   * @returns {Promise<"done" | "skipped" | "nothing" | "failed">}
    */
-  async _compactIfDue(chat, signal, limit) {
+  async _compactIfDue(chat, signal, limit, options = {}) {
+    const force = !!options.force;
     const settings = this.settings();
-    trim(chat);
+    trim(chat, settings.compactAt);
     const system = await this.host.systemPrompt(chat);
     const ratio = chat.tokenRatio || 1;
     const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions()));
-    if (size * ratio < settings.compactAt) return;
+    if (!force && size * ratio < settings.compactAt) return "skipped";
     const start = chat.compaction ? chat.compaction.through : 0;
-    const keep = settings.compactAt / 5 / ratio; // in estimated tokens
+    const keep = force ? 0 : settings.compactAt / 5 / ratio; // in estimated tokens
     let cut = limit;
     let kept = 0;
     for (let index = limit - 1; index > start; index--) {
@@ -441,27 +474,30 @@ class Engine {
       if (kept > keep) break;
       if (message.role === "user" && !message.meta?.resume) cut = index;
     }
-    if (cut <= start) return;
+    if (cut <= start) return force ? "nothing" : "skipped";
     // Summarising a sliver (a warm-up turn before a huge one) costs a request and saves nothing.
     const summarisable = chat.messages.slice(start, cut).reduce((sum, m) => sum + sizeOf(m), 0) * ratio;
-    if (summarisable < settings.compactAt * MIN_COMPACT_SHARE) return;
+    if (!force && summarisable < settings.compactAt * MIN_COMPACT_SHARE) return "skipped";
+    const focus = String(options.focus || "").trim().slice(0, MAX_FOCUS_CHARS);
     this.emit({ type: "compacting", chat: chat.id });
     let reply;
     try {
       const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
       reply = await this._patient(chat, { model: chat.model || settings.model, signal, effort: undefined, messages: [
         { role: "system", content: TEXTS.compactionSystem },
-        { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` }] }, true);
+        { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` +
+          (focus ? `\n\n${TEXTS.compactionFocus(focus)}` : "") }] }, true);
     } catch (error) {
       if (error instanceof Cancelled || signal.aborted) throw new Cancelled();
       this.emit({ type: "compaction-failed", chat: chat.id, message: error instanceof Error ? error.message : String(error) });
-      return;
+      return "failed";
     }
     this._spend(chat, reply.usage, reply.credits);
-    if (!reply.content.trim()) return;
+    if (!reply.content.trim()) return force ? "failed" : "skipped";
     chat.compaction = { through: cut, summary: reply.content.trim() };
     await this._save(chat);
     this.emit({ type: "compacted", chat: chat.id, through: cut });
+    return "done";
   }
 
   /**

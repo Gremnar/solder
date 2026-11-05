@@ -37,8 +37,9 @@
   <div id="approvals"></div>
   <div id="banner" class="banner hidden" role="alert"></div>
   <div class="box">
+    <div id="slash" class="slash hidden" role="listbox" aria-label="Commands"></div>
     <div id="chips" class="chips"></div>
-    <textarea id="input" rows="1" placeholder="Ask Solder to read or change your code…" aria-label="Message"></textarea>
+    <textarea id="input" rows="1" placeholder="Ask Solder to read or change your code…" aria-label="Message" aria-autocomplete="list" aria-controls="slash"></textarea>
     <div class="row">
       <div id="model" class="model">
         <button id="model-button" class="model-button" title="Model" aria-haspopup="menu" aria-expanded="false" aria-labelledby="model-label model-name"><span id="model-name">Model</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>

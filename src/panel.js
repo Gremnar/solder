@@ -170,7 +170,7 @@ class SolderPanel {
       case "thinking": this.status = "Thinking…"; this.running = ""; break;
       case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
       case "compacting": this.status = "Summarising the older part of this chat to save tokens…"; break;
-      case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; break;
+      case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; this.compactProblem = event.message || ""; break;
       case "message": this.live = ""; this.running = ""; break;
       case "running": this.running = event.id; this.runningSince = Date.now(); this.status = ""; break;
       case "titled": break; // the new title goes out with the state below
@@ -199,6 +199,7 @@ class SolderPanel {
       case "ready": this.post(); this.postEditor(); return;
       case "send": return this.send(message);
       case "starter": return this.start(String(message.id || ""));
+      case "command": return this.command(String(message.name || ""), String(message.arg || "").trim());
       case "stop": this.engine.stop(); return;
       case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
@@ -275,6 +276,77 @@ class SolderPanel {
   }
 
   /** @param {{text: string, selection?: boolean, file?: boolean}} message */
+  /**
+   * A slash command typed in the box: /new, /fork, /compact [what to keep], /rename [name], /model [name],
+   * /effort [level], /review, /settings. (/help, and /model with no name, stay in the panel.)
+   * @param {string} name @param {string} arg
+   */
+  async command(name, arg) {
+    const info = (/** @type {string} */ text) => { vscode.window.showInformationMessage(text); };
+    const busy = () => info(`Solder is working on a reply. /${name} can wait until it's done, or press Stop first.`);
+    switch (name) {
+      case "new": return this.engine.busy ? busy() : this.onMessage({ type: "new" });
+      case "fork": {
+        if (this.engine.busy) return busy();
+        if (!this.chat.messages.length) return info("There's nothing to fork yet: this chat is empty.");
+        await this.store.save(this.chat);
+        this.chat = Engine.fork(this.chat);
+        await this.store.save(this.chat);
+        this.error = null;
+        this.post();
+        return;
+      }
+      case "compact": {
+        if (this.engine.busy) return busy();
+        if (!this.chat.messages.length) return info("There's nothing to summarise yet: this chat is empty.");
+        this.error = null;
+        this.compactProblem = "";
+        const result = await this.engine.compactNow(this.chat, arg);
+        if (result === "nothing") info("This chat is already summarised: there's nothing new since.");
+        else if (result === "failed") {
+          vscode.window.showWarningMessage(`Couldn't summarise this chat${this.compactProblem ? ` (${this.compactProblem})` : ""}. It's unchanged.`);
+        }
+        this.post();
+        return;
+      }
+      case "rename": {
+        if (!arg) return this.onMessage({ type: "rename" });
+        if (!this.chat.messages.length) return info("A chat can be renamed once it has a message.");
+        this.chat.title = arg.slice(0, 120);
+        this.chat.titleSource = "user";
+        await this.store.save(this.chat);
+        this.post();
+        return;
+      }
+      case "model": {
+        const wanted = arg.toLowerCase();
+        const exact = this.models.filter((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted);
+        const partial = this.models.filter((m) => m.id.toLowerCase().includes(wanted) || m.name.toLowerCase().includes(wanted));
+        const found = exact.length === 1 ? exact[0] : partial.length === 1 ? partial[0] : null;
+        if (!found) {
+          return info(partial.length > 1 ? `More than one model matches "${arg}": ${partial.slice(0, 6).map((m) => m.name).join(", ")}.`
+            : `No model matches "${arg}". Pick one from the model menu beside Send.`);
+        }
+        return this.onMessage({ type: "model", id: found.id });
+      }
+      case "effort": {
+        const levels = ["default", "low", "medium", "high"];
+        const level = arg ? levels.find((l) => l.startsWith(arg.toLowerCase())) : await vscode.window.showQuickPick(levels, { title: "How hard this chat thinks" });
+        if (!level) return arg ? info(`Effort is one of: ${levels.join(", ")}.`) : undefined;
+        return this.onMessage({ type: "effort", level });
+      }
+      case "review": {
+        if (this.engine.busy) return busy();
+        if (!this.chat.messages.length) return this.start("review");
+        const starter = STARTERS.find((s) => s.id === "review");
+        if (starter) await this.send({ text: starter.prompt });
+        return;
+      }
+      case "settings": await this.settingsScreen.open(); return;
+      default: return info(`There's no /${name} command.`);
+    }
+  }
+
   /** A starter card: its prompt, as your first message, in a chat named after it. @param {string} id */
   async start(id) {
     const starter = STARTERS.find((s) => s.id === id);
@@ -486,6 +558,9 @@ class SolderPanel {
     /** @type {Map<string, any>} */
     const steps = new Map();
     const messages = this.chat.messages;
+    if (this.chat.forkedFrom) {
+      items.push({ kind: "note", text: `A copy of "${this.chat.forkedFrom.title}" to carry on in. The original is unchanged.` });
+    }
     for (let index = 0; index < messages.length; index++) {
       if (this.chat.compaction && index === this.chat.compaction.through) {
         items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
@@ -511,6 +586,9 @@ class SolderPanel {
           change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, noDiff: !!(meta.change?.removed || meta.change?.moved || meta.change?.copied), undone: !!meta.undone, steer: meta.steer || "",
           ms: typeof meta.ms === "number" ? meta.ms : null });
       }
+    }
+    if (this.chat.compaction && this.chat.compaction.through >= messages.length) {
+      items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
     }
     for (const step of steps.values()) {
       if (!step.pending) continue;
