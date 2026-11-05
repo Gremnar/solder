@@ -121,6 +121,14 @@ svg circle { fill: currentColor; stroke: none; }
 .menu .when, .menu .grey { margin-left: auto; color: var(--muted); font-size: 0.85em; font-weight: 400; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .menu button:hover .when, .menu button:hover .grey { color: inherit; opacity: 0.8; }
 .menu .empty { padding: 6px 9px; color: var(--muted); }
+.menu .group { padding: 7px 9px 3px; font-size: 0.78em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.menu .group:first-child { padding-top: 3px; }
+.menu button.fold { color: var(--muted); font-size: 0.9em; }
+.menu button.fold .chev { width: 12px; height: 12px; margin-left: auto; transition: transform var(--t) var(--ease); }
+.menu button.fold[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.menu .pin { width: 11px; height: 11px; flex: none; align-self: center; color: var(--muted); }
+/* the right-click menu on a chat: where the pointer is */
+.menu.ctx { position: fixed; top: auto; left: auto; min-width: 170px; z-index: 30; }
 .menu .sep { height: 1px; margin: 4px 6px; background: var(--vscode-menu-separatorBackground, var(--hairline)); }
 
 /* ---- transcript ---- */

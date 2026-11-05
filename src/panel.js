@@ -54,7 +54,7 @@ class SolderPanel {
     context.subscriptions.push(this.statusBar);
     this.engine = new Engine({ client: { reply: (/** @type {any} */ request) => this.client().reply(request) },
       host: this.host(), settings: () => this.settings(), onEvent: (event) => this.onEvent(event) });
-    const last = this.store.list()[0];
+    const last = this.store.list().find((c) => !c.archived);
     if (last) this.chat = this.store.load(last.id) ?? this.chat;
     context.subscriptions.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.postEditor()),
@@ -201,6 +201,7 @@ class SolderPanel {
       case "send": return this.send(message);
       case "starter": return this.start(String(message.id || ""));
       case "command": return this.command(String(message.name || ""), String(message.arg || "").trim());
+      case "chatAction": return this.chatAction(String(message.action || ""), String(message.id || ""));
       case "stop": this.engine.stop(); return;
       case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
@@ -243,7 +244,7 @@ class SolderPanel {
         if (pick !== "Delete") return;
         this.store.remove(this.chat.id);
         this.tools.removeBackups(this.chat.id);
-        const next = this.store.list()[0];
+        const next = this.store.list().find((c) => !c.archived);
         this.chat = (next && this.store.load(next.id)) || Engine.newChat();
         this.post();
         return;
@@ -346,6 +347,58 @@ class SolderPanel {
       case "settings": await this.settingsScreen.open(); return;
       default: return info(`There's no /${name} command.`);
     }
+  }
+
+  /**
+   * From the chats dropdown's right-click menu, on any chat (not only the open one).
+   * @param {string} action pin, unpin, rename, fork, archive, unarchive or delete @param {string} id
+   */
+  async chatAction(action, id) {
+    const current = id === this.chat.id;
+    const chat = current ? this.chat : this.store.load(id);
+    if (!chat) return;
+    const busy = () => vscode.window.showInformationMessage("Solder is working on a reply. That can wait until it's done, or press Stop first.");
+    switch (action) {
+      case "pin": chat.pinned = true; chat.archived = false; break;
+      case "unpin": chat.pinned = false; break;
+      case "archive": chat.archived = true; chat.pinned = false; break;
+      case "unarchive": chat.archived = false; break;
+      case "rename": {
+        const title = await vscode.window.showInputBox({ title: "Rename this chat", value: chat.title,
+          validateInput: (value) => value.trim() ? null : "A chat needs a name." });
+        if (!title?.trim()) return;
+        chat.title = title.trim().slice(0, 120);
+        chat.titleSource = "user";
+        break;
+      }
+      case "fork": {
+        if (this.engine.busy) return busy();
+        if (!chat.messages.length) return;
+        if (current) await this.store.save(chat);
+        this.chat = Engine.fork(chat);
+        await this.store.save(this.chat);
+        this.error = null;
+        this.post();
+        return;
+      }
+      case "delete": {
+        if (current && this.engine.busy) return busy();
+        const pick = await vscode.window.showWarningMessage(`Delete the chat "${chat.title}"?`, { modal: true }, "Delete");
+        if (pick !== "Delete") return;
+        this.store.remove(chat.id);
+        this.tools.removeBackups(chat.id);
+        if (current) {
+          const next = this.store.list().find((c) => !c.archived);
+          this.chat = (next && this.store.load(next.id)) || Engine.newChat();
+          this.error = null;
+        }
+        this.post();
+        return;
+      }
+      default: return;
+    }
+    await this.store.save(chat);
+    this.post();
   }
 
   /** A starter card: its prompt, as your first message, in a chat named after it. @param {string} id */
@@ -519,7 +572,7 @@ class SolderPanel {
     this.view.webview.postMessage({
       type: "state",
       chat: { id: chat.id, title: chat.title, items: this.items(), tokens: chat.usage.tokens },
-      chats: this.store.list().slice(0, 50),
+      chats: chatList(this.store.list()),
       models: this.models.length || !current ? this.models : [{ id: current, name: current }],
       modelsProblem: this.modelsProblem,
       model: current,
@@ -622,6 +675,13 @@ class SolderPanel {
 }
 
 /** 12345 → "12.3k". @param {number} n */
+/** The chats the dropdown shows: the newest 100 that aren't archived (pinned ones always), and the newest 100 archived. @param {any[]} all */
+function chatList(all) {
+  const live = all.filter((c) => !c.archived);
+  const archived = all.filter((c) => c.archived);
+  return [...live.filter((c) => c.pinned), ...live.filter((c) => !c.pinned).slice(0, 100), ...archived.slice(0, 100)];
+}
+
 /** What a reply's tool calls are, while they're still being written: "Writing src/app.ps1 · 4.2 KB so far". */
 function draftingLabel(/** @type {{name: string, chars: number, path: string}[]} */ calls) {
   const last = calls[calls.length - 1];

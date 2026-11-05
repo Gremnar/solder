@@ -13,13 +13,13 @@ class ChatStore {
     this.cache = new Map();
   }
 
-  /** Newest first: {id, title, updated}. */
+  /** Newest first: {id, title, updated, pinned, archived}. */
   list() {
     const found = [];
     for (const name of fs.readdirSync(this.folder)) {
       if (!name.endsWith(".json")) continue;
       const chat = this.load(name.slice(0, -5));
-      if (chat) found.push({ id: chat.id, title: chat.title, updated: chat.updated });
+      if (chat) found.push({ id: chat.id, title: chat.title, updated: chat.updated, pinned: !!chat.pinned, archived: !!chat.archived });
     }
     return found.sort((a, b) => b.updated - a.updated);
   }

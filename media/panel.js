@@ -267,6 +267,8 @@
   function render() {
     if (!state) return;
     $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : state.chat.title;
+    // An open dropdown follows the chats (a pin or rename from its right-click menu), keeping its focus.
+    if (!$("chat-menu").classList.contains("hidden")) keepFocus($("chat-menu"), renderChatMenu);
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
@@ -807,13 +809,100 @@
     return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n);
   }
 
+  /** Whether the dropdown shows the archived chats (folded away by default). */
+  let archivedOpen = false;
+
+  /** The chats dropdown: pinned first, then by age (today, the last 7 and 30 days, older), archived folded at the end. */
   function renderChatMenu() {
     const now = Date.now();
-    $("chat-menu").innerHTML = state.chats.length ? state.chats.map((/** @type {any} */ c) =>
-      `<button role="menuitemradio" aria-checked="${c.id === state.chat.id}" tabindex="-1" data-open="${c.id}" class="${c.id === state.chat.id ? "active" : ""}">` +
-      `<span>${escape(c.title)}</span><span class="when">${ago(now - c.updated)}</span></button>`).join("")
-      : `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No saved chats yet.</div>`;
+    const day = 86400000;
+    const item = (/** @type {any} */ c) =>
+      `<button role="menuitemradio" aria-checked="${c.id === state.chat.id}" tabindex="-1" data-open="${escape(c.id)}" data-pinned="${!!c.pinned}" data-archived="${!!c.archived}" class="${c.id === state.chat.id ? "active" : ""}"` +
+      ` aria-haspopup="menu" aria-keyshortcuts="Shift+F10">${c.pinned ? `<svg class="pin" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5h4l-.5 4 2 2v1h-7v-1l2-2zM8 9.5V14"/></svg>` : ""}` +
+      `<span>${escape(c.title)}</span><span class="when">${ago(now - c.updated)}</span></button>`;
+    const live = state.chats.filter((/** @type {any} */ c) => !c.archived);
+    const archived = state.chats.filter((/** @type {any} */ c) => c.archived);
+    /** @type {[string, any[]][]} */
+    const groups = [
+      ["Pinned", live.filter((/** @type {any} */ c) => c.pinned)],
+      ["Today", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated < day)],
+      ["Last 7 days", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= day && now - c.updated < 7 * day)],
+      ["Last 30 days", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= 7 * day && now - c.updated < 30 * day)],
+      ["Older", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= 30 * day)],
+    ];
+    let html = groups.filter(([, list]) => list.length)
+      .map(([name, list]) => `<div class="group" role="presentation">${name}</div>` + list.map(item).join("")).join("");
+    if (archived.length) {
+      html += `<button class="fold" role="menuitem" tabindex="-1" data-fold="archived" aria-expanded="${archivedOpen}">Archived · ${archived.length}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>` +
+        (archivedOpen ? archived.map(item).join("") : "");
+    }
+    $("chat-menu").innerHTML = html || `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No saved chats yet.</div>`;
   }
+
+  // ---- the right-click menu on a chat: pin, rename, fork, archive, delete ----
+  const chatActions = $("chat-actions");
+  /** The chat it was opened on, and that chat's row (focus goes back to it). @type {HTMLElement | null} */
+  let actionsFor = null;
+  /** @param {HTMLElement} row @param {number} x @param {number} y */
+  function openChatActions(row, x, y) {
+    actionsFor = row;
+    const pinned = row.dataset.pinned === "true";
+    const archived = row.dataset.archived === "true";
+    const entry = (/** @type {string} */ action, /** @type {string} */ label) => `<button role="menuitem" tabindex="-1" data-chat-action="${action}">${label}</button>`;
+    chatActions.innerHTML = [
+      archived ? "" : entry(pinned ? "unpin" : "pin", pinned ? "Unpin" : "Pin"),
+      entry("rename", "Rename…"),
+      entry("fork", "Fork"),
+      entry(archived ? "unarchive" : "archive", archived ? "Unarchive" : "Archive"),
+      `<div class="sep" role="separator"></div>`,
+      entry("delete", "Delete…"),
+    ].join("");
+    chatActions.classList.remove("hidden");
+    // Where the pointer is, kept inside the panel.
+    const width = chatActions.offsetWidth;
+    const height = chatActions.offsetHeight;
+    chatActions.style.left = Math.max(4, Math.min(x, window.innerWidth - width - 4)) + "px";
+    chatActions.style.top = Math.max(4, Math.min(y, window.innerHeight - height - 4)) + "px";
+    /** @type {HTMLElement | null} */ (chatActions.querySelector("button"))?.focus();
+  }
+  function closeChatActions(/** @type {boolean} */ refocus) {
+    if (chatActions.classList.contains("hidden")) return;
+    chatActions.classList.add("hidden");
+    if (refocus && actionsFor && document.body.contains(actionsFor)) actionsFor.focus();
+  }
+  $("chat-menu").addEventListener("contextmenu", (event) => {
+    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-open]"));
+    event.preventDefault();
+    if (row) openChatActions(row, event.clientX, event.clientY);
+  });
+  $("chat-menu").addEventListener("keydown", (event) => {
+    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-open]"));
+    if (!row || !(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const box = row.getBoundingClientRect();
+    openChatActions(row, box.left + 24, box.bottom);
+  });
+  chatActions.addEventListener("keydown", (event) => {
+    const items = /** @type {HTMLElement[]} */ ([...chatActions.querySelectorAll("button")]);
+    const at = items.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeChatActions(true); return; }
+    if (event.key === "Tab") { event.preventDefault(); closeChatActions(true); return; }
+    const to = event.key === "ArrowDown" ? (at + 1) % items.length : event.key === "ArrowUp" ? (at <= 0 ? items.length - 1 : at - 1)
+      : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : -1;
+    if (to >= 0) { event.preventDefault(); items[to].focus(); }
+  });
+  chatActions.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const button = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-chat-action]"));
+    if (!button || !actionsFor) return;
+    const action = button.dataset.chatAction;
+    const id = actionsFor.dataset.open;
+    closeChatActions(false);
+    // Rename and delete ask in VS Code itself; fork opens the copy: the dropdown closes for those.
+    if (action === "rename" || action === "delete" || action === "fork") closeMenus();
+    vscode.postMessage({ type: "chatAction", action, id });
+  });
 
   /** @param {number} ms */
   function ago(ms) {
@@ -1172,7 +1261,8 @@
 
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    if (!target.closest("#chat-actions")) closeChatActions(false);
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-fold],[data-action],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -1196,6 +1286,7 @@
       vscode.postMessage({ type: "setup", action: d.setup, ...extra });
     } else if (d.pickModel) pickModel(el);
     else if (d.open) { closeMenus(); vscode.postMessage({ type: "open", id: d.open }); }
+    else if (d.fold === "archived") { archivedOpen = !archivedOpen; renderChatMenu(); /** @type {HTMLElement | null} */ ($("chat-menu").querySelector('[data-fold="archived"]'))?.focus(); }
     else if (d.model) { closeMenus(); vscode.postMessage({ type: "model", id: d.model }); }
     else if (d.level) vscode.postMessage({ type: "effort", level: d.level });
     else if (d.chip) { chipsOn[/** @type {"file"|"selection"} */ (d.chip)] = !chipsOn[/** @type {"file"|"selection"} */ (d.chip)]; renderComposer(); replay(document.querySelector(`[data-chip="${d.chip}"]`), "flip"); }
