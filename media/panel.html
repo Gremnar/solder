@@ -15,39 +15,42 @@
     <button id="btn-new" class="icon" title="New chat" aria-label="New chat"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
     <button id="btn-more" class="icon" title="More" aria-label="More" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/></svg></button>
   </div>
-  <div id="chat-menu" class="menu hidden" role="menu"></div>
-  <div id="more-menu" class="menu right hidden" role="menu">
-    <button data-action="rename">Rename this chat…</button>
-    <button data-action="delete">Delete this chat</button>
-    <button data-action="refreshModels">Refresh models</button>
-    <button data-action="setKey">Set API key…</button>
-    <button data-action="settings">Settings</button>
-    <div class="sep"></div>
-    <button data-setup="start">Guided setup…</button>
-    <button data-action="guide">Guide</button>
-    <button data-action="feedback">Send feedback…</button>
-    <button data-action="diagnostics">Copy diagnostics</button>
+  <div id="chat-menu" class="menu hidden" role="menu" aria-label="Your chats"></div>
+  <div id="more-menu" class="menu right hidden" role="menu" aria-label="More">
+    <button role="menuitem" tabindex="-1" data-action="rename">Rename this chat…</button>
+    <button role="menuitem" tabindex="-1" data-action="delete">Delete this chat</button>
+    <button role="menuitem" tabindex="-1" data-action="refreshModels">Refresh models</button>
+    <button role="menuitem" tabindex="-1" data-action="setKey">Set API key…</button>
+    <button role="menuitem" tabindex="-1" data-action="settings">Settings</button>
+    <div class="sep" role="separator"></div>
+    <button role="menuitem" tabindex="-1" data-setup="start">Guided setup…</button>
+    <button role="menuitem" tabindex="-1" data-action="guide">Guide</button>
+    <button role="menuitem" tabindex="-1" data-action="feedback">Send feedback…</button>
+    <button role="menuitem" tabindex="-1" data-action="diagnostics">Copy diagnostics</button>
   </div>
 </header>
 
-<main id="transcript" aria-live="polite"></main>
+<main id="transcript" role="log" aria-live="off" aria-label="Chat"></main>
+<div id="announce" class="sr-only" role="status" aria-live="polite"></div>
 
-<section id="composer">
+<section id="composer" aria-label="Message">
   <div id="approvals"></div>
-  <div id="banner" class="banner hidden"></div>
+  <div id="banner" class="banner hidden" role="alert"></div>
   <div class="box">
     <div id="chips" class="chips"></div>
     <textarea id="input" rows="1" placeholder="Ask Solder to read or change your code…" aria-label="Message"></textarea>
     <div class="row">
       <div id="model" class="model">
-        <button id="model-button" class="model-button" title="Model" aria-haspopup="menu" aria-expanded="false"><span id="model-name">Model</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
-        <div id="model-menu" class="menu up hidden" role="menu"></div>
+        <button id="model-button" class="model-button" title="Model" aria-haspopup="menu" aria-expanded="false" aria-labelledby="model-label model-name"><span id="model-name">Model</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+        <span id="model-label" hidden>Model:</span>
+        <div id="model-menu" class="menu up hidden" role="menu" aria-label="Model"></div>
       </div>
-      <div id="effort" class="effort" title="How hard the model thinks">
-        <button data-level="low" class="active" data-tip="Quick answers. The default.">Low</button>
-        <button data-level="medium" data-tip="More thought, a little slower.">Medium</button>
-        <button data-level="high" data-tip="Consumes significantly more usage and will take longer to answer.">High</button>
+      <div id="effort" class="effort" title="How hard the model thinks" role="group" aria-label="Effort">
+        <button data-level="low" class="active" aria-pressed="true" aria-describedby="tip-low" data-tip="Quick answers. The default.">Low</button>
+        <button data-level="medium" aria-pressed="false" aria-describedby="tip-medium" data-tip="More thought, a little slower.">Medium</button>
+        <button data-level="high" aria-pressed="false" aria-describedby="tip-high" data-tip="Consumes significantly more usage and will take longer to answer.">High</button>
       </div>
+      <span id="tip-low" hidden>Quick answers. The default.</span><span id="tip-medium" hidden>More thought, a little slower.</span><span id="tip-high" hidden>Consumes significantly more usage and will take longer to answer.</span>
       <span class="grow"></span>
       <button id="send" class="send" title="Send (Enter)" aria-label="Send"><svg viewBox="0 0 16 16"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></button>
       <button id="stop" class="send stop hidden" title="Stop (Esc)" aria-label="Stop"><svg viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg></button>

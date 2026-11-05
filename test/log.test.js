@@ -20,3 +20,11 @@ test("the diagnostics log keeps names and numbers only, and the newest lines", (
   assert.equal(log.lines.length, 500);
   assert.match(log.recent(1)[0], /x599$/);
 });
+
+test("error lines in the log have paths and addresses taken out", () => {
+  const { pathless } = require("../src/log.js");
+  assert.equal(pathless("ENOENT: no such file or directory, open 'C:\\Users\\me\\x.js'"),"ENOENT: no such file or directory, open '<path>'");
+  assert.equal(pathless("EACCES /home/me/.ssh/id_rsa failed"), "EACCES <path> failed");
+  assert.equal(pathless("see https://x.example/a now"), "see <path> now");
+  assert.equal(pathless("The gateway answered HTTP 429."), "The gateway answered HTTP 429.");
+});

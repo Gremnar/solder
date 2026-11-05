@@ -97,7 +97,7 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 - **Transcript**
   - Your messages and the model's answers, with Markdown rendered by our own small, safe renderer: an escape-first port of Alloy's. No `innerHTML` of model text without escaping.
   - **Step lines:** one per call, with an icon, a summary and the time. Click one to expand its output. Edits get **Review** and **Undo**.
-  - **Approval cards** (only for a change outside the workspace) show the file and a preview, with Allow and Decline, and an optional note sent back to the model.
+  - **Approval cards** (removing anything; a change outside the workspace, to a file with unsaved changes, or to git's and VS Code's own files; a read outside the workspace and docs folders) show the file and a preview, with Allow and Decline, and an optional note sent back to the model.
 - **Composer**
   - A text box. Enter sends; Shift+Enter adds a new line.
   - Context chips: selection, active file and problems, each removable.

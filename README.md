@@ -6,7 +6,11 @@
 
 ## Getting started
 
-1. **Install it:** in VS Code, open the Extensions view, choose **⋯ → Install from VSIX…**, and pick `solder-<version>.vsix`. Or run `code --install-extension solder-<version>.vsix`.
+1. **Install it:**
+   - **from the Marketplace:** search for **Solder** in VS Code's Extensions view;
+   - **or from a `.vsix` file**, for a PC that can't reach the Marketplace: in the Extensions view, choose **⋯ → Install from VSIX…**, or run `code --install-extension solder-<version>.vsix`.
+
+   Solder needs VS Code 1.100 or later. Docs search also needs SQLite in VS Code's runtime, which recent versions have. If yours doesn't, Settings says so.
 2. **Run the guided setup.** Solder offers it the first time it starts. You can also run it any time from the panel's **⋯ menu → Guided setup…**. It asks for:
    - **your gateway's address:** the full Chat Completions URL, ending in `/chat/completions`;
    - **your API key:** kept in VS Code's secret storage, never in settings. Solder checks it by listing the models;
@@ -25,7 +29,13 @@
 - **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
 - **From the editor:** select some code, right-click, and choose **Solder → Explain this**, **Fix this** (it sends the problems VS Code shows in the selection too) or **Add to chat** (the selection goes with your next message).
 - **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. VS Code's own **Ctrl+Z** works too.
-- **It asks first** before deleting anything, or changing a file outside the workspace. You can add a note for the model when you answer.
+- **It asks first** before:
+  - deleting anything;
+  - changing a file outside the workspace, or one with unsaved changes;
+  - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`), where a change can make programs run;
+  - reading a file outside the workspace and your docs folders.
+
+  You can add a note for the model when you answer.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
 - **Settings** (⋯ → Settings) open right in the panel: the connection, the model and effort, your docs folders (with how far indexing has got), rules, and cost. Each field saves as you leave it.
@@ -89,6 +99,7 @@ The panel shows what the chat has used, and the status bar shows the allowance l
 | **Max rounds** | the most steps with tool calls for one message |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
+| **Storage limit GB** | the most disk space Undo's backups may use, 5 GB by default; past it, the oldest go first |
 
 The API key is set with **Solder: Set API key**, or in the guided setup. It's never stored in settings.
 
@@ -106,4 +117,4 @@ The API key is set with **Solder: Set API key**, or in the guided setup. It's ne
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Solder is MIT licensed.
+See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security problem, see [SECURITY.md](SECURITY.md). Solder is MIT licensed, and what's changed is in [CHANGELOG.md](CHANGELOG.md).

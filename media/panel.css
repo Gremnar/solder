@@ -40,7 +40,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
-button:focus-visible, textarea:focus-visible, [role="button"]:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+button:focus-visible, textarea:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+h2[tabindex="-1"]:focus { outline: none; } /* a title that takes focus as a screen opens, for screen readers */
+/* for screen readers only */
+.sr-only, .user:not(.queued)::before, .answer::before { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0; }
+.user:not(.queued)::before { content: "You:"; }
+.answer::before { content: "Solder:"; }
+/* small buttons get a 24×24 target (WCAG 2.5.8) from an invisible layer, so they look the same */
+.step .acts button, button.chip, .user .queued-note button, .setup .doc-path button, .settings .seg, .model-button, .banner button { position: relative; }
+:is(.step .acts button, button.chip, .user .queued-note button, .setup .doc-path button, pre .copy, .settings .seg, .effort button, .model-button, .banner button)::before {
+  content: ""; position: absolute; inset: min(0px, calc(50% - 12px)); }
 svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 svg circle { fill: currentColor; stroke: none; }
 .hidden { display: none !important; }
@@ -129,7 +139,7 @@ svg circle { fill: currentColor; stroke: none; }
 .welcome .lead { margin: 0; max-width: 300px; }
 .welcome .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; justify-content: center; }
 .welcome .aside { margin-top: 16px; font-size: 0.9em; }
-.welcome .hint { margin: 18px 0 0; font-size: 0.86em; opacity: 0.85; }
+.welcome .hint { margin: 18px 0 0; font-size: 0.86em; }
 .welcome .hint kbd { font-family: inherit; font-size: 0.95em; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--raised); }
 .logo { position: relative; width: 64px; height: 64px; display: grid; place-items: center; border-radius: 18px; color: var(--link);
   background: linear-gradient(160deg, color-mix(in srgb, var(--link) 16%, var(--bg)), color-mix(in srgb, var(--link) 5%, var(--bg)));
@@ -199,6 +209,7 @@ svg circle { fill: currentColor; stroke: none; }
 .step.enter { animation: rise var(--t) var(--ease) both; animation-delay: var(--age, 0ms); }
 .step-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 3px 4px; border-radius: var(--r-sm); color: var(--muted); text-align: left;
   cursor: pointer; transition: background var(--t-fast) ease, color var(--t-fast) ease; }
+.step-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: inherit; text-align: left; border-radius: var(--r-sm); }
 .step-head:hover { background: var(--hover); color: var(--fg); }
 .step-head:active { background: var(--press); }
 .step .mark { position: relative; width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 50%;
@@ -214,18 +225,17 @@ svg circle { fill: currentColor; stroke: none; }
 .step-head.enter .mark path { stroke-dasharray: 1; animation: draw 260ms var(--ease) both; animation-delay: calc(var(--age, 0ms) + 90ms); }
 .step-head.enter .label { animation: appear var(--t) ease both; animation-delay: var(--age, 0ms); }
 .step .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.92em; }
-.step .label .sub { opacity: 0.72; }
 .step .label .tool { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
 .step .label .add { color: var(--ok); }
 .step .label .del { color: var(--bad); }
 .step.failed .label { color: color-mix(in srgb, var(--bad) 65%, var(--fg)); }
 .step .more { flex: none; width: 12px; height: 12px; opacity: 0; transform: rotate(-90deg); transition: opacity var(--t-fast) ease, transform var(--t) var(--ease); }
-.step-head:hover .more, .step-head:focus-visible .more { opacity: 0.7; }
+.step-head:hover .more, .step-toggle:focus-visible .more { opacity: 0.7; }
 .step.open .more { opacity: 0.7; transform: none; }
 .step.open:has(> .out.enter) .more { animation: turn var(--t) var(--ease); }
 @keyframes turn { from { transform: rotate(-90deg); } }
 .step .acts { display: flex; gap: 2px; }
-.step .time { flex: none; color: var(--muted); font-size: 0.8em; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.step .time { flex: none; color: var(--muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
 .step .acts button { padding: 1px 7px; border-radius: 10px; font-size: 0.85em; color: var(--link); border: 1px solid var(--vscode-contrastBorder, transparent);
   transition: background var(--t-fast) ease, transform var(--t-fast) ease; }
 .step .acts button:hover { background: color-mix(in srgb, var(--link) 14%, transparent); }
@@ -244,7 +254,7 @@ svg circle { fill: currentColor; stroke: none; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 0; padding: 3px 4px; font-size: 0.92em; }
 .status .spinner { margin: 0 2px; }
 .status.enter { animation: rise var(--t) var(--ease) both; animation-delay: var(--age, 0ms); }
-.status .clock { font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 0.92em; }
+.status .clock { font-variant-numeric: tabular-nums; font-size: 0.92em; }
 /* "Thinking…" catches the light: a sheen of the text colour passing over the muted one */
 .status .what { background: linear-gradient(90deg, var(--muted) 0 38%, var(--fg) 50%, var(--muted) 62% 100%) 0 0 / 250% 100%;
   -webkit-background-clip: text; background-clip: text; color: transparent; animation: sheen 2.4s linear infinite; }
@@ -307,7 +317,7 @@ body.in-setup #composer { display: none; }
 .settings-section { margin: 14px 0 0; padding: 12px 0 2px; border-top: 1px solid var(--hairline); }
 .settings-section h3 { margin: 0 0 8px; font-size: 0.78em; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .settings .field-label { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; font-size: 0.9em; color: var(--fg); }
-.settings .field-label:first-of-type { margin-top: 0; }
+.settings :is(h3 + .field-label, .field-label:first-child) { margin-top: 0; }
 .settings .saved { color: var(--ok); font-size: 0.85em; animation: savedFlash 1.6s var(--ease) both; }
 @keyframes savedFlash { 0% { opacity: 0; transform: translateY(2px); } 12%, 70% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 .settings select.field { appearance: auto; }
@@ -447,7 +457,7 @@ button.chip:active { transform: scale(0.95); }
   transition: max-width 200ms var(--ease), padding 200ms var(--ease), opacity var(--t-fast) ease, visibility 0s linear 200ms; }
 .effort:hover, .effort:has(:focus-visible) { background: var(--hover); }
 .effort:hover button.active, .effort:has(:focus-visible) button.active { background: var(--press); }
-.effort button[data-tip]:hover::after {
+.effort button[data-tip]:is(:hover, :focus-visible)::after {
   content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: -40px; width: 190px; z-index: 30;
   padding: 6px 9px; border-radius: 6px; font-size: 0.92em; line-height: 1.4; white-space: normal; text-align: left; color: var(--vscode-editorHoverWidget-foreground, var(--fg));
   background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
@@ -518,10 +528,18 @@ body.vscode-high-contrast :is(.menu, .box, .box:focus-within, .approval, .send, 
 body.vscode-high-contrast :is(.icon, .title, .step-head, .model-button, button.chip, .link-button, .effort button, .send, .setup .option, .step .acts button,
   .user .queued-note button, pre .copy, .banner button, .approval .buttons button, .setup .doc-path button):hover {
   outline: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
-body.vscode-high-contrast .menu button:hover { outline: 1px solid var(--vscode-menu-selectionBorder, var(--vscode-contrastActiveBorder, var(--focus))); outline-offset: -1px; }
+body.vscode-high-contrast .menu button:is(:hover, :focus-visible) { outline: 1px solid var(--vscode-menu-selectionBorder, var(--vscode-contrastActiveBorder, var(--focus))); outline-offset: -1px; }
+/* what's chosen shows by more than its tint */
+body.vscode-high-contrast :is([aria-pressed="true"], [aria-checked="true"]):not(:focus-visible):not(:hover) { outline: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
 body.vscode-high-contrast .send.stop::after { border-right-color: transparent; }
 body.vscode-high-contrast .step:not(.running) .mark { box-shadow: inset 0 0 0 1px currentColor; }
 body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: none; }
+
+/* ---- forced colours (Windows contrast themes): keep the theme's colours where a shape alone carries the meaning ---- */
+@media (forced-colors: active) {
+  .setup .radio, .setup .radio::after, .setup .dot::after, .meter::after, .spinner, .step.running .mark::after, .settings .status-pill.busy::before, .send.stop::after { forced-color-adjust: none; }
+  .status .what { background: none; color: var(--fg); animation: none; }
+}
 
 /* ---- reduced motion: everything lands at once ---- */
 @media (prefers-reduced-motion: reduce) {

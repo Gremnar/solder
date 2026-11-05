@@ -15,7 +15,7 @@ class Position { constructor(/** @type {number} */ line, /** @type {number} */ c
 const SymbolKind = Object.fromEntries(KINDS.flatMap((name, index) => [[name, index], [index, name]]));
 const load = /** @type {any} */ (Module)._load;
 /** @type {any} */ (Module)._load = function (/** @type {string} */ request, /** @type {any[]} */ ...rest) {
-  return request === "vscode" ? { SymbolKind, Position, languages: { onDidChangeDiagnostics: () => ({ dispose() {} }) }, workspace: { textDocuments: [] } } : load.call(this, request, ...rest);
+  return request === "vscode" ? { SymbolKind, Position, Uri: { file: (/** @type {string} */ fsPath) => ({ fsPath, scheme: "file" }) }, languages: { onDidChangeDiagnostics: () => ({ dispose() {} }) }, workspace: { textDocuments: [] } } : load.call(this, request, ...rest);
 };
 const { outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf } = require("../src/tools.js");
 
@@ -138,5 +138,40 @@ test("backups stay under the storage limit, oldest first; a deleted chat's backu
     tools.removeBackups("../escape"); // not a chat id: ignored
   } finally {
     fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test("asked first: git's and VS Code's files, links out of the workspace, reads outside it; plain instruction names only", () => {
+  const { WorkspaceTools, plainNames, runsPrograms } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-safe-"));
+  try {
+    const ws = path.join(top, "ws");
+    const outside = path.join(top, "outside");
+    fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret.txt"), "s");
+    fs.writeFileSync(path.join(ws, "a.js"), "a");
+    fs.symlinkSync(outside, path.join(ws, "out"), "junction");
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.root = () => ws;
+    tools.docsFolders = () => [];
+    const ask = (/** @type {string} */ name, /** @type {any} */ args) => tools.needsApproval(name, args);
+    assert.equal(ask("write_file", { path: "a.js" }), null);
+    assert.match(String(ask("write_file", { path: ".git/config" })), /\.git, where a change can make programs run/);
+    assert.match(String(ask("edit_file", { path: ".gitattributes" })), /programs run/);
+    assert.match(String(ask("write_file", { path: ".VSCode/tasks.json" })), /\.vscode/);
+    assert.match(String(ask("move_item", { from: "a.js", to: ".git/hooks/pre-commit" })), /programs run/);
+    assert.match(String(ask("write_file", { path: "out/.bashrc" })), /outside the workspace/, "a junction out of the workspace is outside");
+    assert.equal(tools.resolve("out/secret.txt").inside, false);
+    assert.equal(ask("read_file", { path: "a.js" }), null);
+    assert.match(String(ask("read_file", { path: path.join(outside, "secret.txt") })), /reads a file outside/);
+    tools.docsFolders = () => [{ path: outside }];
+    assert.equal(ask("read_file", { path: path.join(outside, "secret.txt") }), null, "docs folders are read freely");
+    assert.match(String(ask("changes", { path: outside })), /runs git in a folder outside/);
+    assert.throws(() => tools.resolve("\\\\server\\share\\a.txt"), /Network paths/);
+    assert.equal(runsPrograms(path.join(ws, "src", "git.js")), "");
+    assert.deepEqual(plainNames(["AGENTS.md", "../../.ssh/id_rsa", "sub/X.md", "C:x", "..", "CLAUDE.md", 3]), ["AGENTS.md", "CLAUDE.md"]);
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
   }
 });

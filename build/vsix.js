@@ -11,7 +11,26 @@ const zlib = require("node:zlib");
 const root = path.resolve(__dirname, "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 // What ships: nothing else (no tests, docs or private notes).
-const INCLUDE = ["package.json", "README.md", "LICENSE", "src", "media"];
+const INCLUDE = ["package.json", "README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE", "src", "media"];
+
+/** The repository on GitHub, from package.json: the Marketplace's links point there. */
+const repository = String(manifest.repository?.url || "").replace(/\.git$/, "");
+if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("package.json needs repository.url on github.com");
+const rawBase = repository.replace("https://github.com/", "https://raw.githubusercontent.com/") + "/HEAD/";
+const blobBase = repository + "/blob/HEAD/";
+
+/**
+ * The Marketplace's copy of the README. It can't show relative links, so images point at the repository's raw
+ * files and other links at its pages (as vsce does). The README that ships stays relative: the Guide shows it
+ * from the extension's own folder, with no network.
+ * @param {string} text
+ */
+function marketplaceReadme(text) {
+  return text.replace(/(!?)\[([^\]]*)\]\(([^)\s]+)\)/g, (whole, bang, label, target) => {
+    if (/^([a-z]+:|#)/i.test(target)) return whole;
+    return `${bang}[${label}](${(bang ? rawBase : blobBase) + target.replace(/^\.?\//, "")})`;
+  });
+}
 
 /** @returns {{name: string, data: Buffer}[]} */
 function extensionFiles() {
@@ -44,13 +63,22 @@ function vsixManifest() {
     <Description xml:space="preserve">${xml(m.description)}</Description>
     <Tags>${xml((m.keywords || []).join(","))}</Tags>
     <Categories>${xml((m.categories || []).join(","))}</Categories>
-    <GalleryFlags>Public</GalleryFlags>
+    <GalleryFlags>Public${m.preview ? " Preview" : ""}</GalleryFlags>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="${xml(m.engines.vscode)}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionPack" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="${xml((m.extensionKind || ["workspace"]).join(","))}" />
       <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="${xml(repository)}" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Getting Started" Value="${xml(repository)}" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.GitHub" Value="${xml(repository)}" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Support" Value="${xml(m.bugs?.url || repository + "/issues")}" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="${xml(m.homepage || repository)}" />
+      <Property Id="Microsoft.VisualStudio.Services.Branding.Color" Value="${xml(m.galleryBanner?.color || "")}" />
+      <Property Id="Microsoft.VisualStudio.Services.Branding.Theme" Value="${xml(m.galleryBanner?.theme || "default")}" />
+      <Property Id="Microsoft.VisualStudio.Services.Content.Pricing" Value="${xml(m.pricing || "Free")}" />
       <Property Id="Microsoft.VisualStudio.Services.GitHubFlavoredMarkdown" Value="true" />
     </Properties>
     <License>extension/LICENSE.txt</License>${m.icon ? `
@@ -62,7 +90,8 @@ function vsixManifest() {
   <Dependencies />
   <Assets>
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
-    <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/README.md" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/readme.marketplace.md" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.Changelog" Path="extension/CHANGELOG.md" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />${m.icon ? `
     <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/${xml(m.icon)}" Addressable="true" />` : ""}
   </Assets>
@@ -140,6 +169,7 @@ const all = [
   { name: "extension.vsixmanifest", data: Buffer.from(vsixManifest(), "utf8") },
   { name: "[Content_Types].xml", data: Buffer.from(contentTypes(["x.vsixmanifest", ...files.map((f) => f.name)]), "utf8") },
   ...files,
+  { name: "extension/readme.marketplace.md", data: Buffer.from(marketplaceReadme(fs.readFileSync(path.join(root, "README.md"), "utf8")), "utf8") },
 ];
 const out = path.join(root, `${manifest.name}-${manifest.version}.vsix`);
 fs.writeFileSync(out, zip(all));

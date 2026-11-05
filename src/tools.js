@@ -108,18 +108,38 @@ class WorkspaceTools {
     const raw = String(given ?? "").trim().replace(/^["']|["']$/g, "");
     if (!raw) throw new ToolError(RESULTS.noPath);
     const full = path.resolve(this.base() || process.cwd(), raw);
-    const inside = !!root && within(full, root);
+    // Inside means inside once links are followed: a link in the workspace can point anywhere.
+    const inside = !!root && within(full, root) && within(realPath(full), realPath(root));
+    // A network path can hand your Windows sign-in to that server, so only the workspace's own are opened.
+    if (!inside && /^(\\\\|\/\/)/.test(full)) throw new ToolError(RESULTS.networkPath);
     return { uri: vscode.Uri.file(full), full, inside, shown: this.shown(full) };
   }
 
-  /** Why a call needs asking about first, or null: removing anything, and changes outside the workspace. */
+  /**
+   * Why a call needs asking about first, or null: removing anything; changes outside the workspace, or to the
+   * files that can make programs run (git's and VS Code's); reading outside the workspace and your docs folders.
+   */
   needsApproval(/** @type {string} */ name, /** @type {any} */ args) {
     if (name === "move_item") {
       // Anything that leaves the workspace, or lands outside it, is asked about.
       let from, to;
       try { from = this.resolve(args.from); to = this.resolve(args.to); } catch { return null; }
+      const risky = runsPrograms(from.full) || runsPrograms(to.full);
+      if (risky) return RUNS_PROGRAMS(risky);
       if (from.inside && to.inside) return null;
       return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
+    }
+    if (name === "read_file" || name === "symbols") {
+      if (!args.path) return null;
+      let file;
+      try { file = this.resolve(args.path); } catch { return null; }
+      if (file.inside || this.docsFolders().some((folder) => within(realPath(file.full), realPath(folder.path)))) return null;
+      return "It reads a file outside the workspace folder and your docs folders.";
+    }
+    if (name === "changes" && args.path) {
+      let target;
+      try { target = this.resolve(args.path); } catch { return null; }
+      return target.inside ? null : "It runs git in a folder outside the workspace folder.";
     }
     let target;
     try { target = this.resolve(args.path); } catch { return null; }
@@ -135,6 +155,8 @@ class WorkspaceTools {
       return what + (target.inside ? "." : ", outside the workspace folder.") + unsaved;
     }
     if (name !== "write_file" && name !== "edit_file") return null;
+    const risky = runsPrograms(target.full);
+    if (risky) return RUNS_PROGRAMS(risky);
     if (!target.inside) return "It changes a file outside the workspace folder.";
     // Solder saves what it changes: unsaved typing in that file would be saved along with it.
     if (this.dirty(target.full)) return "This file has unsaved changes in the editor: they'll be saved along with Solder's change.";
@@ -220,7 +242,7 @@ class WorkspaceTools {
   nestedAgents(/** @type {any} */ file, /** @type {any} */ chat) {
     const root = this.root();
     if (!file.inside || !root) return "";
-    const names = vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]);
+    const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
     chat.agentsSeen = chat.agentsSeen || [];
     let folder = path.dirname(file.full);
     const notes = [];
@@ -1242,6 +1264,41 @@ function removeEmpty(from, top) {
   }
 }
 
+/** Where a change can make programs run: git's settings, hooks and filters, and VS Code's tasks and settings. */
+const PROGRAM_FOLDERS = [".git", ".vscode"];
+const PROGRAM_FILES = [".gitattributes", ".gitmodules", ".gitconfig"];
+const RUNS_PROGRAMS = (/** @type {string} */ what) =>
+  `It changes ${what}, where a change can make programs run (git's hooks and filters, VS Code's tasks and settings).`;
+
+/** The git or VS Code folder or file a path is in, or "". @param {string} full */
+function runsPrograms(full) {
+  const parts = path.resolve(full).split(/[\\/]/).map((part) => part.toLowerCase());
+  const folder = parts.slice(0, -1).find((part) => PROGRAM_FOLDERS.includes(part));
+  if (folder) return folder;
+  const last = parts[parts.length - 1];
+  return PROGRAM_FOLDERS.includes(last) || PROGRAM_FILES.includes(last) ? last : "";
+}
+
+/**
+ * A path with its links followed: the real path of the nearest part that exists, plus the rest (for a file
+ * that isn't there yet). @param {string} full
+ */
+function realPath(full) {
+  const rest = [];
+  for (let at = path.resolve(full); ;) {
+    try { return path.join(fs.realpathSync.native(at), ...rest.reverse()); } catch { /* not there yet */ }
+    const up = path.dirname(at);
+    if (up === at) return path.resolve(full);
+    rest.push(path.basename(at));
+    at = up;
+  }
+}
+
+/** The instruction file names that are plain names (no folders, no ..), so a setting can't point outside. @param {unknown} names */
+function plainNames(names) {
+  return (Array.isArray(names) ? names : []).filter((name) => typeof name === "string" && /^[^\\/:]+$/.test(name) && name !== "." && name !== "..");
+}
+
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
 function within(full, folder) {
   const a = path.resolve(full).toLowerCase();
@@ -1331,4 +1388,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

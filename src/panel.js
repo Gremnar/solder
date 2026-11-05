@@ -11,7 +11,7 @@ const { Engine, labelOf, parseArguments } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
-const { WorkspaceTools } = require("./tools.js");
+const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
@@ -101,7 +101,7 @@ class SolderPanel {
   instructions() {
     const root = this.tools.root();
     if (!root) return [];
-    const names = vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]);
+    const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
     const found = [];
     for (const name of names) {
       try {
@@ -533,11 +533,11 @@ class SolderPanel {
 
   /** @param {vscode.Webview} webview @param {vscode.Uri} media */
   html(webview, media) {
-    const nonce = Array.from({ length: 24 }, () => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 62)]).join("");
+    const nonce = require("node:crypto").randomBytes(18).toString("base64url");
     const css = webview.asWebviewUri(vscode.Uri.joinPath(media, "panel.css"));
     const js = webview.asWebviewUri(vscode.Uri.joinPath(media, "panel.js"));
     return fs.readFileSync(path.join(media.fsPath, "panel.html"), "utf8")
-      .replace(/\{\{csp\}\}/g, `default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};`)
+      .replace(/\{\{csp\}\}/g, `default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}'; font-src ${webview.cspSource}; form-action 'none'; base-uri 'none'; frame-src 'none';`)
       .replace(/\{\{nonce\}\}/g, nonce).replace("{{css}}", css.toString()).replace("{{js}}", js.toString());
   }
 }

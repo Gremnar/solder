@@ -188,6 +188,7 @@ this. Reply with only the title, without quotes.\n\n" + excerpt,
 
 /** The tools' results and errors (src/tools.js). An error reaches the model as "Error: " + the text. */
 const RESULTS = {
+  networkPath: "Network paths (\\\\server\\share) aren't opened, outside the workspace: use a path on this PC.",
   error: (/** @type {string} */ message) => `Error: ${message}`,
   noPath: "No path was given.",
   noTool: (/** @type {string} */ name) => `There's no tool called ${name}.`,
