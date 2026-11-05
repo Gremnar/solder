@@ -143,8 +143,8 @@ function toolDefinitions() {
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
-  notRunFull: "Not run: this reply's results already reached the size limit for one step. Ask for it in your next \
-step, a range at a time if it's big.",
+  notRunFull: "Not run yet, only because this reply's results reached the size limit for one step. Call it again \
+in your next step, before you answer: nothing is wrong with it.",
   resume: "Please carry on from where you stopped.",
   resumeStopped: "Please carry on from where you stopped. I stopped it, but I didn't mean to cancel anything: run \
 again whatever was stopped or not run, then go on.",
@@ -216,8 +216,10 @@ strings, or uses it missed, such as through require):`,
   sameText: "old_text and new_text are the same, so there's nothing to change.",
   changedOnDisk: (/** @type {string} */ file) => `${file} changed on disk a moment ago and VS Code hasn't caught up yet, so nothing \
 was changed. Read it again, then make the change.`,
-  notSaved: (/** @type {string} */ file) => `VS Code couldn't save ${file} (it may have changed on disk), so the change was undone \
-in the editor too. Read it again, then make the change.`,
+  notSaved: (/** @type {string} */ file) => `VS Code couldn't save ${file} (it may be read-only, or have changed on disk), so the \
+change was undone in the editor too. Read it again before trying anything else.`,
+  notWritable: (/** @type {string} */ file) => `${file} couldn't be written: it may be read-only, or locked by another program.`,
+  sameContent: (/** @type {string} */ file) => `${file} already has exactly that content, so nothing changed.`,
   notInFile: (/** @type {string} */ name, /** @type {string} */ file) =>
     `${name} doesn't appear in ${file} as a whole word. Give a file it appears in (search finds one).`,
   definitions: (/** @type {string} */ name, /** @type {number} */ count) =>
@@ -238,9 +240,9 @@ whole-word text matches either.`,
   noChanges: (/** @type {string} */ where) => `Nothing has changed since the last commit${where ? ` in ${where}` : ""}.`,
   changedFiles: (/** @type {number} */ count, /** @type {boolean} */ withDiff) =>
     `Changed since the last commit (${count} file${count === 1 ? "" : "s"})${withDiff
-      ? ", with the diff below (new files aren't in it: read them)" : "; call changes with a path for a diff"}:`,
+      ? ", with the diff below (new files aren't in it: read the ones that matter for the task)" : "; call changes with a path for a diff"}:`,
   changedCapped: (/** @type {number} */ more) => `(${more} more; call changes with a folder to narrow it down)`,
-  newFiles: (/** @type {string[]} */ files) => `New, not in git yet (read them to see them): ${files.join(", ")}`,
+  newFiles: (/** @type {string[]} */ files) => `New, not in git yet (read the ones that matter for the task): ${files.join(", ")}`,
   noCommits: "The repository has no commits yet, so everything in it is new.",
   unsaved: (/** @type {string[]} */ files) => `Unsaved changes in the editor aren't included: ${files.join(", ")}.`,
   docsNone: "No docs folders are set up. The user can add them in Solder's settings (Docs folders), or with \

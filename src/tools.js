@@ -700,6 +700,7 @@ class WorkspaceTools {
     const previous = exists ? (open ? open.getText() : fs.readFileSync(file.full, "utf8")) : "";
     const backup = exists ? await this.backup(chat, file, previous) : "";
     const before = exists ? problemKeys(file.uri) : new Set();
+    if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
     const madeFolder = exists ? "" : firstMissing(path.dirname(file.full));
     if (open) {
       stale(open, file);
@@ -709,7 +710,8 @@ class WorkspaceTools {
       await saveOrRevert(open, file, previous);
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file.full)));
-      await vscode.workspace.fs.writeFile(file.uri, Buffer.from(content, "utf8"));
+      try { await vscode.workspace.fs.writeFile(file.uri, Buffer.from(content, "utf8")); }
+      catch { throw new ToolError(RESULTS.notWritable(file.shown)); }
       await vscode.workspace.openTextDocument(file.uri).then(() => {}, () => {}); // lets language servers look
     }
     const lines = lineCount(content);
@@ -730,7 +732,8 @@ class WorkspaceTools {
       await this.mustBeFile(file);
       // VS Code only checks open files: open it, and give its language server a moment (a file it hasn't
       // seen yet takes longer: up to 5 s, sooner if its diagnostics arrive).
-      const wasOpen = vscode.workspace.textDocuments.some((d) => d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+      // Solder's own reads open files without showing them; language servers like TypeScript's check only shown ones.
+      const wasOpen = shownInEditor(file.full);
       const doc = await vscode.workspace.openTextDocument(file.uri).then((d) => d, () => null);
       const reports = !!doc && this._diagnosed.has(doc.languageId);
       const heard = await this.diagnosticsFor(file, wasOpen ? PROBLEMS_WAIT_MS : reports ? PROBLEMS_COLD_MS : DIAGNOSTICS_SHORT_MS);
@@ -1143,7 +1146,17 @@ async function saveOrRevert(/** @type {vscode.TextDocument} */ document, /** @ty
 
 /** @param {string} text */
 function hash(text) {
-  return crypto.createHash("sha1").update(text).digest("hex");
+  return crypto.createHash("sha1").update(String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")).digest("hex");
+}
+
+/** Whether a file is shown in an editor tab (not just opened by Solder in the background). @param {string} full */
+function shownInEditor(full) {
+  const key = full.toLowerCase();
+  return vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => {
+    const input = /** @type {any} */ (tab.input);
+    const uri = input?.uri ?? input?.modified;
+    return !!uri && uri.scheme === "file" && uri.fsPath.toLowerCase() === key;
+  }));
 }
 
 /** A file's time and size, to tell later whether it changed. @param {string} full */

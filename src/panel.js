@@ -176,7 +176,10 @@ class SolderPanel {
       case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; break;
       case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; break;
       case "done": if (event.limit) this.error = { message: `Stopped at the limit of ${event.limit} steps for one message.`, resumable: true }; break;
-      case "steer-unsent": this.post(); this.view?.webview.postMessage({ type: "restore", text: event.text }); return;
+      case "steer-unsent":
+        // Typed while it worked but never delivered: the next message (after a Stop, back into the box instead).
+        if (event.send) { setImmediate(() => this.sendQueued(event)); return; }
+        this.post(); this.view?.webview.postMessage({ type: "restore", text: event.text }); return;
     }
     this.post();
   }
@@ -277,7 +280,8 @@ class SolderPanel {
    */
   async fromEditor(kind) {
     const editor = vscode.window.activeTextEditor; // taken before the panel gets focus
-    if (!editor || editor.selection.isEmpty) return;
+    const picked = editor ? this.selectionBlock(editor) : null; // and the selection with it
+    if (!editor || !picked) return;
     await vscode.commands.executeCommand("solder.chat.focus");
     if (kind === "add") { this.view?.webview.postMessage({ type: "attachSelection" }); return; }
     let text = kind === "fix" ? SELECTION.fix : SELECTION.explain;
@@ -288,7 +292,14 @@ class SolderPanel {
         .slice(0, 20).map((d) => `- line ${d.range.start.line + 1}: ${d.message.split("\n")[0]}`);
       if (lines.length) text += "\n\n" + SELECTION.problems(lines);
     }
-    await this.send({ text, selection: true, editor });
+    await this.send({ text, selection: true, editor, picked });
+  }
+
+  /** A queued message that never went with a step: now as a message of its own. @param {any} queued */
+  async sendQueued(queued) {
+    if (this.engine.busy) { this.engine.steer(queued.text, { context: queued.context, chips: queued.chips }); this.post(); return; }
+    this.error = null;
+    this.engine.ask(this.chat, queued.text, { context: queued.context, chips: queued.chips });
   }
 
   async send(message) {
@@ -296,8 +307,8 @@ class SolderPanel {
     if (!text) return;
     if (this.engine.busy) {
       // Busy: it goes with the next step, the selection with it when it came from the menu.
-      const picked = message.editor ? this.selectionBlock(message.editor) : null;
-      this.engine.steer(picked ? `${text}\n\n${picked.block}` : text);
+      const picked = message.picked ?? (message.editor ? this.selectionBlock(message.editor) : null);
+      this.engine.steer(text, picked ? { context: picked.block, chips: [picked.chip] } : {});
       this.post();
       return;
     }
@@ -314,7 +325,7 @@ class SolderPanel {
     const editor = message.editor ?? vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
       const shown = vscode.workspace.asRelativePath(editor.document.uri, false);
-      const picked = message.selection ? this.selectionBlock(editor) : null;
+      const picked = message.picked ?? (message.selection ? this.selectionBlock(editor) : null);
       if (picked) {
         parts.push(picked.block);
         chips.push(picked.chip);
@@ -420,7 +431,7 @@ class SolderPanel {
       error: this.error,
       answerTokens: this.answerTokens,
       credits: this.credits,
-      steers: [...this.engine.steers],
+      steers: this.engine.steers.map((s) => s.text),
       workspace: !!this.tools.root(),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,

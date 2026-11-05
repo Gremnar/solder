@@ -151,14 +151,24 @@ class Engine {
     if (resolve) { this.approvals.delete(id); resolve(decision); }
   }
 
-  /** A message typed while it works: it goes with the next result. @param {string} text */
-  steer(text) {
-    if (text.trim()) this.steers.push(text.trim());
+  /**
+   * A message typed while it works: it goes with the next result (or, if there's no next step, as the next
+   * message). `extra` holds what goes with it, such as a selection from the editor's menu.
+   * @param {string} text @param {{context?: string, chips?: string[]}} [extra]
+   */
+  steer(text, extra = {}) {
+    if (text.trim()) this.steers.push({ text: text.trim(), context: extra.context || "", chips: extra.chips || [] });
   }
 
   /** Take back a queued message before it goes. @param {number} index @returns {string} its text, or "" */
   unsteer(index) {
-    return this.steers.splice(index, 1)[0] ?? "";
+    return this.steers.splice(index, 1)[0]?.text ?? "";
+  }
+
+  /** Queued messages as one: their texts, what goes with them, their chips. */
+  _queued() {
+    return { text: this.steers.map((s) => s.text).join("\n\n"), context: this.steers.map((s) => s.context).filter(Boolean).join("\n\n"),
+      chips: this.steers.flatMap((s) => s.chips) };
   }
 
   /** @param {Chat} chat @param {(signal: AbortSignal) => Promise<void>} start */
@@ -169,12 +179,13 @@ class Engine {
     const controller = this.controller = new AbortController();
     this.emit({ type: "busy", chat: chat.id, busy: true });
     this.answerTokens = 0;
+    let stopped = false;
     try {
       this._settle(chat, TEXTS.notRunStopped); // a reply that died mid-batch last time
       await start(controller.signal);
       await this._loop(chat, controller.signal);
     } catch (error) {
-      const stopped = error instanceof Cancelled || controller.signal.aborted;
+      stopped = error instanceof Cancelled || controller.signal.aborted;
       this._settle(chat, stopped ? TEXTS.notRunStopped : TEXTS.notRunFailed);
       await this._save(chat).catch(() => {});
       if (stopped) {
@@ -190,7 +201,8 @@ class Engine {
       this.controller = null;
       this.approvals.clear();
       if (this.steers.length) {
-        this.emit({ type: "steer-unsent", chat: chat.id, text: this.steers.join("\n\n") });
+        // Not delivered (the reply ended without another step): sent as the next message, unless you stopped it.
+        this.emit({ type: "steer-unsent", chat: chat.id, ...this._queued(), text: this._queued().text, send: !stopped });
         this.steers = [];
       }
       this.emit({ type: "busy", chat: chat.id, busy: false });
@@ -259,7 +271,7 @@ class Engine {
     /** @type {Stored[]} */
     const added = [];
     let batchChars = 0;
-    const batchLimit = MAX_BATCH_RESULT_CHARS / (chat.tokenRatio || 1);
+    const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
     for (let index = 0; index < calls.length; index++) {
       const call = calls[index];
       const name = call.function.name;
@@ -303,11 +315,12 @@ class Engine {
       const notes = [];
       if (roundsLeft <= WRAP_UP_ROUNDS) notes.push(TEXTS.wrapUp(roundsLeft));
       if (this.steers.length && !signal.aborted) {
-        const text = this.steers.join("\n\n");
+        const queued = this._queued();
+        const text = queued.text;
         this.steers = [];
-        notes.push(TEXTS.steer(text));
+        notes.push(TEXTS.steer(queued.context ? `${text}\n\n${queued.context}` : text));
         last.meta.steer = text;
-        last.meta.keep = [last.meta.keep, TEXTS.steer(text)].filter(Boolean).join("\n\n");
+        last.meta.keep = [last.meta.keep, TEXTS.steer(queued.context ? `${text}\n\n${queued.context}` : text)].filter(Boolean).join("\n\n");
         this.emit({ type: "steer-sent", chat: chat.id, text });
       }
       if (notes.length) {
@@ -578,8 +591,14 @@ function resultText(message) {
  */
 function trim(/** @type {Chat} */ chat) {
   const start = chat.compaction ? chat.compaction.through : 0;
+  // The results of this task's last two steps stay whole: a model reads across a step or two before it answers
+  // (cutting the step before the newest one made it give up). Older ones are cut as the budget needs.
   let latest = chat.messages.length - 1;
   while (latest >= start && chat.messages[latest].role === "tool") latest--;
+  const turn = lastUser(chat);
+  for (let index = latest - 1; index > Math.max(start, turn); index--) {
+    if (chat.messages[index].role === "assistant" && chat.messages[index].tool_calls?.length) { latest = index; break; }
+  }
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const ratio = chat.tokenRatio || 1;
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;

@@ -474,7 +474,7 @@ test("each step records how long it took; a queued message can be taken back", a
   assert.ok(chat.messages.find((m) => m.role === "tool").meta.ms >= 25);
   e.steer("one"); e.steer("two");
   assert.equal(e.unsteer(0), "one");
-  assert.deepEqual(e.steers, ["two"]);
+  assert.deepEqual(e.steers.map((s) => s.text), ["two"]);
   assert.equal(e.unsteer(5), "");
 });
 
@@ -533,4 +533,31 @@ test("compaction doesn't run when what it could summarise is a sliver", async ()
   await engine(client, fakeHost(), events, { compactAt: 30_000 }).ask(chat, "z".repeat(140_000));
   assert.ok(!events.some((x) => x.type === "compacting"), "no request spent summarising two short messages");
   assert.equal(client.sent.length, 1);
+});
+
+test("results from a task's last two steps stay whole, so reading spread over two steps survives", () => {
+  const chat = Engine.newChat();
+  const big = "y".repeat(60_000);
+  chat.messages.push({ role: "user", content: "read them all", meta: { typed: "x" } });
+  for (const step of ["s1", "s2", "s3"]) {
+    chat.messages.push({ role: "assistant", content: "", tool_calls: [readCall(step + "a"), readCall(step + "b")] },
+      { role: "tool", tool_call_id: step + "a", content: big, meta: { summary: step + "a" } },
+      { role: "tool", tool_call_id: step + "b", content: big, meta: { summary: step + "b" } });
+  }
+  trim(chat);
+  assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["s1a", "s1b"]);
+});
+
+test("a message queued while it works keeps its selection, and goes as the next message if no step comes", async () => {
+  let e;
+  const events = [];
+  const client = fakeClient([(req) => { e.steer("also explain this", { context: "(Selected in a.js, lines 1–2:)", chips: ["a.js:1–2"] }); return { content: "first answer" }; }]);
+  const chat = Engine.newChat();
+  e = engine(client, fakeHost(), events);
+  await e.ask(chat, "explain that");
+  const unsent = events.find((x) => x.type === "steer-unsent");
+  assert.equal(unsent.send, true, "no next step came, so it's sent as the next message");
+  assert.equal(unsent.text, "also explain this");
+  assert.equal(unsent.context, "(Selected in a.js, lines 1–2:)");
+  assert.deepEqual(unsent.chips, ["a.js:1–2"]);
 });
