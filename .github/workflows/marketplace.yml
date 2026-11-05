@@ -65,7 +65,8 @@ jobs:
           credential=$(jq -r '.credential // empty' exchange.json 2>/dev/null || true)
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ] || [ -z "$credential" ]; then
             echo "::error::The Marketplace refused the exchange (HTTP $status). Is there a Trusted Publishing policy for this repository and marketplace.yml?"
-            jq -r '.message // .error_description // .error // empty' exchange.json 2>/dev/null | head -c 1000 || true
+            # The answer holds no secret (the token went the other way): shown whole, so a refusal says why.
+            head -c 1500 exchange.json || true; echo
             exit 1
           fi
           echo "::add-mask::$credential"
