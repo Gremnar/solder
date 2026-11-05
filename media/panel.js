@@ -506,12 +506,13 @@
         `<div class="actions"><button class="link-button primary" data-action="refreshModels">Try again</button>` +
         `<button class="link-button" data-action="settings">Settings</button><button class="link-button" data-action="setKey">Set API key</button></div></div>`;
     }
-    const feature = (/** @type {string} */ icon, /** @type {string} */ html) => `<li><span class="ico">${icon}</span><span>${html}</span></li>`;
+    // Starter cards: each sends its prompt (from prompt.js, through the extension) and starts the chat.
+    const cards = (state.starters || []).map((/** @type {any} */ s, /** @type {number} */ i) =>
+      `<button class="starter" data-starter="${escape(s.id)}" style="--i:${i}"><span class="starter-title">${escape(s.title)}</span>` +
+      `<span class="starter-blurb">${escape(s.blurb)}</span></button>`).join("");
     return `<div class="welcome" data-enter="w:${state.chat.id}"><div class="logo">${ICONS.solder}</div><h2>Solder</h2>` +
-      `<p class="lead">Ask about your code, or for a change.</p><ul class="features">` +
-      feature(ICONS.search, "<b>Reads and searches</b> your workspace") +
-      feature(ICONS.edit, "<b>Edits</b>, then checks for problems") +
-      feature(ICONS.undo, "<b>Every change</b> can be reviewed and undone") + "</ul>" +
+      `<p class="lead">Ask about your code, or for a change. Every edit can be reviewed and undone.</p>` +
+      (cards && state.workspace ? `<div class="starters">${cards}</div>` : "") +
       (state.workspace ? `<p class="hint"><kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.</p>`
         : `<p class="aside">Open a folder first: Solder works inside a workspace.</p>`) + "</div>";
   }
@@ -805,11 +806,12 @@
 
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
+    else if (d.starter) { stickToBottom = true; vscode.postMessage({ type: "starter", id: d.starter }); }
     else if (d.sact) {
       if (el.hasAttribute("disabled")) return;
       if (d.sact === "key") {

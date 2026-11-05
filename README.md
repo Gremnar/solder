@@ -13,7 +13,7 @@
    - **your default model;**
    - **your own docs folders:** optional, see [Your docs](#your-docs);
    - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`".
-3. **Ask.** Type in the box at the bottom and press **Enter**; **Shift+Enter** adds a new line.
+3. **Ask.** Type in the box at the bottom and press **Enter**; **Shift+Enter** adds a new line. Or pick one of the cards on a new chat: summarise the codebase, explain or fix a script, clean up, learn something, review your changes, or ask what Solder can do.
 
 ![Guided setup: choosing the default model](media/screenshots/guided-setup.png)
 

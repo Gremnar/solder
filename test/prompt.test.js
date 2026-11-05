@@ -7,9 +7,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
+const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "1e3116bb5f212d5a";
+const PINNED = "c78d8dade2d01081";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -49,6 +49,7 @@ function everything() {
     bare: systemPrompt({ workspace: "C:\\work" }),
     withDocs: systemPrompt({ workspace: "C:\\work", docs: [{ path: "D:\\Docs", about: "ABOUT" }, { path: "E:\\Specs" }] }),
     tools: toolDefinitions(),
+    starters: STARTERS,
     texts: filled(TEXTS, SAMPLES, "TEXTS"),
     results: filled(RESULTS, RESULT_SAMPLES, "RESULTS"),
     time: timeNote(new Date(2026, 10, 4, 14, 5)),

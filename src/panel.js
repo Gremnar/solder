@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { systemPrompt } = require("./prompt.js");
+const { systemPrompt, STARTERS } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
 const { WorkspaceTools } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
@@ -188,6 +188,7 @@ class SolderPanel {
     switch (message.type) {
       case "ready": this.post(); this.postEditor(); return;
       case "send": return this.send(message);
+      case "starter": return this.start(String(message.id || ""));
       case "stop": this.engine.stop(); return;
       case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
@@ -261,6 +262,14 @@ class SolderPanel {
   }
 
   /** @param {{text: string, selection?: boolean, file?: boolean}} message */
+  /** A starter card: its prompt, as your first message, in a chat named after it. @param {string} id */
+  async start(id) {
+    const starter = STARTERS.find((s) => s.id === id);
+    if (!starter || this.engine.busy || this.chat.messages.length) return;
+    this.chat.title = starter.title;
+    await this.send({ text: starter.prompt });
+  }
+
   async send(message) {
     const text = String(message.text || "").trim();
     if (!text) return;
@@ -377,6 +386,7 @@ class SolderPanel {
       credits: this.credits,
       steers: [...this.engine.steers],
       workspace: !!this.tools.root(),
+      starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
       settings: this.setup.view ? null : this.settingsScreen.view,
     });

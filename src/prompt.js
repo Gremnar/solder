@@ -286,6 +286,37 @@ searching again with other words.`,
     `Removed ${file}` + (files === null ? "" : ` (a folder with ${files.toLocaleString("en-US")} file${files === 1 ? "" : "s"})`) + ".",
 };
 
+/**
+ * The cards on a new chat's screen: clicking one sends its prompt, in the user's own words, and the chat is
+ * named after its title. Ask-first prompts ask one to three questions at a time, as Alloy's do.
+ */
+const STARTERS = [
+  { id: "summary", title: "Summarise this codebase", blurb: "What it's for, how it's laid out, and where to start reading.",
+    prompt: "Give me an overview of this codebase: what it's for, how it's organised, the main parts and how they fit \
+together, and where I should start reading. Look at its structure and key files first (outlines help with big ones), \
+read only what you need, and keep it to a short summary with file paths." },
+  { id: "script", title: "Explain or fix a script", blurb: "A script or function that fails or puzzles you.",
+    prompt: "I have a script or piece of code I'd like explained or fixed. Ask me where it is, what it should do and \
+what goes wrong (an error message, or what it does instead), one to three questions at a time. Read it before you \
+suggest anything, explain what you find in plain words, and tell me what you'd change before you change it." },
+  { id: "cleanup", title: "Clean up and organise", blurb: "Structure, naming and dead code, one step at a time.",
+    prompt: "I'd like to clean up and organise this codebase. Look at how it's laid out first, then suggest a short \
+plan: what you'd rename, move, merge or remove, and why, the most worthwhile first. Don't change anything until I've \
+said which parts to do; then do them one at a time and check for problems after each." },
+  { id: "learn", title: "Learn a language or concept", blurb: "Step by step, with examples from your own code.",
+    prompt: "I'd like to learn a coding language or concept. Ask me which one and what I already know, one to three \
+questions at a time. Then teach it step by step at my pace, with short examples, using code from this workspace where \
+it helps, and check I've understood before moving on." },
+  { id: "review", title: "Review my changes", blurb: "What's changed since the last commit, checked for mistakes.",
+    prompt: "Review my uncommitted changes. Look at what's changed since the last commit, read around the changes \
+where you need to, and tell me about anything that looks wrong or risky (bugs, missed cases, leftovers), the most \
+important first, with file and line. Don't change anything." },
+  { id: "intro", title: "What can Solder do for me?", blurb: "Its tools, and ideas for your own work.",
+    prompt: "What can you do for me in this chat? Tell me briefly, in plain words, what each of your tools lets you do \
+with my code, and what you can't do (such as running commands). Then ask me what I mostly work on, one to three questions at a time, and suggest \
+a few concrete things you could take off my hands." },
+];
+
 /** "(Wednesday, 4 November 2026, 14:05)": what each user message starts with. @param {Date} [now] */
 function timeNote(now = new Date()) {
   const day = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -293,4 +324,4 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, systemPrompt, toolDefinitions, timeNote };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, systemPrompt, toolDefinitions, timeNote };
