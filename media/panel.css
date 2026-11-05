@@ -287,6 +287,37 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 14px 0; }
 
 /* ---- guided setup ---- */
 body.in-setup #composer { display: none; }
+
+/* ---- settings (in the panel) ---- */
+.settings-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.settings-head h2 { flex: 1; margin: 0; }
+.settings-notice { min-height: 1.2em; margin: 2px 0 6px; font-size: 0.88em; color: var(--muted); transition: color var(--t) var(--ease); }
+.settings-notice.ok { color: var(--ok); }
+.settings-notice.bad { color: var(--bad); }
+.settings-section { margin: 14px 0 0; padding: 12px 0 2px; border-top: 1px solid var(--hairline); }
+.settings-section h3 { margin: 0 0 8px; font-size: 0.78em; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.settings .field-label { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; font-size: 0.9em; color: var(--fg); }
+.settings .field-label:first-of-type { margin-top: 0; }
+.settings .saved { color: var(--ok); font-size: 0.85em; animation: savedFlash 1.6s var(--ease) both; }
+@keyframes savedFlash { 0% { opacity: 0; transform: translateY(2px); } 12%, 70% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+.settings select.field { appearance: auto; }
+.settings .row-field { display: flex; gap: 6px; }
+.settings .row-field .field { flex: 1; min-width: 0; }
+.settings .actions-row { margin-top: 10px; }
+.settings .actions-row .link-button { display: inline-flex; align-items: center; gap: 6px; }
+.settings .link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.settings .segs { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--r); border: 1px solid var(--line); }
+.settings .seg { padding: 3px 10px; border-radius: var(--r-sm); color: var(--muted); font-size: 0.9em; }
+.settings .seg:hover { background: var(--hover); color: var(--fg); }
+.settings .seg.on { background: var(--vscode-list-activeSelectionBackground, var(--press)); color: var(--vscode-list-activeSelectionForeground, var(--fg)); }
+.settings .seg.on[data-value="high"] { color: var(--warn); }
+.settings .docs-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.settings .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 0.84em;
+  border: 1px solid var(--line); color: var(--muted); }
+.settings .status-pill.busy::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--link); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+.settings .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (prefers-reduced-motion: reduce) { .settings .saved, .settings .status-pill.busy::before { animation: none; } }
 body.in-setup #btn-new, body.in-setup #chat-title .chev { visibility: hidden; }
 .setup { padding: 14px 4px 20px; }
 .setup .progress { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }

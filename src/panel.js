@@ -13,6 +13,7 @@ const { systemPrompt } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
 const { WorkspaceTools } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
+const { SettingsScreen } = require("./settings.js");
 
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
@@ -43,6 +44,8 @@ class SolderPanel {
     this.credits = null;
     this.answerTokens = 0;
     this.setup = new SetupWizard(context, KEY, () => this.post());
+    this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
+      refreshDocs: () => { this.tools.refreshDocs(); }, refreshModels: () => this.refreshModels() }, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "solder.focus";
     context.subscriptions.push(this.statusBar);
@@ -243,7 +246,8 @@ class SolderPanel {
       case "folder": return this.chooseFolder();
       case "clearFolder": return this.setFolder("");
       case "setKey": await vscode.commands.executeCommand("solder.setApiKey"); return;
-      case "settings": await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:gremnar.solder"); return;
+      case "settings": await this.settingsScreen.open(); return;
+      case "settingsScreen": await this.settingsScreen.handle(message); return;
       case "refreshModels": return this.refreshModels();
       case "setup":
         if (message.action === "start") await this.setup.start();
@@ -374,6 +378,7 @@ class SolderPanel {
       steers: [...this.engine.steers],
       workspace: !!this.tools.root(),
       setup: this.setup.view,
+      settings: this.setup.view ? null : this.settingsScreen.view,
     });
   }
 

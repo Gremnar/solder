@@ -23,6 +23,7 @@ Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-co
 | `src/store.js` | Chats as JSON files in the workspace's storage |
 | `src/docs.js` | The docs index: node:sqlite FTS5 over the user's docs folders, plain text and Office files (no `vscode`, tested under node) |
 | `src/setup.js` | The guided setup in the side bar: endpoint, key (checked by listing models), model, docs folders, rules |
+| `src/settings.js` | Settings inside the side bar (⋯ → Settings): the same user settings, the key, and the docs index's live status |
 | `media/` | The panel's HTML, CSS and JS: plain DOM, strict CSP, VS Code theme variables, Alloy-style word fade-in |
 | `build/vsix.js` | Packages `solder-<version>.vsix` with no tools (a hand-written zip) |
 

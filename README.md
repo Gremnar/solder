@@ -27,6 +27,7 @@
 - **It asks first** before deleting anything, or changing a file outside the workspace. You can add a note for the model when you answer.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
+- **Settings** (⋯ → Settings) open right in the panel: the connection, the model and effort, your docs folders (with how far indexing has got), rules, and cost. Each field saves as you leave it.
 - **Chats** are saved per workspace. The title menu lists them. Solder names each chat after its first answer, and again after the third. **⋯ → Rename this chat…** gives a chat your own name, which Solder then keeps.
 
 ![A reply streaming in](media/screenshots/streaming-reply.png) ![A step running while a message waits for the next step](media/screenshots/running-step.png)

@@ -184,15 +184,127 @@
 
   function render() {
     if (!state) return;
-    $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.chat.title;
-    document.body.classList.toggle("in-setup", !!state.setup);
+    $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : state.chat.title;
+    document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     if (state.setup) { renderSetup(); return; }
+    if (state.settings) { renderSettings(); return; }
+    settingsShape = "";
     setupDraft = null;
     setupShown = "";
     renderTranscript();
     renderComposer();
   }
+
+  // ------------------------------------------------------------- settings --
+  // The extension holds the values; fields save when you leave them (or press Enter), and a small
+  // "Saved" shows where. Progress updates (the docs index) refresh only the status, never your typing.
+
+  let settingsShape = "";
+
+  function renderSettings() {
+    const s = state.settings;
+    const shape = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
+    const status = docsStatusText(s.docsStatus);
+    if (shape === settingsShape && transcript.querySelector(".settings")) {
+      const el = $("docs-status");
+      if (el) { el.textContent = status.text; el.className = "status-pill" + (status.busy ? " busy" : ""); }
+      const notice = $("settings-notice");
+      if (notice) { notice.textContent = s.notice || ""; notice.className = "settings-notice " + (s.noticeKind || ""); }
+      const check = /** @type {HTMLButtonElement | null} */ (transcript.querySelector('[data-sact="check"]'));
+      if (check) { check.disabled = !!s.checking; check.innerHTML = (s.checking ? `<span class="spinner"></span>` : "") + (s.checking ? "Checking…" : "Check connection"); }
+      return;
+    }
+    const fresh = !settingsShape;
+    settingsShape = shape;
+    const saved = (/** @type {string} */ field) => s.saved === field ? `<span class="saved">Saved</span>` : "";
+    const efforts = ["default", "low", "medium", "high"].map((level) =>
+      `<button class="seg${s.effort === level ? " on" : ""}" data-sfield="effort" data-value="${level}">${level === "default" ? "Default" : level[0].toUpperCase() + level.slice(1)}</button>`).join("");
+    const modelField = s.models.length
+      ? `<select class="field" data-field="model">${s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : `<option value="${escape(s.model)}">${escape(s.model || "Choose a model")}</option>`}` +
+        s.models.map((/** @type {any} */ m) => `<option value="${escape(m.id)}"${m.id === s.model ? " selected" : ""}>${escape(m.name)}${m.name !== m.id ? ` (${escape(m.id)})` : ""}</option>`).join("") + `</select>`
+      : `<input class="field" data-field="model" spellcheck="false" placeholder="The model's id" value="${escape(s.model)}">`;
+    const docs = s.docs.map((/** @type {any} */ d, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(d.path)}">` +
+      `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span>` +
+      `<button data-sact="removeDocs" data-index="${i}" title="Stop searching this folder" aria-label="Remove">✕</button></div>` +
+      `<input class="field about" data-docs-about="${i}" placeholder="What's in it? It tells the model when to look here" value="${escape(d.about)}">${saved("docs-" + i)}` +
+      (/^[A-Za-z]:[\\/]?$|^\/$/.test(d.path.trim()) ? `<div class="hint">A whole drive is slow to index and fills the 20,000-file limit with unrelated files: the folder your docs are in works better.</div>` : "") +
+      `</div>`).join("");
+    transcript.innerHTML = `<div class="setup settings${fresh ? " enter" : ""}">` +
+      `<div class="settings-head"><h2>Settings</h2><button class="link-button primary" data-sact="close">Done</button></div>` +
+      `<div id="settings-notice" class="settings-notice ${s.noticeKind || ""}">${escape(s.notice || "")}</div>` +
+      section("Connection",
+        label("Gateway address", saved("endpoint")) + `<input class="field" data-field="endpoint" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/chat/completions" value="${escape(s.endpoint)}">` +
+        label("API key", saved("key")) + `<div class="row-field"><input class="field" id="settings-key" type="password" placeholder="${s.hasKey ? "A key is saved: type a new one to replace it" : "Paste your key"}">` +
+        `<button class="link-button" data-sact="key">Save</button></div>` +
+        (s.hasKey ? `<div class="hint">A key is saved. <button class="link" data-sact="clearKey">Remove it</button></div>` : "") +
+        `<div class="actions-row"><button class="link-button" data-sact="check">Check connection</button></div>`) +
+      section("Model",
+        label("Default model", saved("model")) + modelField +
+        label("Effort", saved("effort")) + `<div class="segs">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`) +
+      section("Your docs",
+        `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
+        (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
+        `<div class="docs">${docs}</div><button class="link-button" data-sact="addDocs">Add a folder…</button>` +
+        `<div class="hint">Plain text of any kind, and Word, Excel and PowerPoint files; not PDFs or scans. Up to 20,000 files a folder, indexed on this PC.</div>`) +
+      section("Rules and instructions",
+        label("Your rules", saved("rules")) + `<textarea class="field area" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
+        label("Instruction files", saved("instructionFiles")) + `<input class="field" data-field="instructionFiles" spellcheck="false" value="${escape(s.instructionFiles)}">` +
+        `<div class="hint">Files in the workspace the model follows, separated by commas, such as AGENTS.md, CLAUDE.md.</div>`) +
+      section("Cost",
+        `<div class="pair"><div>${label("Compact at tokens", saved("compactAt"))}<input class="field" data-field="compactAt" type="number" min="30000" step="10000" value="${s.compactAt}"></div>` +
+        `<div>${label("Max rounds", saved("maxRounds"))}<input class="field" data-field="maxRounds" type="number" min="1" max="100" value="${s.maxRounds}"></div></div>` +
+        `<div class="hint">Every step sends the whole chat again: compacting sooner costs less. Max rounds is the most steps with tool calls for one message.</div>`) +
+      section("Advanced",
+        label("Model filter", saved("modelFilter")) + `<input class="field" data-field="modelFilter" spellcheck="false" placeholder="A regular expression, such as -tools$" value="${escape(s.modelFilter)}">` +
+        `<div class="hint">Only models whose id matches are offered. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div>`) +
+      `</div>`;
+  }
+
+  /** @param {string} title @param {string} body */
+  function section(title, body) {
+    return `<section class="settings-section"><h3>${escape(title)}</h3>${body}</section>`;
+  }
+
+  /** @param {string} text @param {string} [extra] */
+  function label(text, extra = "") {
+    return `<div class="field-label"><span>${escape(text)}</span>${extra}</div>`;
+  }
+
+  /** @param {any} d */
+  function docsStatusText(d) {
+    if (!d) return { text: "", busy: false };
+    if (!d.available) return { text: "Needs a newer VS Code", busy: false };
+    if (!d.folders) return { text: "No folders yet", busy: false };
+    if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far`, busy: true };
+    return { text: `Ready · ${Number(d.indexed).toLocaleString()} file${d.indexed === 1 ? "" : "s"} indexed`, busy: false };
+  }
+
+  /** A settings field was left (or Enter pressed, or a choice made): save it. @param {HTMLElement} el */
+  function saveSetting(el) {
+    if (!state?.settings) return;
+    const input = /** @type {HTMLInputElement} */ (el);
+    if (input.dataset.field) {
+      const now = input.value;
+      const before = String(state.settings[input.dataset.field] ?? "");
+      if (now !== before) vscode.postMessage({ type: "settingsScreen", action: "set", field: input.dataset.field, value: now });
+    } else if (input.dataset.docsAbout !== undefined) {
+      const index = Number(input.dataset.docsAbout);
+      if (input.value !== (state.settings.docs[index]?.about ?? "")) vscode.postMessage({ type: "settingsScreen", action: "docsAbout", index, value: input.value });
+    }
+  }
+
+  transcript.addEventListener("change", (event) => {
+    const el = /** @type {HTMLElement} */ (event.target);
+    if (state?.settings && el.matches("select[data-field], input[data-field], textarea[data-field], [data-docs-about]")) saveSetting(el);
+  });
+  transcript.addEventListener("keydown", (event) => {
+    const el = /** @type {HTMLElement} */ (event.target);
+    if (!state?.settings || event.key !== "Enter" || el.tagName !== "INPUT") return;
+    event.preventDefault();
+    if (el.id === "settings-key") /** @type {HTMLElement | null} */ (transcript.querySelector('[data-sact="key"]'))?.click();
+    else el.blur();
+  });
 
   // ------------------------------------------------------------ guided setup --
   // The extension holds the wizard's state; what you type stays here (draft) until you go on.
@@ -693,11 +805,19 @@
 
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-action],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],code.path,pre .copy"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
+    else if (d.sact) {
+      if (el.hasAttribute("disabled")) return;
+      if (d.sact === "key") {
+        const key = /** @type {HTMLInputElement | null} */ (document.getElementById("settings-key"))?.value ?? "";
+        if (key.trim()) vscode.postMessage({ type: "settingsScreen", action: "key", key });
+      } else if (d.sact === "clearKey") vscode.postMessage({ type: "settingsScreen", action: "key", key: "" });
+      else vscode.postMessage({ type: "settingsScreen", action: d.sact, index: d.index !== undefined ? Number(d.index) : undefined });
+    } else if (d.sfield) vscode.postMessage({ type: "settingsScreen", action: "set", field: d.sfield, value: d.value });
     else if (d.setup) {
       closeMenus();
       if (el.hasAttribute("disabled")) return;

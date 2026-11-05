@@ -438,6 +438,16 @@ class WorkspaceTools {
     return out;
   }
 
+  /** The docs index's state, for the settings screen. */
+  docsState() {
+    const folders = this.docsFolders().length;
+    const index = folders ? this.docsIndex() : null;
+    if (!index) return { available: folders === 0 || this.docsIndex() !== null, folders, indexed: 0, active: false };
+    let indexed = 0;
+    try { indexed = index.active ? Math.max(index.progress.indexed, index.count()) : index.count(); } catch { indexed = 0; }
+    return { available: true, folders, indexed, active: !!index.active };
+  }
+
   /** The docs index (opened on first use), or null when this VS Code's runtime has no SQLite. */
   docsIndex() {
     if (this._docs === undefined) {
