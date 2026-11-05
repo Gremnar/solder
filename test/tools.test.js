@@ -211,3 +211,29 @@ test("a diff's run of signature lines is one line; ordinary comments are left al
   const comments = ["+# This is a normal comment", "+# another one here", "+# and a third", "+# and a fourth"].join("\n");
   assert.equal(withoutSignatureLines(comments), comments);
 });
+
+test("an edit isn't refused as 'changed on disk' for mixed line endings, a BOM or UTF-16; a real change still is", () => {
+  const { stale } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-stale-"));
+  try {
+    const file = (/** @type {string} */ name, /** @type {Buffer | string} */ data) => {
+      const full = path.join(top, name);
+      fs.writeFileSync(full, data);
+      return { full, shown: name };
+    };
+    // What VS Code holds: one kind of line ending, no BOM.
+    const editor = (/** @type {string} */ text) => ({ isDirty: false, getText: () => text });
+    // A script saved with LF, then signed (the signature block comes with CRLF): VS Code evens it out to one kind.
+    const mixed = file("signed.ps1", "Write-Host 'a'\nWrite-Host 'b'\n# SIG # Begin signature block\r\n# MIIa\r\n# SIG # End signature block\r\n");
+    assert.doesNotThrow(() => stale(editor("Write-Host 'a'\r\nWrite-Host 'b'\r\n# SIG # Begin signature block\r\n# MIIa\r\n# SIG # End signature block\r\n"), mixed));
+    const bom = file("bom.ps1", "\uFEFFWrite-Host 'a'\r\n");
+    assert.doesNotThrow(() => stale(editor("Write-Host 'a'\r\n"), bom));
+    const utf16 = file("utf16.ps1", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Write-Host 'a'\r\n", "utf16le")]));
+    assert.doesNotThrow(() => stale(editor("Write-Host 'a'\r\n"), utf16));
+    const changed = file("changed.ps1", "Write-Host 'changed outside'\r\n");
+    assert.throws(() => stale(editor("Write-Host 'a'\r\n"), changed), /changed on disk a moment ago/);
+    assert.doesNotThrow(() => stale({ isDirty: true, getText: () => "unsaved typing" }, changed), "unsaved changes are the editor's, not stale");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});

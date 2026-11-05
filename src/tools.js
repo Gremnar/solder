@@ -12,7 +12,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks } = require("./docs.js");
+const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -1215,14 +1215,17 @@ function parseNumstat(text) {
 
 /**
  * The editor's copy of a file it hasn't changed is the disk's; if the disk changed a moment ago and VS Code
- * hasn't caught up, editing that copy would overwrite the change. @param {vscode.TextDocument} document @param {any} file
+ * hasn't caught up, editing that copy would overwrite the change. Compared as text, the way Undo's check is:
+ * VS Code evens out mixed line endings when it opens a file (a script signed after it was saved with LF has
+ * CRLF in its signature), and drops the BOM, so a byte-for-byte comparison never matched and every edit was
+ * refused. @param {{isDirty: boolean, getText: () => string}} document @param {any} file
  */
 function stale(document, file) {
   if (document.isDirty) return;
   let disk;
-  try { disk = fs.readFileSync(file.full, "utf8"); } catch { return; }
-  if (disk.charCodeAt(0) === 0xfeff) disk = disk.slice(1);
-  if (disk !== document.getText() && !disk.includes("\uFFFD")) throw new ToolError(RESULTS.changedOnDisk(file.shown));
+  try { disk = decodeText(fs.readFileSync(file.full)); } catch { return; }
+  if (disk === null || disk.includes("\uFFFD")) return; // not text we can compare (another encoding): trust VS Code
+  if (hash(disk) !== hash(document.getText())) throw new ToolError(RESULTS.changedOnDisk(file.shown));
 }
 
 /** Save, or put the editor back as it was and say so: a change only counts once it's on disk. */
@@ -1414,4 +1417,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
