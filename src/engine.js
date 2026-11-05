@@ -327,7 +327,11 @@ class Engine {
     const began = Date.now();
     let result;
     try {
-      result = await this.host.runTool(name, args, { chat, signal });
+      const work = this.host.runTool(name, args, { chat, signal });
+      // Stop ends the wait for a tool that only looks (a slow search, a cold language server) at once. One that
+      // changes files is let finish, so Undo knows what it did.
+      result = READ_ONLY.has(name) ? await untilStopped(work, signal) : await work;
+      if (result === STOPPED) result = { output: TEXTS.stoppedRunning, summary: label + " · stopped", failed: true };
     } catch (error) {
       result = { output: "Error: " + (error instanceof Error ? error.message : String(error)), summary: label + " failed", failed: true };
     }
@@ -478,6 +482,19 @@ class Engine {
     chat.updated = Date.now();
     await this.host.save(chat);
   }
+}
+
+const STOPPED = Symbol("stopped");
+
+/** A promise's value, or STOPPED as soon as the signal fires (the work goes on, its result unused). @param {Promise<any>} work @param {AbortSignal} signal */
+function untilStopped(work, signal) {
+  work.catch(() => {}); // if it's left behind, its failure is nobody's
+  const stopped = new Promise((resolve) => {
+    if (signal.aborted) resolve(STOPPED);
+    else signal.addEventListener("abort", () => resolve(STOPPED), { once: true });
+  });
+  // The work first: a result that's already there wins over a stop that came at the same moment.
+  return Promise.race([work, stopped]);
 }
 
 /** The chat as the model gets it: the system message, the recap (if compacted), then what's after it. */

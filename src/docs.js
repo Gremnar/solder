@@ -287,17 +287,16 @@ class DocsIndex {
     this.file = file;
     /** @type {any} */
     this.db = null;
-    /** Refreshes and searches take turns (the database calls are synchronous). */
-    this.queue = Promise.resolve();
-    /** @type {Map<string, number>} when each folder was last walked in full */
+    /**
+     * The refresh that's running, if any: only one at a time. Searches never wait for it: each file is
+     * written in one synchronous transaction, so between files the index is always whole.
+     * @type {Promise<any> | null}
+     */
+    this.active = null;
+    /** What the running refresh has done so far (for the settings screen). */
+    this.progress = { indexed: 0, changed: 0 };
+    /** @type {Map<string, number>} when each folder was last looked at (walked, in full or as far as allowed) */
     this.walked = new Map();
-  }
-
-  /** @template T @param {() => Promise<T>} work @returns {Promise<T>} */
-  _turn(work) {
-    const run = this.queue.then(work, work);
-    this.queue = run.then(() => {}, () => {});
-    return run;
   }
 
   _open() {
@@ -339,7 +338,16 @@ class DocsIndex {
    * @returns {Promise<{files: number, changed: number, unfinished: boolean, truncated: boolean}>}
    */
   refresh(roots, { ms = 60_000, signal } = {}) {
-    return this._turn(async () => {
+    // Already running: say so at once instead of waiting (a search goes on with what's indexed).
+    if (this.active) return Promise.resolve({ files: this.count(), changed: 0, unfinished: true, truncated: false, busy: true });
+    this.progress = { indexed: 0, changed: 0 };
+    this.active = this._refresh(roots, ms, signal).finally(() => { this.active = null; });
+    return this.active;
+  }
+
+  /** @param {string[]} roots @param {number} ms @param {AbortSignal | undefined} signal */
+  async _refresh(roots, ms, signal) {
+    {
       const db = this._open();
       const stop = Date.now() + ms;
       const late = () => Date.now() > stop || !!signal?.aborted;
@@ -375,20 +383,23 @@ class DocsIndex {
             throw error;
           }
           result.changed++;
+          this.progress.changed = result.changed;
           await new Promise((resolve) => setImmediate(resolve));
         }
         if (walk.complete && !result.unfinished) {
           // Only a full walk can tell what's gone.
           for (const key of known.keys()) if (!seen.has(key)) this._forget(db, "key = ?", key);
-          this.walked.set(rootKey, Date.now());
-        } else {
+        } else if (!walk.truncated) {
           result.unfinished = true;
         }
+        // Looked at now, even if not all of it (a huge folder stops at the cap): not walked again for a while.
+        this.walked.set(rootKey, Date.now());
         result.files += Number(db.prepare("SELECT count(*) AS n FROM files WHERE root = ?").get(rootKey).n);
+        this.progress.indexed = result.files;
         if (late()) { result.unfinished = true; break; }
       }
       return result;
-    });
+    }
   }
 
   /** @param {any} db @param {string} where @param {string} value */
@@ -410,7 +421,7 @@ class DocsIndex {
    * @returns {Promise<{path: string, location: string, heading: string, excerpt: string, matched: number}[]>}
    */
   search(query, limit = RESULT_COUNT) {
-    return this._turn(async () => {
+    return (async () => {
       const expression = matchQuery(query);
       if (!expression) return [];
       const db = this._open();
@@ -436,7 +447,7 @@ class DocsIndex {
       }
       return rows.map((row) => ({ path: String(row.path), location: String(row.location), heading: String(row.heading ?? ""),
         excerpt: String(row.excerpt).replace(/\s+/g, " ").trim(), matched: counts.get(Number(row.rowid)) ?? 0 }));
-    });
+    })();
   }
 }
 
@@ -480,7 +491,7 @@ async function listFiles(root, late) {
         continue;
       }
       if (!entry.isFile() || entry.name.startsWith("~$")) continue; // ~$ is an Office lock file
-      if (files.length >= MAX_FOLDER_FILES) { truncated = true; continue; }
+      if (files.length >= MAX_FOLDER_FILES) return { files, complete: false, truncated: true };
       try {
         const stat = await fs.promises.stat(full);
         files.push({ full, size: stat.size, mtime: stat.mtimeMs });

@@ -143,6 +143,7 @@ function toolDefinitions() {
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
+  stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",
   notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
   notRunBatch: (/** @type {number} */ limit) =>

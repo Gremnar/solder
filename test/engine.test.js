@@ -477,3 +477,27 @@ test("each step records how long it took; a queued message can be taken back", a
   assert.deepEqual(e.steers, ["two"]);
   assert.equal(e.unsteer(5), "");
 });
+
+test("Stop ends the wait for a slow read-only tool at once; a slow edit is let finish", async () => {
+  let e;
+  const never = new Promise(() => {}); // a search stuck behind a huge index, say
+  const host = fakeHost({ tools: { search: () => never } });
+  const client = fakeClient([{ calls: [call("1", "search", { query: "x", docs: true })] }]);
+  const chat = Engine.newChat();
+  const events = [];
+  e = engine(client, host, events);
+  setTimeout(() => e.stop(), 20);
+  await e.ask(chat, "go");
+  assert.equal(chat.messages.find((m) => m.role === "tool").content, TEXTS.stoppedRunning);
+  assert.ok(events.some((ev) => ev.type === "stopped"));
+
+  let finished = false;
+  const slowEdit = fakeHost({ tools: { edit_file: () => new Promise((r) => setTimeout(() => { finished = true; r({ output: "Edited a.", summary: "edit" }); }, 40)) } });
+  const edits = fakeClient([{ calls: [call("1", "edit_file", { path: "a", old_text: "x", new_text: "y" })] }]);
+  const other = Engine.newChat();
+  const e2 = engine(edits, slowEdit);
+  setTimeout(() => e2.stop(), 10);
+  await e2.ask(other, "go");
+  assert.ok(finished);
+  assert.equal(other.messages.find((m) => m.role === "tool").content, "Edited a.");
+});

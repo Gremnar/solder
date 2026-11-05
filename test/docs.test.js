@@ -134,3 +134,26 @@ test("the index: built, searched (stemmed, ranked, Office included), updated, an
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("a refresh that's running doesn't hold up another caller, and a search runs meanwhile", async (t) => {
+  if (!docs.available()) { t.skip("no node:sqlite with FTS5 here"); return; }
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-docs-"));
+  const folder = path.join(base, "docs");
+  fs.mkdirSync(folder);
+  for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(folder, `note${i}.md`), `# Note ${i}\nvalve pump ${i}\n`);
+  const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
+  try {
+    const first = index.refresh([folder]);
+    const second = await index.refresh([folder]);
+    assert.equal(second.busy, true, "told at once, not made to wait");
+    const hits = await index.search("valve");
+    assert.ok(Array.isArray(hits), "a search runs while indexing goes on");
+    const done = await first;
+    assert.equal(done.files, 200);
+    assert.ok((await index.search("valve")).length > 0);
+    assert.equal(index.progress.indexed, 200);
+  } finally {
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

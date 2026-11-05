@@ -454,6 +454,7 @@ class WorkspaceTools {
     const index = this.docsIndex();
     if (!index) return;
     const folders = this.docsFolders().map((folder) => folder.path);
+    if (index.active) { index.active.finally(() => this.refreshDocs()); return; } // the folders changed meanwhile: again after
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "Solder: indexing docs" },
       () => index.refresh(folders, { ms: 30 * 60_000 })).then(() => {}, () => {});
   }
@@ -466,7 +467,8 @@ class WorkspaceTools {
     if (!index) throw new ToolError(RESULTS.docsUnavailable);
     const roots = folders.map((folder) => folder.path);
     const stale = roots.some((root) => Date.now() - index.walkedAt(root) > 2 * 60_000);
-    const state = stale ? await index.refresh(roots, { ms: 4000, signal }) : { files: index.count(), unfinished: false, truncated: false };
+    const state = index.active ? { files: index.count(), unfinished: true, truncated: false }
+      : stale ? await index.refresh(roots, { ms: 4000, signal }) : { files: index.count(), unfinished: false, truncated: false };
     const hits = await index.search(query);
     const notes = [state.unfinished ? RESULTS.docsBuilding(state.files) : "", state.truncated ? RESULTS.docsTruncated : ""].filter(Boolean);
     if (!hits.length) return { output: [RESULTS.docsNoMatches(query), ...notes].join("\n\n"), summary: `Searched docs for "${short(query)}" · no matches` };
