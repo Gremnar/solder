@@ -746,6 +746,11 @@
       if (state) renderComposer();
     } else if (message.type === "restore") {
       if (!input.value.trim()) { input.value = message.text; autosize(); }
+    } else if (message.type === "attachSelection") {
+      // "Add to chat" from the editor: the selection chip on, the cursor in the box.
+      chipsOn.selection = true;
+      if (state) renderComposer();
+      input.focus();
     }
   });
 

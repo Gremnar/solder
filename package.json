@@ -32,9 +32,19 @@
       { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" },
       { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" },
       { "command": "solder.setup", "title": "Guided setup", "category": "Solder" },
-      { "command": "solder.openGuide", "title": "Guide", "category": "Solder" }
+      { "command": "solder.openGuide", "title": "Guide", "category": "Solder" },
+      { "command": "solder.explainSelection", "title": "Explain this", "category": "Solder", "enablement": "editorHasSelection" },
+      { "command": "solder.fixSelection", "title": "Fix this", "category": "Solder", "enablement": "editorHasSelection" },
+      { "command": "solder.addSelection", "title": "Add to chat", "category": "Solder", "enablement": "editorHasSelection" }
     ],
+    "submenus": [{ "id": "solder.editor", "label": "Solder" }],
     "menus": {
+      "editor/context": [{ "submenu": "solder.editor", "when": "editorHasSelection", "group": "1_solder@1" }],
+      "solder.editor": [
+        { "command": "solder.explainSelection", "group": "1@1" },
+        { "command": "solder.fixSelection", "group": "1@2" },
+        { "command": "solder.addSelection", "group": "2@1" }
+      ],
       "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" },
         { "command": "solder.useAsDocs", "when": "explorerResourceIsFolder", "group": "solder@2" }]
     },

@@ -333,6 +333,13 @@ with my code, and what you can't do (such as running commands). Then ask me what
 a few concrete things you could take off my hands." },
 ];
 
+/** What the editor's right-click menu sends with the selected code (the selection itself goes along as context). */
+const SELECTION = {
+  explain: "Explain the selected code: what it does, how it does it, and anything surprising or risky in it. Keep it short.",
+  fix: "Fix the selected code with the smallest change that does it, then tell me in a sentence or two what was wrong.",
+  problems: (/** @type {string[]} */ lines) => `(VS Code's problems in the selection:)\n${lines.join("\n")}`,
+};
+
 /** "(Wednesday, 4 November 2026, 14:05)": what each user message starts with. @param {Date} [now] */
 function timeNote(now = new Date()) {
   const day = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -340,4 +347,4 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, systemPrompt, toolDefinitions, timeNote };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, systemPrompt, toolDefinitions, timeNote };

@@ -45,6 +45,9 @@ function activate(context) {
       if (uri) await panel.setFolder(uri.fsPath);
       else await panel.chooseFolder();
     }),
+    vscode.commands.registerCommand("solder.explainSelection", () => panel.fromEditor("explain")),
+    vscode.commands.registerCommand("solder.fixSelection", () => panel.fromEditor("fix")),
+    vscode.commands.registerCommand("solder.addSelection", () => panel.fromEditor("add")),
     vscode.commands.registerCommand("solder.useAsDocs", async (/** @type {vscode.Uri | undefined} */ uri) => {
       const folder = uri?.fsPath ?? (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false,
         openLabel: "Use as Solder docs" }))?.[0]?.fsPath;

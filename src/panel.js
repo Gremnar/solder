@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { systemPrompt, STARTERS } = require("./prompt.js");
+const { systemPrompt, STARTERS, SELECTION } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
 const { WorkspaceTools } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
@@ -270,10 +270,37 @@ class SolderPanel {
     await this.send({ text: starter.prompt });
   }
 
+  /**
+   * From the editor's right-click menu, with text selected: "explain" or "fix" sends it (with the selection, and
+   * for a fix the problems VS Code shows in it); "add" opens the panel with the selection attached, to ask your own.
+   * @param {"explain" | "fix" | "add"} kind
+   */
+  async fromEditor(kind) {
+    const editor = vscode.window.activeTextEditor; // taken before the panel gets focus
+    if (!editor || editor.selection.isEmpty) return;
+    await vscode.commands.executeCommand("solder.chat.focus");
+    if (kind === "add") { this.view?.webview.postMessage({ type: "attachSelection" }); return; }
+    let text = kind === "fix" ? SELECTION.fix : SELECTION.explain;
+    if (kind === "fix") {
+      const range = editor.selection;
+      const lines = vscode.languages.getDiagnostics(editor.document.uri)
+        .filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning && d.range.intersection(range))
+        .slice(0, 20).map((d) => `- line ${d.range.start.line + 1}: ${d.message.split("\n")[0]}`);
+      if (lines.length) text += "\n\n" + SELECTION.problems(lines);
+    }
+    await this.send({ text, selection: true, editor });
+  }
+
   async send(message) {
     const text = String(message.text || "").trim();
     if (!text) return;
-    if (this.engine.busy) { this.engine.steer(text); this.post(); return; }
+    if (this.engine.busy) {
+      // Busy: it goes with the next step, the selection with it when it came from the menu.
+      const picked = message.editor ? this.selectionBlock(message.editor) : null;
+      this.engine.steer(picked ? `${text}\n\n${picked.block}` : text);
+      this.post();
+      return;
+    }
     if (!this.chat.model && !this.settings().model && this.models[0]) this.chat.model = this.models[0].id;
     const parts = [];
     const chips = [];
@@ -284,17 +311,13 @@ class SolderPanel {
       parts.push(`(I'm working in ${this.chat.folder}: relative paths and searches start there.)`);
     }
     this.chat.notes = [];
-    const editor = vscode.window.activeTextEditor;
+    const editor = message.editor ?? vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
       const shown = vscode.workspace.asRelativePath(editor.document.uri, false);
-      if (message.selection && !editor.selection.isEmpty) {
-        const first = editor.selection.start.line + 1;
-        const last = editor.selection.end.line + (editor.selection.end.character === 0 ? 0 : 1);
-        let selected = editor.document.getText(editor.selection);
-        if (selected.length > MAX_SELECTION_CHARS) selected = selected.slice(0, MAX_SELECTION_CHARS) + "\n…(cut short)";
-        const fence = selected.includes("```") ? "````" : "```";
-        parts.push(`(Selected in ${shown}, lines ${first}–${last}:)\n${fence}${editor.document.languageId}\n${selected}\n${fence}`);
-        chips.push(`${path.basename(shown)}:${first}–${last}`);
+      const picked = message.selection ? this.selectionBlock(editor) : null;
+      if (picked) {
+        parts.push(picked.block);
+        chips.push(picked.chip);
       } else if (message.file) {
         parts.push(`(The file open in my editor, for reference: ${shown}.)`);
         chips.push(path.basename(shown));
@@ -302,6 +325,19 @@ class SolderPanel {
     }
     this.error = null;
     this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips });
+  }
+
+  /** The selected text as context for the model, and its chip ("cart.js:12–18"), or null with nothing selected. @param {vscode.TextEditor} editor */
+  selectionBlock(editor) {
+    if (!editor || editor.selection.isEmpty || editor.document.uri.scheme !== "file") return null;
+    const shown = vscode.workspace.asRelativePath(editor.document.uri, false);
+    const first = editor.selection.start.line + 1;
+    const last = editor.selection.end.line + (editor.selection.end.character === 0 ? 0 : 1);
+    let selected = editor.document.getText(editor.selection);
+    if (selected.length > MAX_SELECTION_CHARS) selected = selected.slice(0, MAX_SELECTION_CHARS) + "\n…(cut short)";
+    const fence = selected.includes("```") ? "````" : "```";
+    return { block: `(Selected in ${shown}, lines ${first}–${last}:)\n${fence}${editor.document.languageId}\n${selected}\n${fence}`,
+      chip: `${path.basename(shown)}:${first}–${last}` };
   }
 
   /** Pick the chat's working folder (inside the workspace). */
