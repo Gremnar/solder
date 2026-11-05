@@ -169,3 +169,65 @@ test("a script's digital signature is found and left out: PowerShell, VBScript a
   assert.deepEqual(signatureBlocks(["# SIG # Begin signature block", "# MIIa"]), [], "no end: not a block");
   assert.equal(withoutSignatures("no signature here"), "no signature here");
 });
+
+/**
+ * A stand-in embeddings model: each concept is one dimension, and words that mean the same thing share it, so
+ * "credential recovery" lands next to "password reset" although they share no word.
+ */
+const CONCEPTS = [["password", "credential", "passphrase"], ["reset", "recovery", "recover", "restore"], ["printer", "print", "spooler"],
+  ["backup", "copy", "robocopy"], ["domain", "netbios", "dns"], ["user", "account"]];
+function fakeEmbed(/** @type {string[]} */ texts) {
+  const vectors = texts.map((text) => {
+    const words = text.toLowerCase().match(/[a-z]+/g) || [];
+    return CONCEPTS.map((group) => words.filter((word) => group.includes(word)).length + 0.01);
+  });
+  return Promise.resolve({ vectors, tokens: texts.join(" ").split(/\s+/).length });
+}
+
+test("search by meaning: vectors in the same index, found by meaning, merged with keywords, kept in step with files", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-rag-"));
+  const folder = path.join(base, "docs");
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, "accounts.md"), "# Credential recovery\nHow a user account gets its passphrase restored after a lockout.");
+  fs.writeFileSync(path.join(folder, "printers.md"), "# Printers\nRestart the spooler when a print job hangs.");
+  fs.writeFileSync(path.join(folder, "backups.md"), "# Backups\nThe nightly robocopy job copies the HR share.");
+  const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
+  let calls = 0;
+  const embed = { model: "embed-a", fn: (/** @type {string[]} */ texts) => { calls++; return fakeEmbed(texts); } };
+  try {
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.deepEqual(index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
+    assert.ok(index.embedding.tokens > 0, "the gateway's token count is kept");
+    // No word in common: keywords alone find nothing; by meaning, the right passage.
+    assert.deepEqual(await index.search("password reset"), []);
+    const [query] = (await fakeEmbed(["password reset"])).vectors;
+    const hits = await index.search("password reset", 10, { vector: query, model: "embed-a" });
+    assert.match(hits[0].path, /accounts\.md$/);
+    assert.match(hits[0].excerpt, /Credential recovery/);
+    // Both rankings: a keyword hit stays near the top, and keeps its highlighted excerpt.
+    const [spooler] = (await fakeEmbed(["spooler"])).vectors;
+    const both = await index.search("spooler", 10, { vector: spooler, model: "embed-a" });
+    assert.match(both[0].path, /printers\.md$/);
+    assert.match(both[0].excerpt, /\[spooler\]/);
+    // Nothing changed: no requests. A changed file: only its passage again.
+    calls = 0;
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.equal(calls, 0);
+    fs.writeFileSync(path.join(folder, "printers.md"), "# Printers\nClear the queue, then restart the spooler.");
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(path.join(folder, "printers.md"), later, later);
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.equal(calls, 1);
+    assert.deepEqual(index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
+    // Another model: the old vectors go (they don't compare); a refusal stops the pass, keywords still work.
+    const refusing = { model: "embed-b", fn: () => Promise.reject(new Error("The gateway answered HTTP 403.")) };
+    await index.refresh([folder], { ms: 20_000, embed: refusing });
+    assert.deepEqual(index.vectorCount("embed-b"), { passages: 3, embedded: 0 });
+    assert.deepEqual(index.vectorCount("embed-a").embedded, 0);
+    assert.match(index.embedding.error, /403/);
+    assert.match((await index.search("spooler"))[0].path, /printers\.md$/);
+  } finally {
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

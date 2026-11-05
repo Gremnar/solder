@@ -97,7 +97,7 @@ path:line: text, up to 200.", {
     regex: { type: "boolean", description: "True to read query as a regular expression." },
     glob: { type: "string", description: "Only search files matching this, such as src/**/*.ts or *.py." },
     docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead: the best \
-passages for the query's words, in any order (regex and glob don't apply)." },
+passages for the query (a few key words, or a short question), in any order (regex and glob don't apply)." },
   }, ["query"]],
   find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), \
 up to 300.", {

@@ -570,7 +570,12 @@ class WorkspaceTools {
     if (!index) return { available: folders === 0 || this.docsIndex() !== null, folders, indexed: 0, active: false };
     let indexed = 0;
     try { indexed = index.active ? Math.max(index.progress.indexed, index.count()) : index.count(); } catch { indexed = 0; }
-    return { available: true, folders, indexed, active: !!index.active };
+    const model = this.semantic();
+    let meaning = null;
+    if (model) {
+      try { meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error }; } catch { meaning = null; }
+    }
+    return { available: true, folders, indexed, active: !!index.active, meaning };
   }
 
   /** The docs index (opened on first use), or null when this VS Code's runtime has no SQLite. */
@@ -590,8 +595,22 @@ class WorkspaceTools {
     if (!index) return;
     const folders = this.docsFolders().map((folder) => folder.path);
     if (index.active) { index.active.finally(() => this.refreshDocs()); return; } // the folders changed meanwhile: again after
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "Solder: indexing docs" },
-      () => index.refresh(folders, { ms: 30 * 60_000 })).then(() => {}, () => {});
+    const model = this.semantic();
+    const embed = model && this.embedder ? { model, fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal) } : undefined;
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: model ? "Solder: indexing docs, with meaning" : "Solder: indexing docs" },
+      () => index.refresh(folders, { ms: 30 * 60_000, embed })).then(() => {}, () => {});
+    if (embed) {
+      // What it cost, for the log (Copy diagnostics): the gateway's own token count.
+      const counts = index.vectorCount(model);
+      this.onDocsLog?.(`docs embeddings: ${index.embedding.runTokens.toLocaleString("en-US")} tokens this run · ${counts.embedded.toLocaleString("en-US")} of ${counts.passages.toLocaleString("en-US")} passages` +
+        (index.embedding.error ? ` · stopped: ${index.embedding.error}` : ""));
+    }
+  }
+
+  /** The embeddings model when docs search by meaning is on (Settings → Your docs), else "". */
+  semantic() {
+    const config = vscode.workspace.getConfiguration("solder");
+    return config.get("docsSearch", "keyword") === "hybrid" ? String(config.get("embeddingModel", "")).trim() : "";
   }
 
   /** The best passages in the docs for a query; a short catch-up of the index first (up to 4 s). */
@@ -604,10 +623,23 @@ class WorkspaceTools {
     const stale = roots.some((root) => Date.now() - index.walkedAt(root) > 2 * 60_000);
     const state = index.active ? { files: index.count(), unfinished: true, truncated: false }
       : stale ? await index.refresh(roots, { ms: 4000, signal }) : { files: index.count(), unfinished: false, truncated: false };
-    const hits = await index.search(query);
+    // By meaning too, once there are vectors: the query's own vector (one small request), merged with the keyword ranking.
+    let meaning = null;
+    const model = this.semantic();
+    if (model && this.embedder && index.vectorCount(model).embedded) {
+      try {
+        const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
+        meaning = { vector: vectors[0], model };
+        this.onDocsLog?.(`docs search by meaning · ${tokens} tokens`);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        this.onDocsLog?.(`docs search by meaning failed, keywords only: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const hits = await index.search(query, undefined, meaning);
     const notes = [state.unfinished ? RESULTS.docsBuilding(state.files) : "", state.truncated ? RESULTS.docsTruncated : ""].filter(Boolean);
     if (!hits.length) return { output: [RESULTS.docsNoMatches(query), ...notes].join("\n\n"), summary: `Searched docs for "${short(query)}" · no matches` };
-    const vague = loose(hits, query);
+    const vague = meaning ? null : loose(hits, query);
     const lines = hits.map((hit) => `${hit.path} · ${hit.location}${hit.heading ? ` · ${hit.heading}` : ""}\n  ${hit.excerpt}`);
     return { output: RESULTS.docsHits(query, hits.length) + "\n\n" + lines.join("\n\n")
       + (vague ? "\n\n" + RESULTS.docsLoose(vague.best, vague.of) : "") + (notes.length ? "\n\n" + notes.join("\n") : ""),

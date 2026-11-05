@@ -29,6 +29,7 @@ Expect a reply within a few days. A fix ships in the next release, credited to y
 - **Your key:** it's kept in VS Code's secret storage, never in settings, and never written to the log or diagnostics.
 - **Your data:** chats, Undo's backups and the docs index stay on your PC, in VS Code's storage for Solder.
 - **What reaches the endpoint:** your messages, and what the tools return: file contents Solder reads, search results and docs passages. Treat it as you would any service you send code to.
+- **Docs search by meaning (off by default):** when it's turned on, every passage of the docs folders is sent to the same endpoint's embeddings model, once, and then each changed file. The vectors that come back are kept in the local index.
 
 ## Prompt injection
 

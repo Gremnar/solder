@@ -289,3 +289,20 @@ test("a 429 asking to wait hours is the allowance used up, even with no bucket a
   gw.server.closeAllConnections();
   gw.server.close();
 });
+
+test("embeddings: one vector per text, in the order asked (whatever order they come back), and the gateway's token count", async () => {
+  let gw;
+  gw = await fakeGateway([(res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    const input = gw.seen[0].body.input;
+    res.end(JSON.stringify({ data: input.map((_, i) => ({ index: i, embedding: [i, 1, 2] })).reverse(), usage: { prompt_tokens: 7, total_tokens: 7 } }));
+  }]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "k" });
+  const result = await client.embed({ model: "embed-a", input: ["a", "b", "c"] });
+  gw.server.closeAllConnections();
+  gw.server.close();
+  assert.deepEqual(result.vectors, [[0, 1, 2], [1, 1, 2], [2, 1, 2]]);
+  assert.equal(result.tokens, 7);
+  assert.equal(gw.seen[0].url, "/v1/embeddings", "next to /chat/completions");
+  assert.deepEqual(gw.seen[0].body, { model: "embed-a", input: ["a", "b", "c"] });
+});

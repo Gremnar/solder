@@ -57,6 +57,8 @@ class SettingsScreen {
       docs: (Array.isArray(raw) ? raw : []).map((item) => typeof item === "string" ? { path: item, about: "" }
         : { path: String(item?.path ?? ""), about: String(item?.about ?? "") }).filter((d) => d.path),
       docsStatus: this.hooks.docs(),
+      docsSearch: String(config.get("docsSearch", "keyword")) === "hybrid" ? "hybrid" : "keyword",
+      embeddingModel: String(config.get("embeddingModel", "")),
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
@@ -104,7 +106,9 @@ class SettingsScreen {
           const n = Math.round(Number(value));
           if (!Number.isFinite(n) || n < 1 || n > 100) { this.notice("Max rounds needs to be between 1 and 100.", "bad"); return; }
           await save("maxRounds", n, field);
-        } else if (field === "modelFilter") {
+        } else if (field === "docsSearch" && ["keyword", "hybrid"].includes(value)) await save("docsSearch", value, field);
+        else if (field === "embeddingModel") await save("embeddingModel", String(value || "").trim(), field);
+        else if (field === "modelFilter") {
           const text = String(value || "").trim();
           try { if (text) new RegExp(text); } catch { this.notice("That model filter isn't a valid regular expression.", "bad"); return; }
           await save("modelFilter", text, field);
@@ -165,6 +169,18 @@ class SettingsScreen {
         return;
       }
       case "reindex": this.hooks.refreshDocs(); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "testEmbedding": {
+        const model = String(vscode.workspace.getConfiguration("solder").get("embeddingModel", "")).trim();
+        if (!model) { this.notice("Type the embeddings model's id first.", "bad"); return; }
+        this.notice("Testing the embeddings model…");
+        try {
+          const { dims, tokens } = await this.hooks.testEmbedding(model);
+          this.notice(`It works: ${dims.toLocaleString("en-US")} numbers for each passage${tokens ? `, ${tokens} tokens for that test` : ""}.`, "ok");
+        } catch (error) {
+          this.notice(messageOf(error), "bad");
+        }
+        return;
+      }
     }
   }
 }

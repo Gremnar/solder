@@ -75,7 +75,7 @@ class Cancelled extends GatewayError {
  *            tool_call_id?: string}} Message
  * @typedef {{content: string, calls: ToolCall[], finishReason: string, usage: any,
  *            credits: Credits | null, ms: number}} Reply
- * @typedef {{endpoint: string, apiKey: string, modelsEndpoint?: string, quietMs?: number,
+ * @typedef {{endpoint: string, apiKey: string, modelsEndpoint?: string, embeddingsEndpoint?: string, quietMs?: number,
  *            maxRetries?: number, maxResponseBytes?: number, maxOutputTokens?: number}} Settings
  */
 
@@ -126,6 +126,7 @@ class GatewayClient {
   constructor(settings) {
     this.endpoint = checkedUrl(settings.endpoint, "Endpoint");
     this.modelsEndpoint = settings.modelsEndpoint ? checkedUrl(settings.modelsEndpoint, "Models endpoint") : "";
+    this.embeddingsEndpoint = settings.embeddingsEndpoint ? checkedUrl(settings.embeddingsEndpoint, "Embeddings endpoint") : "";
     const key = String(settings.apiKey ?? "").trim();
     if (/[\x00-\x20\x7f]/.test(key) || !/^[\x21-\x7e]*$/.test(key)) {
       throw new GatewayError("The API key must be a token without spaces or control characters.");
@@ -178,19 +179,62 @@ class GatewayClient {
     }
   }
 
+  /** An address next to /chat/completions (its /models, its /embeddings). @param {string} name @param {string} what */
+  sibling(name, what) {
+    const url = new URL(this.endpoint);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (!path.toLowerCase().endsWith("/chat/completions")) {
+      throw new GatewayError(`Set ${what}; it can't be worked out from the endpoint.`);
+    }
+    url.pathname = path.slice(0, -"/chat/completions".length) + "/" + name;
+    url.search = url.hash = "";
+    return url.toString();
+  }
+
+  /**
+   * One vector per text, in order, from the gateway's /embeddings (next to /chat/completions). Busy answers are
+   * retried like replies; nothing is ever shown from an embedding, so a resend can't repeat anything.
+   * @param {{model: string, input: string[], signal?: AbortSignal}} request
+   * @returns {Promise<{vectors: number[][], tokens: number, credits: Credits | null}>}
+   */
+  async embed({ model, input, signal }) {
+    if (typeof model !== "string" || !model.trim()) throw new GatewayError("Choose an embeddings model in Settings, under Your docs.");
+    const endpoint = this.embeddingsEndpoint || this.sibling("embeddings", "an embeddings endpoint");
+    const body = Buffer.from(JSON.stringify({ model, input }), "utf8");
+    for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) throw new Cancelled();
+      let failure;
+      try {
+        const { status, headers, text } = await this._request(endpoint, body, signal, 120_000);
+        if (status === 200) {
+          const value = parseJson(text);
+          const data = Array.isArray(value.data) ? value.data : null;
+          if (!data || data.length !== input.length) throw new GatewayError("The embeddings didn't come back one for each text.");
+          /** @type {number[][]} */
+          const vectors = new Array(input.length);
+          data.forEach((/** @type {any} */ item, /** @type {number} */ position) => {
+            vectors[Number.isInteger(item?.index) ? item.index : position] = item?.embedding;
+          });
+          if (vectors.some((vector) => !Array.isArray(vector) || !vector.length || typeof vector[0] !== "number")) {
+            throw new GatewayError("The embeddings didn't come back as lists of numbers.");
+          }
+          const usage = value.usage || {};
+          return { vectors, tokens: Number(usage.prompt_tokens ?? usage.total_tokens ?? 0) || 0, credits: credits(headers) };
+        }
+        failure = this._httpFailure(status, headers, text);
+      } catch (error) {
+        if (error instanceof Cancelled) throw error;
+        failure = error;
+      }
+      const e = /** @type {any} */ (failure);
+      if (!(failure instanceof GatewayError) || !e.transient || e.exhausted || attempt >= this.maxRetries) throw failure;
+      await sleep(e.retryAfterMs ?? BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)], signal);
+    }
+  }
+
   /** The model ids the gateway offers (its /models next to /chat/completions). @param {AbortSignal} [signal] */
   async models(signal) {
-    let endpoint = this.modelsEndpoint;
-    if (!endpoint) {
-      const url = new URL(this.endpoint);
-      const path = url.pathname.replace(/\/+$/, "");
-      if (!path.toLowerCase().endsWith("/chat/completions")) {
-        throw new GatewayError("Set a models endpoint; it can't be worked out from the endpoint.");
-      }
-      url.pathname = path.slice(0, -"/chat/completions".length) + "/models";
-      url.search = url.hash = "";
-      endpoint = url.toString();
-    }
+    const endpoint = this.modelsEndpoint || this.sibling("models", "a models endpoint");
     const { status, headers, text } = await this._request(endpoint, null, signal, 60_000);
     if (status !== 200) throw this._httpFailure(status, headers, text);
     const value = parseJson(text);
@@ -291,7 +335,8 @@ class GatewayClient {
       const url = new URL(endpoint);
       const lib = url.protocol === "https:" ? https : http;
       const req = lib.request(url, { method: body ? "POST" : "GET", signal,
-        headers: { Accept: "application/json", ...(this.apiKey ? { Authorization: "Bearer " + this.apiKey } : {}) } });
+        headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}),
+          ...(this.apiKey ? { Authorization: "Bearer " + this.apiKey } : {}) } });
       req.setTimeout(ms, () => req.destroy(new GatewayError("The gateway took too long to answer.", { transient: true })));
       req.on("error", (error) => reject(signal?.aborted ? new Cancelled()
         : error instanceof GatewayError ? error : this._transportFailure(error)));

@@ -52,7 +52,15 @@ class SolderPanel {
     this.credits = null;
     this.answerTokens = 0;
     this.setup = new SetupWizard(context, KEY, () => this.post());
+    // Docs search by meaning: embeddings from the same gateway, and what they cost in the log.
+    this.tools.embedder = (/** @type {string} */ model, /** @type {string[]} */ input, /** @type {AbortSignal | undefined} */ signal) =>
+      this.client().embed({ model, input, signal });
+    this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
+      testEmbedding: async (/** @type {string} */ model) => {
+        const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
+        return { dims: vectors[0].length, tokens };
+      },
       refreshDocs: () => { this.tools.refreshDocs(); }, refreshModels: () => this.refreshModels() }, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "solder.focus";
@@ -66,7 +74,8 @@ class SolderPanel {
       vscode.window.onDidChangeTextEditorSelection(() => this.postEditor()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("solder")) { this._client = null; this.refreshModels(); }
-        if (event.affectsConfiguration("solder.docsFolders")) this.tools.refreshDocs();
+        if (event.affectsConfiguration("solder.docsFolders") || event.affectsConfiguration("solder.docsSearch")
+          || event.affectsConfiguration("solder.embeddingModel")) this.tools.refreshDocs();
       }),
     );
     // Old backups are pruned to the storage limit a little after start, and after new ones.

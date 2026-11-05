@@ -293,7 +293,7 @@
   function renderSettings() {
     const s = state.settings;
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
-    const shape = JSON.stringify({ models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path),
+    const shape = JSON.stringify({ models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
     const values = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
     const savedNow = s.saved && (s.saved !== settingsSaved || values !== settingsValues) ? s.saved : "";
@@ -359,7 +359,14 @@
         `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
         (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
         `<div class="docs">${docs}</div><button class="link-button" data-sact="addDocs">Add a folder…</button>` +
-        `<div class="hint">Plain text of any kind, and Word, Excel and PowerPoint files; not PDFs or scans. Up to 20,000 files a folder, indexed on this PC.</div>`) +
+        `<div class="hint">Plain text of any kind, and Word, Excel and PowerPoint files; not PDFs or scans. Up to 20,000 files a folder, indexed on this PC.</div>` +
+        `<div class="field-label" id="sf-docsSearch-label"><span>Search by</span>${saved("docsSearch")}</div><div class="segs" role="group" aria-labelledby="sf-docsSearch-label">` +
+        [["keyword", "Keywords"], ["hybrid", "Keywords + meaning"]].map(([value, text]) => `<button class="seg${s.docsSearch === value ? " on" : ""}" data-sfield="docsSearch" data-value="${value}" aria-pressed="${s.docsSearch === value}">${text}</button>`).join("") + `</div>` +
+        (s.docsSearch === "hybrid"
+          ? label("Embeddings model", "embeddingModel", saved("embeddingModel")) + `<div class="row-field"><input class="field" id="sf-embeddingModel" data-field="embeddingModel" spellcheck="false" placeholder="The gateway's embeddings model id" value="${escape(s.embeddingModel)}">` +
+            `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
+            `<div class="hint">Meaning search finds passages that say the same thing in other words. It sends every passage of your docs folders to the gateway once to be turned into numbers, then only changed files, and each search's words. The log (Copy diagnostics) shows the tokens each run used.</div>`
+          : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)) +
       section("Rules and instructions",
         label("Your rules", "rules", saved("rules")) + `<textarea class="field area" id="sf-rules" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
         label("Instruction files", "instructionFiles", saved("instructionFiles")) + `<input class="field" id="sf-instructionFiles" data-field="instructionFiles" spellcheck="false" value="${escape(s.instructionFiles)}">` +
@@ -391,8 +398,11 @@
     if (!d) return { text: "", busy: false };
     if (!d.available) return { text: "Needs a newer VS Code", busy: false };
     if (!d.folders) return { text: "No folders yet", busy: false };
-    if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far`, busy: true };
-    return { text: `Ready · ${Number(d.indexed).toLocaleString()} file${d.indexed === 1 ? "" : "s"} indexed`, busy: false };
+    const m = d.meaning;
+    const meaning = !m ? "" : m.error ? " · meaning: stopped, see the log" : m.passages
+      ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages${m.tokens ? `, ${compact(m.tokens)} tokens` : ""}` : "";
+    if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far${meaning}`, busy: true };
+    return { text: `Ready · ${Number(d.indexed).toLocaleString()} file${d.indexed === 1 ? "" : "s"} indexed${meaning}`, busy: false };
   }
 
   /** A settings field was left (or Enter pressed, or a choice made): save it. @param {HTMLElement} el */

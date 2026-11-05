@@ -82,6 +82,12 @@
           "description": "Project instruction files the model follows, by file name only: the one at the workspace root, and the nearest one when it reads files in a subfolder." },
         "solder.storageLimitGB": { "type": "number", "default": 5, "minimum": 0.1, "scope": "machine", "order": 11,
           "markdownDescription": "The most disk space, in GB, that Undo's backups may use (the copies Solder keeps before each change). Past it, the oldest go first; there's no time limit. Deleting a chat removes its backups." },
+        "solder.docsSearch": { "type": "string", "enum": ["keyword", "hybrid"], "default": "keyword", "scope": "machine", "order": 10.1,
+          "enumDescriptions": ["Words only: the index stays on this PC, and only the passages the model reads are sent.",
+            "Words and meaning: each passage of your docs is also sent once to the gateway's embeddings model, so a search finds passages that say the same thing in other words."],
+          "markdownDescription": "How docs search finds passages. **hybrid** needs **Embeddings model** and sends every passage of your docs folders to the gateway once (then only changed files), plus each search's words." },
+        "solder.embeddingModel": { "type": "string", "default": "", "scope": "machine", "order": 10.2,
+          "description": "The gateway's embeddings model, for docs search by meaning (Docs search: hybrid)." },
         "solder.docsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10,
           "items": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": {
             "path": { "type": "string", "description": "The folder." },

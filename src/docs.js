@@ -26,6 +26,12 @@ const MAX_UNZIPPED_BYTES = 100 * 1024 * 1024;
 const MAX_LINE_CHARS = 4_000;
 const MAX_SHEET_ROWS = 20_000;
 const RESULT_COUNT = 10;
+/** Passages sent to the embeddings model at once. */
+const EMBED_BATCH = 32;
+/** How many each search takes from the keyword ranking and from the meaning ranking before they're merged. */
+const CANDIDATES = 50;
+/** Reciprocal rank fusion's constant: a passage high in either ranking does well; one high in both, best. */
+const FUSION_K = 60;
 const SKIP_FOLDERS = new Set([".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
   "$recycle.bin", "system volume information"]);
 const OFFICE = new Set([".docx", ".docm", ".dotx", ".xlsx", ".xlsm", ".pptx", ".pptm"]);
@@ -329,6 +335,11 @@ class DocsIndex {
     this.progress = { indexed: 0, changed: 0 };
     /** @type {Map<string, number>} when each folder was last looked at (walked, in full or as far as allowed) */
     this.walked = new Map();
+    /** What embedding has done: this run, and in all (tokens are the gateway's count). */
+    this.embedding = { done: 0, tokens: 0, runTokens: 0, error: "" };
+    /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
+    this.loaded = null;
+    this.version = 0;
   }
 
   _open() {
@@ -340,7 +351,9 @@ class DocsIndex {
       db.exec(`PRAGMA journal_mode = WAL;
         CREATE TABLE IF NOT EXISTS files(key TEXT PRIMARY KEY, root TEXT NOT NULL, stamp TEXT NOT NULL);
         CREATE VIRTUAL TABLE IF NOT EXISTS sections USING fts5(key UNINDEXED, path UNINDEXED, location UNINDEXED,
-          heading, body, tokenize = 'porter unicode61');`);
+          heading, body, tokenize = 'porter unicode61');
+        CREATE TABLE IF NOT EXISTS vectors(sid INTEGER PRIMARY KEY, key TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL);
+        CREATE INDEX IF NOT EXISTS vectors_key ON vectors(key);`);
       return db;
     };
     try {
@@ -369,12 +382,105 @@ class DocsIndex {
    * @param {string[]} roots @param {{ms?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<{files: number, changed: number, unfinished: boolean, truncated: boolean}>}
    */
-  refresh(roots, { ms = 60_000, signal } = {}) {
+  refresh(roots, { ms = 60_000, signal, embed } = {}) {
     // Already running: say so at once instead of waiting (a search goes on with what's indexed).
     if (this.active) return Promise.resolve({ files: this.count(), changed: 0, unfinished: true, truncated: false, busy: true });
     this.progress = { indexed: 0, changed: 0 };
-    this.active = this._refresh(roots, ms, signal).finally(() => { this.active = null; });
+    const stop = Date.now() + ms;
+    this.active = this._refresh(roots, ms, signal)
+      .then(async (result) => {
+        // Then the passages' vectors, when meaning search is on: in the same turn, so nothing changes under it.
+        if (embed && !signal?.aborted) await this._embed(embed, stop, signal);
+        return result;
+      })
+      .finally(() => { this.active = null; });
     return this.active;
+  }
+
+  /**
+   * Vectors for the passages that have none (or another model's). Stops at `stop`, or at the gateway's first
+   * refusal (kept in this.embedding.error); the keyword index works either way.
+   * @param {{model: string, fn: (texts: string[], signal?: AbortSignal) => Promise<{vectors: number[][], tokens: number}>,
+   *          onBatch?: (done: number, tokens: number) => void}} embed @param {number} stop @param {AbortSignal} [signal]
+   */
+  async _embed(embed, stop, signal) {
+    const db = this._open();
+    if (db.prepare("SELECT count(*) AS n FROM vectors WHERE model <> ?").get(embed.model).n) {
+      db.prepare("DELETE FROM vectors WHERE model <> ?").run(embed.model); // another model's vectors don't compare
+      this.version++;
+    }
+    this.embedding.runTokens = 0;
+    this.embedding.error = "";
+    const pending = db.prepare("SELECT rowid AS sid, key, path, heading, body FROM sections WHERE rowid NOT IN (SELECT sid FROM vectors) LIMIT ?");
+    const add = db.prepare("INSERT OR REPLACE INTO vectors (sid, key, model, vec) VALUES (?, ?, ?, ?)");
+    for (;;) {
+      if (Date.now() > stop || signal?.aborted) return;
+      const rows = pending.all(EMBED_BATCH);
+      if (!rows.length) return;
+      let answer;
+      try {
+        answer = await embed.fn(rows.map(passageText), signal);
+      } catch (error) {
+        this.embedding.error = error instanceof Error ? error.message : String(error);
+        return;
+      }
+      db.exec("BEGIN");
+      try {
+        rows.forEach((row, index) => add.run(Number(row.sid), String(row.key), embed.model, packed(answer.vectors[index])));
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      this.version++;
+      this.embedding.done += rows.length;
+      this.embedding.tokens += answer.tokens;
+      this.embedding.runTokens += answer.tokens;
+      embed.onBatch?.(rows.length, answer.tokens);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  /** How many passages there are, and how many have this model's vectors. @param {string} model */
+  vectorCount(model) {
+    const db = this._open();
+    return { passages: Number(db.prepare("SELECT count(*) AS n FROM sections").get().n),
+      embedded: Number(db.prepare("SELECT count(*) AS n FROM vectors WHERE model = ?").get(model).n) };
+  }
+
+  /**
+   * The passages nearest a query's vector, nearest first: [sid, similarity]. All vectors are compared (they're
+   * kept in memory, normalised, until they change): about 10 ms for 10,000 passages.
+   * @param {number[]} query @param {string} model @param {number} limit @returns {[number, number][]}
+   */
+  nearest(query, model, limit) {
+    if (!this.loaded || this.loaded.model !== model || this.loaded.version !== this.version) {
+      const rows = this._open().prepare("SELECT sid, vec FROM vectors WHERE model = ?").all(model);
+      const dims = rows.length ? rows[0].vec.byteLength / 4 : 0;
+      const all = new Float32Array(rows.length * dims);
+      const ids = [];
+      rows.forEach((row, index) => {
+        const vec = new Float32Array(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength / 4);
+        if (vec.length === dims) { all.set(vec, ids.length * dims); ids.push(Number(row.sid)); }
+      });
+      this.loaded = { model, version: this.version, ids, dims, all: all.subarray(0, ids.length * dims) };
+    }
+    const { ids, dims, all } = this.loaded;
+    const target = normalised(query);
+    if (!ids.length || target.length !== dims) return [];
+    /** @type {[number, number][]} */
+    const best = [];
+    for (let row = 0; row < ids.length; row++) {
+      let dot = 0;
+      const base = row * dims;
+      for (let i = 0; i < dims; i++) dot += all[base + i] * target[i];
+      if (best.length < limit) { best.push([ids[row], dot]); if (best.length === limit) best.sort((a, b) => b[1] - a[1]); }
+      else if (dot > best[limit - 1][1]) {
+        best[limit - 1] = [ids[row], dot];
+        for (let i = limit - 1; i > 0 && best[i][1] > best[i - 1][1]; i--) [best[i], best[i - 1]] = [best[i - 1], best[i]];
+      }
+    }
+    return best.length < limit ? best.sort((a, b) => b[1] - a[1]) : best;
   }
 
   /** @param {string[]} roots @param {number} ms @param {AbortSignal | undefined} signal */
@@ -405,6 +511,7 @@ class DocsIndex {
           try { text = await documentText(file.full); } catch { text = null; }
           db.exec("BEGIN");
           try {
+            if (db.prepare("DELETE FROM vectors WHERE key = ?").run(key).changes) this.version++;
             db.prepare("DELETE FROM sections WHERE key = ?").run(key);
             const add = db.prepare("INSERT INTO sections (key, path, location, heading, body) VALUES (?, ?, ?, ?, ?)");
             for (const piece of text ? sections(text) : []) add.run(key, file.full, piece.location, piece.heading, piece.body);
@@ -438,7 +545,8 @@ class DocsIndex {
   _forget(db, where, value) {
     const gone = db.prepare(`SELECT key FROM files WHERE ${where}`).all(value).map((row) => String(row.key));
     const remove = db.prepare("DELETE FROM sections WHERE key = ?");
-    for (const key of gone) remove.run(key);
+    const unvector = db.prepare("DELETE FROM vectors WHERE key = ?");
+    for (const key of gone) { remove.run(key); if (unvector.run(key).changes) this.version++; }
     db.prepare(`DELETE FROM files WHERE ${where}`).run(value);
   }
 
@@ -452,21 +560,24 @@ class DocsIndex {
    * @param {string} query @param {number} [limit]
    * @returns {Promise<{path: string, location: string, heading: string, excerpt: string, matched: number}[]>}
    */
-  search(query, limit = RESULT_COUNT) {
+  search(query, limit = RESULT_COUNT, meaning = null) {
     return (async () => {
       const expression = matchQuery(query);
-      if (!expression) return [];
+      if (!expression && !meaning) return [];
       const db = this._open();
       const sql = "SELECT rowid, path, location, heading, snippet(sections, 4, '[', ']', '…', 24) AS excerpt "
         + "FROM sections WHERE sections MATCH ? ORDER BY bm25(sections, 0, 0, 0, 2.0, 1.0) LIMIT ?";
-      let rows;
+      const take = meaning ? CANDIDATES : limit;
+      /** @type {any[]} */
+      let rows = [];
       try {
-        rows = db.prepare(sql).all(expression, limit);
+        rows = expression ? db.prepare(sql).all(expression, take) : [];
       } catch {
         // FTS5 syntax that isn't quite right: its words instead.
         const words = matchQuery(query.replace(/["()*^]|\b(AND|OR|NOT)\b/g, " "));
-        rows = words ? db.prepare(sql).all(words, limit) : [];
+        rows = words ? db.prepare(sql).all(words, take) : [];
       }
+      if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES), limit);
       /** @type {Map<number, number>} */
       const counts = new Map(rows.map((row) => [Number(row.rowid), 0]));
       const terms = queryTerms(query);
@@ -481,6 +592,26 @@ class DocsIndex {
         excerpt: String(row.excerpt).replace(/\s+/g, " ").trim(), matched: counts.get(Number(row.rowid)) ?? 0 }));
     })();
   }
+
+  /**
+   * The keyword ranking and the meaning ranking as one (reciprocal rank fusion): the best `limit`, with excerpts for
+   * the passages only the meaning ranking found (their opening lines). @param {any} db @param {any[]} keyword
+   * @param {[number, number][]} near @param {number} limit
+   */
+  _merge(db, keyword, near, limit) {
+    /** @type {Map<number, number>} */
+    const score = new Map();
+    keyword.forEach((row, rank) => score.set(Number(row.rowid), 1 / (FUSION_K + rank + 1)));
+    near.forEach(([sid], rank) => score.set(sid, (score.get(sid) ?? 0) + 1 / (FUSION_K + rank + 1)));
+    const order = [...score.keys()].sort((a, b) => /** @type {number} */ (score.get(b)) - /** @type {number} */ (score.get(a))).slice(0, limit);
+    const byId = new Map(keyword.map((row) => [Number(row.rowid), row]));
+    const missing = order.filter((sid) => !byId.has(sid));
+    if (missing.length) {
+      const rows = db.prepare(`SELECT rowid, path, location, heading, substr(body, 1, 240) AS excerpt FROM sections WHERE rowid IN (${missing.map(() => "?").join(",")})`).all(...missing);
+      for (const row of rows) byId.set(Number(row.rowid), { ...row, excerpt: String(row.excerpt) + "…" });
+    }
+    return order.map((sid) => byId.get(sid)).filter(Boolean);
+  }
 }
 
 /**
@@ -493,6 +624,27 @@ function loose(hits, query) {
   if (!hits.length || !terms || terms.length < 3) return null;
   const best = Math.max(...hits.map((hit) => hit.matched));
   return best <= Math.max(1, Math.floor(terms.length / 3)) ? { best, of: terms.length } : null;
+}
+
+/** What's sent to be embedded for a passage: its file's name, its heading, its text. @param {any} row */
+function passageText(row) {
+  return [path.basename(String(row.path)), String(row.heading || ""), String(row.body)].filter(Boolean).join("\n");
+}
+
+/** A vector at unit length (so similarity is a dot product), as 32-bit floats. @param {number[]} vector */
+function normalised(vector) {
+  const out = Float32Array.from(vector);
+  let sum = 0;
+  for (const value of out) sum += value * value;
+  const length = Math.sqrt(sum) || 1;
+  for (let i = 0; i < out.length; i++) out[i] /= length;
+  return out;
+}
+
+/** A vector as stored: normalised 32-bit floats. @param {number[]} vector */
+function packed(vector) {
+  const floats = normalised(vector);
+  return Buffer.from(floats.buffer, floats.byteOffset, floats.byteLength);
 }
 
 /** The index's key for a path: full, with Windows' case folded. @param {string} full */
