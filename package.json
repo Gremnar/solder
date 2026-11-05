@@ -33,6 +33,7 @@
       { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" },
       { "command": "solder.setup", "title": "Guided setup", "category": "Solder" },
       { "command": "solder.openGuide", "title": "Guide", "category": "Solder" },
+      { "command": "solder.feedback", "title": "Send feedback", "category": "Solder" },
       { "command": "solder.explainSelection", "title": "Explain this", "category": "Solder", "enablement": "editorHasSelection" },
       { "command": "solder.fixSelection", "title": "Fix this", "category": "Solder", "enablement": "editorHasSelection" },
       { "command": "solder.addSelection", "title": "Add to chat", "category": "Solder", "enablement": "editorHasSelection" }

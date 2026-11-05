@@ -261,6 +261,7 @@ class SolderPanel {
         }
         return;
       case "guide": await vscode.commands.executeCommand("solder.openGuide"); return;
+      case "feedback": await vscode.commands.executeCommand("solder.feedback"); return;
     }
   }
 

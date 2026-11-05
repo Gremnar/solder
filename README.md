@@ -94,7 +94,7 @@ The API key is set with **Solder: Set API key**, or in the guided setup. It's ne
 
 ## Privacy
 
-- **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet.
+- **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet. **⋯ → Send feedback…** opens your own email app, addressed to support, with only the Solder and VS Code versions filled in.
 - **Your key:** kept in VS Code's secret storage.
 - **Your chats and the docs index:** stay on your PC, in VS Code's storage for Solder.
 

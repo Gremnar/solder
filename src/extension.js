@@ -8,6 +8,10 @@
 const vscode = require("vscode");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { SolderPanel, KEY } = require("./panel.js");
+const os = require("node:os");
+
+const FEEDBACK_TO = "support@gremnar.com";
+const FEEDBACK_SUBJECT = "VS Code Solder extension feedback or support";
 
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
@@ -37,6 +41,13 @@ function activate(context) {
     vscode.commands.registerCommand("solder.setup", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.setup.start();
+    }),
+    vscode.commands.registerCommand("solder.feedback", () => {
+      // Your own email app, through the system: Solder itself sends nothing. Versions only, nothing from your chats.
+      const version = context.extension?.packageJSON?.version ?? "";
+      const body = `\n\n\n---\nSolder ${version} · VS Code ${vscode.version} · ${process.platform} ${os.release()}\n`;
+      const link = `mailto:${FEEDBACK_TO}?subject=${encodeURIComponent(FEEDBACK_SUBJECT)}&body=${encodeURIComponent(body)}`;
+      return vscode.env.openExternal(vscode.Uri.parse(link, true));
     }),
     vscode.commands.registerCommand("solder.openGuide", () =>
       vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(context.extensionUri, "README.md"))),
