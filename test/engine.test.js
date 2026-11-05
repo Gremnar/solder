@@ -246,10 +246,10 @@ test("compaction: past the limit, the older part is summarised and replayed as a
 test("compaction goes by the server's token count when it reports one, not just characters ÷ 4", async () => {
   const chat = Engine.newChat();
   for (let i = 0; i < 6; i++) {
-    chat.messages.push({ role: "user", content: `question ${i} ` + "q".repeat(2400), meta: { typed: "q" } },
+    chat.messages.push({ role: "user", content: `question ${i} ` + "q".repeat(2000), meta: { typed: "q" } },
       { role: "assistant", content: `answer ${i}` });
   }
-  // About 4,500 estimated tokens with the tools: under 5,000, so the first message doesn't compact. Its reply says the
+  // About 4,500 estimated tokens with the 10 tools: under 5,000, so the first message doesn't compact. Its reply says the
   // prompt was 1.5 times that, so the next one does.
   const client = fakeClient([(req) => ({ content: "first", usage: { prompt_tokens: Math.round(1.5 * (req.messages
     .reduce((sum, m) => sum + Math.ceil(m.content.length / 4) + Math.ceil(JSON.stringify(m.tool_calls || "").length / 4) + 4, 0)

@@ -19,7 +19,8 @@ something needs building, testing or running, say what to run and the user will.
 - If the question doesn't need the workspace, just answer.
 - Look with read_file, symbols, search and find_files, and see what's changed since the last commit with \
 changes; change files with edit_file and write_file; check your work with problems (VS Code's errors and \
-warnings). remove_item deletes a file or folder, and asks the user first.
+warnings). move_item moves, renames or copies a file or folder; remove_item deletes one, and asks the user \
+first. There's no separate tool for folders: write_file and move_item create any folders a path needs.
 - To find where a function, class or method is defined or used, use symbols rather than search: it follows \
 imports and skips comments, strings and look-alike names.
 - A working folder or open file named in the user's message tells you where they are, not what to do: read \
@@ -113,6 +114,12 @@ part of an existing file, use edit_file. Returns any new problems in the file.",
     path: { type: "string", description: `The file: ${RELATIVE}.` },
     content: { type: "string", description: "The file's whole text." },
   }, ["path", "content"]],
+  move_item: ["Moves or renames a file or folder, or copies it (copy: true), creating any folders needed. A to that's \
+a folder, or ends with /, means into it. Never overwrites; the user can undo it.", {
+    from: { type: "string", description: "The file or folder." },
+    to: { type: "string", description: "Its new path, or a folder to put it in." },
+    copy: { type: "boolean", description: "True to copy instead." },
+  }, ["from", "to"]],
   remove_item: ["Deletes a file or a folder (with everything in it). The user is asked first, and can undo it.", {
     path: { type: "string", description: `The file or folder: ${RELATIVE}.` },
   }, ["path"]],
@@ -262,6 +269,16 @@ searching again with other words.`,
   noProblems: (/** @type {string} */ file) => "No errors or warnings" + (file ? ` in ${file}.` : "."),
   moreProblems: (/** @type {number} */ more) => `(${more} more)`,
   removeRoot: "That's the workspace folder (or a drive) itself; Solder won't remove it.",
+  moveRoot: "That's the workspace folder (or a drive) itself; Solder won't move it.",
+  moveSame: "from and to are the same place, so nothing was done.",
+  moveIntoItself: "A folder can't go inside itself.",
+  moveExists: (/** @type {string} */ file) => `Something is already at ${file}, and move_item never overwrites: choose another name, or remove it first.`,
+  moveUnsaved: (/** @type {string} */ file) => `${file} has unsaved changes in the editor. Ask the user to save it first.`,
+  moved: (/** @type {boolean} */ copied, /** @type {string} */ from, /** @type {string} */ to, /** @type {number | null} */ files) =>
+    `${copied ? "Copied" : "Moved"} ${from} to ${to}` + (files === null ? "" : ` (a folder with ${files.toLocaleString("en-US")} file${files === 1 ? "" : "s"})`) + "."
+    + (copied ? "" : " Anything that imports or links to it by its old path still points there."),
+  moveMentions: (/** @type {string} */ name, /** @type {string[]} */ lines) =>
+    `These lines mention ${name} and may still use the old path; update the ones that do:\n${lines.join("\n")}`,
   removeNoTrash: (/** @type {string} */ file) =>
     `${file} couldn't be moved to the Recycle Bin, and it's too big to keep a copy of, so it wasn't removed.`,
   removed: (/** @type {string} */ file, /** @type {number | null} */ files) =>

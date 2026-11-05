@@ -33,7 +33,7 @@
 
 ## What it can do
 
-Solder has nine tools, and no shell. It never runs commands: when something needs building or testing, it says what to run, and you run it.
+Solder has ten tools, and no shell. It never runs commands: when something needs building or testing, it says what to run, and you run it.
 
 | Tool | What it does |
 |---|---|
@@ -42,7 +42,8 @@ Solder has nine tools, and no shell. It never runs commands: when something need
 | `search` | Searches the workspace, or your docs folders. |
 | `find_files` | Lists files matching a pattern. |
 | `changes` | Shows what's changed in git since the last commit. |
-| `edit_file`, `write_file` | Changes or writes a file, then reports any new errors VS Code finds in it. |
+| `edit_file`, `write_file` | Changes or writes a file (creating any folders it needs), then reports any new errors VS Code finds in it. |
+| `move_item` | Moves, renames or copies a file or folder, creating any folders it needs. It never overwrites, and lists the lines that still use the old path so they get fixed. It can be undone. |
 | `remove_item` | Deletes a file or folder, after asking. It can be undone. |
 | `problems` | Lists the errors and warnings VS Code shows. |
 

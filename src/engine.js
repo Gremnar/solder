@@ -621,7 +621,7 @@ function fingerprint(name, args) {
 /** A short label for a step line: "read_file src/a.js". */
 function labelOf(/** @type {string} */ name, /** @type {any} */ args) {
   const what = args.name ? `${args.name}${args.find === "references" ? " (uses)" : ""} in ${args.path}`
-    : args.docs ? `docs: ${args.query}` : args.path || args.glob || args.query || "";
+    : args.from ? `${args.from} → ${args.to ?? "?"}` : args.docs ? `docs: ${args.query}` : args.path || args.glob || args.query || "";
   const shown = String(what).replace(/\s+/g, " ").trim();
   return shown ? `${name} ${shown.length > 80 ? shown.slice(0, 79) + "…" : shown}` : name;
 }

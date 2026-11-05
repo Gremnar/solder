@@ -368,7 +368,7 @@
     const cls = item.pending ? (item.running ? "running" : "waiting") : item.failed ? "failed" : "ok";
     const mark = item.pending ? "" : item.undone ? ICONS.undo : item.failed ? ICONS.cross : ICONS.check;
     const acts = item.change && !item.pending
-      ? `<span class="acts">${item.removed ? "" : `<button data-review="${item.id}">Review</button>`}${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
+      ? `<span class="acts">${item.noDiff || item.removed ? "" : `<button data-review="${item.id}">Review</button>`}${item.undone ? "" : `<button data-undo="${item.id}">Undo</button>`}</span>` : "";
     const label = item.pending ? item.label : (item.summary || item.label) + (item.undone ? " · undone" : "");
     const shown = open.has(item.id) && !!item.output;
     const body = shown ? `<pre class="out" data-enter="o:${item.id}"><code>${escape(item.output)}</code></pre>` : "";

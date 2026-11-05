@@ -417,7 +417,7 @@ class SolderPanel {
         const meta = message.meta || {};
         Object.assign(step, { pending: false, summary: meta.summary, failed: !!meta.failed,
           output: message.content.length > SHOWN_OUTPUT_CHARS ? message.content.slice(0, SHOWN_OUTPUT_CHARS) + "\n…" : message.content,
-          change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, undone: !!meta.undone, steer: meta.steer || "",
+          change: !!meta.change, created: !!meta.change?.created, removed: !!meta.change?.removed, noDiff: !!(meta.change?.removed || meta.change?.moved || meta.change?.copied), undone: !!meta.undone, steer: meta.steer || "",
           ms: typeof meta.ms === "number" ? meta.ms : null });
       }
     }

@@ -9,7 +9,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 9 tools: read, symbols, search, find, changes, edit, write, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
+| 10 tools: read, symbols, search, find, changes, edit, write, move, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
@@ -56,6 +56,7 @@ VS Code extension host (Node)
 | `changes` | path? | `git` started directly: one fixed program, no shell. It uses the path VS Code's git extension found, with `--no-ext-diff --no-textconv`, no pager, no fsmonitor and no optional locks, so a repo's config can't make Solder run other programs. With no path: status plus line counts, and the diff when it's 12k characters or less. With a path: that file's or folder's diff against HEAD. New files are listed, and unsaved editor changes are flagged | none |
 | `edit_file` | path, old_text, new_text | one `WorkspaceEdit`, then save. `old_text` must be unique. Keeps the file's line endings. Accepts a match that differs only in trailing whitespace | none (Undo kept) |
 | `write_file` | path, content | create or overwrite through `WorkspaceEdit`, then save | none inside the workspace; asks outside it |
+| `move_item` | from, to, copy? | `workspace.fs.rename` or `copy` (plain file operations, not a rename with import updates, which would change files Undo doesn't cover). `to` that's a folder, or ends with `/`, means into it; missing folders are created; it never overwrites, and refuses a file with unsaved editor changes. After a move it lists up to 20 lines that still mention the old name, so the model fixes them (a note alone was ignored three times in four). Undo moves it back, or removes the copy | asks when anything leaves or enters the workspace |
 | `problems` | path? | `languages.getDiagnostics` (errors and warnings, capped) | none |
 
 Details that matter:

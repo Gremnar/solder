@@ -27,6 +27,8 @@ const MAX_DEFINITIONS = 5;
 const MAX_DEFINITION_LINES = 80;
 const MAX_REFERENCES = 100;
 const MAX_CHANGED = 200;
+/** Lines that still mention a moved file's name, shown with the move. */
+const MOVE_MENTIONS = 20;
 const MAX_DIFF_CHARS = 30_000;
 /** With no path, the whole diff comes along with the file list when it's this small (saves a call per file). */
 const INLINE_DIFF_CHARS = 12_000;
@@ -93,6 +95,13 @@ class WorkspaceTools {
 
   /** Why a call needs asking about first, or null: removing anything, and changes outside the workspace. */
   needsApproval(/** @type {string} */ name, /** @type {any} */ args) {
+    if (name === "move_item") {
+      // Anything that leaves the workspace, or lands outside it, is asked about.
+      let from, to;
+      try { from = this.resolve(args.from); to = this.resolve(args.to); } catch { return null; }
+      if (from.inside && to.inside) return null;
+      return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
+    }
     let target;
     try { target = this.resolve(args.path); } catch { return null; }
     if (name === "remove_item") {
@@ -121,6 +130,7 @@ class WorkspaceTools {
         case "edit_file": return await this.editFile(args, ctx.chat);
         case "write_file": return await this.writeFile(args, ctx.chat);
         case "remove_item": return await this.removeItem(args, ctx.chat);
+        case "move_item": return await this.moveItem(args);
         case "problems": return await this.problems(args);
         default: throw new ToolError(RESULTS.noTool(name));
       }
@@ -467,6 +477,12 @@ class WorkspaceTools {
       summary: `Searched docs for "${short(query)}" · ${hits.length} passage${hits.length === 1 ? "" : "s"}` };
   }
 
+  /** Lines containing this exact text under a folder (ripgrep, or the JS fallback), as path:line:text. @param {string} root @param {string} text */
+  textLines(root, text) {
+    const rg = this.ripgrep();
+    return rg ? this.searchWithRipgrep(rg, root, text, false, undefined, AbortSignal.timeout(15_000)) : this.searchInJs(root, text, false, undefined);
+  }
+
   /** VS Code's own rg.exe, or null (then a JS search is used). */
   ripgrep() {
     if (this._rg !== undefined) return this._rg;
@@ -668,6 +684,52 @@ class WorkspaceTools {
     return target;
   }
 
+  // ------------------------------------------------------------------ move_item --
+
+  /** Move, rename or copy a file or folder; never overwrites. Undo moves it back, or removes the copy. */
+  async moveItem(/** @type {any} */ args) {
+    const source = this.resolve(args.from);
+    const root = this.root();
+    let stat;
+    try { stat = fs.statSync(source.full); } catch { throw new ToolError(RESULTS.missing(source.shown)); }
+    if ((root && path.resolve(source.full).toLowerCase() === path.resolve(root).toLowerCase()) || path.parse(source.full).root === source.full) {
+      throw new ToolError(RESULTS.moveRoot);
+    }
+    const given = String(args.to ?? "").trim();
+    let target = this.resolve(given);
+    let into = /[\\/]$/.test(given);
+    try { if (fs.statSync(target.full).isDirectory()) into = true; } catch { /* a new path */ }
+    if (into) target = this.resolve(path.join(target.full, path.basename(source.full)));
+    if (path.resolve(target.full).toLowerCase() === path.resolve(source.full).toLowerCase()) throw new ToolError(RESULTS.moveSame);
+    const folder = stat.isDirectory();
+    if (folder && within(target.full, source.full)) throw new ToolError(RESULTS.moveIntoItself);
+    if (fs.existsSync(target.full)) throw new ToolError(RESULTS.moveExists(target.shown));
+    // The file on disk is what moves: an editor's unsaved changes would be left behind.
+    const dirty = vscode.workspace.textDocuments.find((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, source.full));
+    if (dirty) throw new ToolError(RESULTS.moveUnsaved(this.shown(dirty.uri.fsPath)));
+    const copy = !!args.copy;
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target.full)));
+    // Plain file operations, not a rename with import updates: those could change other files Undo doesn't know about.
+    if (copy) await vscode.workspace.fs.copy(source.uri, target.uri, { overwrite: false });
+    else await vscode.workspace.fs.rename(source.uri, target.uri, { overwrite: false });
+    const files = folder ? measure(target.full).files : null;
+    // A move breaks whatever used the old path: show the model those lines now, so it fixes them
+    // (in live tests a note alone was ignored three times in four).
+    let mentions = "";
+    if (!copy && root) {
+      const name = path.basename(source.full).replace(/\.[^.]+$/, "");
+      if (name.length >= 3) {
+        const base = this.base();
+        const lines = (await this.textLines(base, name).catch(() => []))
+          .filter((line) => !within(path.resolve(base, line.slice(0, line.indexOf(":"))), target.full)).slice(0, MOVE_MENTIONS);
+        if (lines.length) mentions = "\n\n" + RESULTS.moveMentions(name, lines);
+      }
+    }
+    return { output: RESULTS.moved(copy, source.shown, target.shown, files) + mentions,
+      summary: `${copy ? "Copied" : "Moved"} ${source.shown} → ${target.shown}` + (folder ? ` · ${files} files` : ""),
+      change: { path: target.full, shown: target.shown, from: source.full, fromShown: source.shown, moved: !copy, copied: copy, folder } };
+  }
+
   // ---------------------------------------------------------------- remove_item --
 
   async removeItem(/** @type {any} */ args, /** @type {any} */ chat) {
@@ -701,6 +763,16 @@ class WorkspaceTools {
   /** Put a changed file back as it was before the step (or remove one the step created). */
   async undo(/** @type {any} */ change) {
     const uri = vscode.Uri.file(change.path);
+    if (change.moved) {
+      if (fs.existsSync(change.from)) throw new Error(`Something is already at ${change.fromShown}; move it first.`);
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.from)));
+      await vscode.workspace.fs.rename(uri, vscode.Uri.file(change.from), { overwrite: false });
+      return;
+    }
+    if (change.copied) {
+      await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
+      return;
+    }
     if (change.removed) {
       if (!change.backup || !fs.existsSync(change.backup)) throw new Error("There's no copy to put back (it was too big to keep).");
       if (fs.existsSync(change.path)) throw new Error(`Something is already at ${change.shown}; move it first.`);
