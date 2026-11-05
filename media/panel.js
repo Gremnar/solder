@@ -964,7 +964,7 @@
 
   // ------------------------------------------------------------ slash commands --
 
-  /** What "/" offers. The extension runs them (src/panel.js, command); /help and a bare /model stay here. */
+  /** What "/" offers. The extension runs them (src/panel.js, command); /help opens the guide, and a bare /model the model menu. */
   const COMMANDS = [
     { name: "new", about: "Start a new chat" },
     { name: "fork", about: "Carry on in a copy of this chat" },
@@ -974,7 +974,7 @@
     { name: "effort", hint: "low, medium or high", about: "How hard this chat thinks" },
     { name: "review", about: "Review what's changed since the last commit" },
     { name: "settings", about: "Open Solder's settings" },
-    { name: "help", about: "List these commands" },
+    { name: "help", about: "Open Solder's guide" },
   ];
   const slash = $("slash");
   /** @type {typeof COMMANDS} the commands the list shows now */
@@ -1025,7 +1025,7 @@
   }
   /** @param {string} name @param {string} arg */
   function runCommand(name, arg) {
-    if (name === "help") { input.value = "/"; autosize(); input.focus(); renderSlash(); return; }
+    if (name === "help") { vscode.postMessage({ type: "guide" }); return; }
     if (name === "model" && !arg) { toggle("model-menu"); return; }
     if (name === "new" || name === "fork" || name === "review") stickToBottom = true;
     vscode.postMessage({ type: "command", name, arg });

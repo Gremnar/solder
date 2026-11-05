@@ -40,7 +40,7 @@
   - **/new** starts a new chat, and **/fork** carries on in a copy of this one (the original stays as it was);
   - **/compact** summarises the chat now to save tokens; add what matters most, as in `/compact the API names`;
   - **/rename**, **/model** and **/effort** change this chat's name, model or effort, as in `/effort high`;
-  - **/review** reviews what's changed since the last commit; **/settings** opens the settings; **/help** lists them all.
+  - **/review** reviews what's changed since the last commit; **/settings** opens the settings; **/help** opens this guide.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
 - **Settings** (⋯ → Settings) open right in the panel: the connection, the model and effort, your docs folders (with how far indexing has got), rules, and cost. Each field saves as you leave it.

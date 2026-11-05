@@ -278,7 +278,7 @@ class SolderPanel {
   /** @param {{text: string, selection?: boolean, file?: boolean}} message */
   /**
    * A slash command typed in the box: /new, /fork, /compact [what to keep], /rename [name], /model [name],
-   * /effort [level], /review, /settings. (/help, and /model with no name, stay in the panel.)
+   * /effort [level], /review, /settings. (/help opens the guide from the panel; /model with no name, the model menu.)
    * @param {string} name @param {string} arg
    */
   async command(name, arg) {
