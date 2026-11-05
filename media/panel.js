@@ -400,7 +400,8 @@
       feature(ICONS.search, "<b>Reads and searches</b> your workspace") +
       feature(ICONS.edit, "<b>Edits</b>, then checks for problems") +
       feature(ICONS.undo, "<b>Every change</b> can be reviewed and undone") + "</ul>" +
-      (state.workspace ? "" : `<p class="aside">Open a folder first: Solder works inside a workspace.</p>`) + "</div>";
+      (state.workspace ? `<p class="hint"><kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.</p>`
+        : `<p class="aside">Open a folder first: Solder works inside a workspace.</p>`) + "</div>";
   }
 
   let shownApprovals = "";

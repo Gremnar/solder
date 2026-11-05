@@ -68,6 +68,8 @@ svg circle { fill: currentColor; stroke: none; }
 
 /* ---- top bar ---- */
 .bar { position: relative; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 8px; border-bottom: 1px solid var(--hairline); }
+.bar > .brand { flex: none; width: 18px; height: 18px; margin: 0 0 0 5px; color: var(--link); stroke-width: 1.8; }
+.bar > .brand .hollow { fill: none; stroke: currentColor; }
 .title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; text-align: left; padding: 4px 7px; border-radius: var(--r-sm);
   font-weight: 600; letter-spacing: -0.005em; transition: background var(--t-fast) ease; }
 .title:hover { background: var(--hover); }
@@ -127,6 +129,8 @@ svg circle { fill: currentColor; stroke: none; }
 .welcome .lead { margin: 0; max-width: 300px; }
 .welcome .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; justify-content: center; }
 .welcome .aside { margin-top: 16px; font-size: 0.9em; }
+.welcome .hint { margin: 18px 0 0; font-size: 0.86em; opacity: 0.85; }
+.welcome .hint kbd { font-family: inherit; font-size: 0.95em; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--raised); }
 .logo { position: relative; width: 64px; height: 64px; display: grid; place-items: center; border-radius: 18px; color: var(--link);
   background: linear-gradient(160deg, color-mix(in srgb, var(--link) 16%, var(--bg)), color-mix(in srgb, var(--link) 5%, var(--bg)));
   border: 1px solid var(--vscode-contrastBorder, color-mix(in srgb, var(--link) 26%, transparent));
@@ -149,6 +153,7 @@ svg circle { fill: currentColor; stroke: none; }
 .welcome.enter :is(h2, .lead, .actions, .aside) { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--age, 0ms) + 140ms); }
 .welcome.enter .lead { animation-delay: calc(var(--age, 0ms) + 190ms); }
 .welcome.enter :is(.actions, .aside) { animation-delay: calc(var(--age, 0ms) + 240ms); }
+.welcome.enter .hint { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--age, 0ms) + 410ms); }
 .welcome.enter .features li { animation: rise var(--t-slow) var(--ease) both; animation-delay: calc(var(--age, 0ms) + 260ms); }
 .welcome.enter .features li:nth-child(2) { animation-delay: calc(var(--age, 0ms) + 310ms); }
 .welcome.enter .features li:nth-child(3) { animation-delay: calc(var(--age, 0ms) + 360ms); }
@@ -164,7 +169,8 @@ svg circle { fill: currentColor; stroke: none; }
 .link-button:active:not([disabled]) { transform: scale(0.97); }
 
 /* messages */
-.user { position: relative; margin: 20px 0 10px; padding: 9px 12px; border-radius: var(--r-lg); background: var(--raised); border: 1px solid var(--hairline);
+.user { position: relative; margin: 20px 0 10px; padding: 9px 12px; border-radius: var(--r-lg); border: 1px solid var(--hairline);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%), var(--raised);
   white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; }
 .user:first-child { margin-top: 2px; }
 .user .chips { margin-top: 7px; }
@@ -236,6 +242,8 @@ body.vscode-high-contrast .status .what { background: none; color: var(--fg); an
 
 /* queued: typed while it works, waiting for the next step */
 .user.queued { background: none; border: 1px dashed var(--line); color: var(--muted); }
+.user.queued::before { content: "Queued"; display: block; margin-bottom: 4px; color: var(--link); font-size: 0.72em; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase; font-style: normal; }
 .user.queued.enter { animation: rise var(--t-slow) var(--ease) both; animation-delay: var(--age, 0ms); }
 .user .queued-note { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 0.82em; font-style: italic; }
 .user .queued-note svg { width: 12px; height: 12px; opacity: 0.8; }
