@@ -626,7 +626,11 @@ class WorkspaceTools {
     // By meaning too, once there are vectors: the query's own vector (one small request), merged with the keyword ranking.
     let meaning = null;
     const model = this.semantic();
-    if (model && this.embedder && index.vectorCount(model).embedded) {
+    const counts = model && this.embedder ? index.vectorCount(model) : null;
+    // Passages without vectors (a file changed or was added since the last run): the background run makes them
+    // now, so the next search has them. This one goes on with what's there; keywords find the new text already.
+    if (counts && counts.embedded < counts.passages && !index.active) setTimeout(() => this.refreshDocs(), 0);
+    if (counts && counts.embedded) {
       try {
         const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
         meaning = { vector: vectors[0], model };
