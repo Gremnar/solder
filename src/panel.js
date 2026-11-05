@@ -9,11 +9,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { systemPrompt, STARTERS, SELECTION } = require("./prompt.js");
+const { systemPrompt, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
 const { ChatStore } = require("./store.js");
 const { WorkspaceTools } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
+const { Log } = require("./log.js");
 
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
@@ -21,8 +22,10 @@ const SHOWN_OUTPUT_CHARS = 6_000;
 
 class SolderPanel {
   /** @param {vscode.ExtensionContext} context */
-  constructor(context) {
+  /** @param {vscode.ExtensionContext} context @param {{appendLine: (line: string) => void}} [channel] */
+  constructor(context, channel = { appendLine() {} }) {
     this.context = context;
+    this.log = new Log(channel);
     this.tools = new WorkspaceTools(context);
     this.store = new ChatStore((context.storageUri ?? context.globalStorageUri).fsPath);
     /** @type {vscode.WebviewView | null} */
@@ -61,6 +64,9 @@ class SolderPanel {
         if (event.affectsConfiguration("solder.docsFolders")) this.tools.refreshDocs();
       }),
     );
+    // Old backups are pruned to the storage limit a little after start, and after new ones.
+    const prune = setTimeout(() => { try { this.tools.pruneBackups(); } catch { /* best effort */ } }, 30_000);
+    context.subscriptions.push({ dispose: () => clearTimeout(prune) });
     // The docs index catches up in the background, a little after start (it's only read when searched).
     const timer = setTimeout(() => this.tools.refreshDocs(), 15_000);
     context.subscriptions.push({ dispose: () => clearTimeout(timer) });
@@ -154,6 +160,7 @@ class SolderPanel {
 
   /** @param {any} event */
   onEvent(event) {
+    this.log.event(event);
     if (event.chat !== this.chat.id) {
       if (event.type === "busy") this.post();
       return;
@@ -233,6 +240,7 @@ class SolderPanel {
         const pick = await vscode.window.showWarningMessage(`Delete the chat "${this.chat.title}"?`, { modal: true }, "Delete");
         if (pick !== "Delete") return;
         this.store.remove(this.chat.id);
+        this.tools.removeBackups(this.chat.id);
         const next = this.store.list()[0];
         this.chat = (next && this.store.load(next.id)) || Engine.newChat();
         this.post();
@@ -262,6 +270,7 @@ class SolderPanel {
         return;
       case "guide": await vscode.commands.executeCommand("solder.openGuide"); return;
       case "feedback": await vscode.commands.executeCommand("solder.feedback"); return;
+      case "diagnostics": await vscode.commands.executeCommand("solder.copyDiagnostics"); return;
     }
   }
 
@@ -320,7 +329,7 @@ class SolderPanel {
     for (const note of this.chat.notes || []) parts.push(note);
     if (this.chat.folder) {
       // Where you are, not something to read: the model reads only what the request is about.
-      parts.push(`(I'm working in ${this.chat.folder}: relative paths and searches start there.)`);
+      parts.push(CONTEXT.workingIn(this.chat.folder));
     }
     this.chat.notes = [];
     const editor = message.editor ?? vscode.window.activeTextEditor;
@@ -331,7 +340,7 @@ class SolderPanel {
         parts.push(picked.block);
         chips.push(picked.chip);
       } else if (message.file) {
-        parts.push(`(The file open in my editor, for reference: ${shown}.)`);
+        parts.push(CONTEXT.openFile(shown));
         chips.push(path.basename(shown));
       }
     }
@@ -346,9 +355,9 @@ class SolderPanel {
     const first = editor.selection.start.line + 1;
     const last = editor.selection.end.line + (editor.selection.end.character === 0 ? 0 : 1);
     let selected = editor.document.getText(editor.selection);
-    if (selected.length > MAX_SELECTION_CHARS) selected = selected.slice(0, MAX_SELECTION_CHARS) + "\n…(cut short)";
+    if (selected.length > MAX_SELECTION_CHARS) selected = selected.slice(0, MAX_SELECTION_CHARS) + CONTEXT.cutShort;
     const fence = selected.includes("```") ? "````" : "```";
-    return { block: `(Selected in ${shown}, lines ${first}–${last}:)\n${fence}${editor.document.languageId}\n${selected}\n${fence}`,
+    return { block: CONTEXT.selected(shown, first, last, editor.document.languageId, selected, fence),
       chip: `${path.basename(shown)}:${first}–${last}` };
   }
 
@@ -378,6 +387,25 @@ class SolderPanel {
     this.post();
   }
 
+  /** What support needs to know, with nothing private: versions, the shape of the settings, the recent log. */
+  diagnostics() {
+    const config = vscode.workspace.getConfiguration("solder");
+    const docs = this.tools.docsState();
+    let backups = 0;
+    try { backups = this.tools.pruneBackups(Infinity).bytes; } catch { /* none */ }
+    return [
+      `Solder ${this.context.extension?.packageJSON?.version ?? ""} · VS Code ${vscode.version} · ${process.platform} ${process.arch} · node ${process.versions.node}`,
+      `Endpoint set: ${config.get("endpoint", "") ? "yes" : "no"} · key saved: ${this._key ? "yes" : "no"} · models listed: ${this.models.length}` +
+        (this.modelsProblem ? ` · models problem: ${this.modelsProblem === "setup" ? "not set up" : this.modelsProblem}` : ""),
+      `Model: ${this.chat.model || config.get("model", "") || "(none)"} · effort: ${this.chat.effort || config.get("effort", "default")} · compact at: ${config.get("compactAtTokens", 100000)} · max rounds: ${config.get("maxRounds", 30)}`,
+      `Docs: ${docs.folders} folder(s), ${docs.indexed} files indexed${docs.active ? ", indexing" : ""}${docs.available ? "" : ", no SQLite"} · backups: ${(backups / 1024 ** 2).toFixed(1)} MB`,
+      `This chat: ${this.chat.messages.length} messages, ${this.chat.usage.tokens} tokens, token ratio ${(this.chat.tokenRatio || 1).toFixed(2)}${this.chat.compaction ? ", compacted" : ""}`,
+      "",
+      "Recent log:",
+      ...this.log.recent(200),
+    ].join("\n");
+  }
+
   /** @param {string} id a call's id */
   change(id) {
     return this.chat.messages.find((/** @type {any} */ m) => m.role === "tool" && m.tool_call_id === id)?.meta?.change ?? null;
@@ -391,7 +419,7 @@ class SolderPanel {
     await this.tools.undo(change);
     message.meta.undone = true;
     // The model is told with your next message, so it doesn't build on a change that's gone.
-    this.chat.notes = [...(this.chat.notes || []), `(I undid your change to ${change.shown}: ${message.meta.summary}.)`];
+    this.chat.notes = [...(this.chat.notes || []), CONTEXT.undid(change.shown, message.meta.summary)];
     await this.store.save(this.chat);
     this.post();
   }

@@ -34,6 +34,8 @@
       { "command": "solder.setup", "title": "Guided setup", "category": "Solder" },
       { "command": "solder.openGuide", "title": "Guide", "category": "Solder" },
       { "command": "solder.feedback", "title": "Send feedback", "category": "Solder" },
+      { "command": "solder.copyDiagnostics", "title": "Copy diagnostics", "category": "Solder" },
+      { "command": "solder.showLog", "title": "Show log", "category": "Solder" },
       { "command": "solder.explainSelection", "title": "Explain this", "category": "Solder", "enablement": "editorHasSelection" },
       { "command": "solder.fixSelection", "title": "Fix this", "category": "Solder", "enablement": "editorHasSelection" },
       { "command": "solder.addSelection", "title": "Add to chat", "category": "Solder", "enablement": "editorHasSelection" }
@@ -74,6 +76,8 @@
           "description": "Your rules for the model, a few plain lines, added to every chat." },
         "solder.instructionFiles": { "type": "array", "items": { "type": "string" }, "default": ["AGENTS.md"], "order": 9,
           "description": "Project instruction files the model follows: the one at the workspace root, and the nearest one when it reads files in a subfolder." },
+        "solder.storageLimitGB": { "type": "number", "default": 5, "minimum": 0.1, "scope": "machine", "order": 11,
+          "markdownDescription": "The most disk space, in GB, that Undo's backups may use (the copies Solder keeps before each change). Past it, the oldest go first; there's no time limit. Deleting a chat removes its backups." },
         "solder.docsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10,
           "items": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": {
             "path": { "type": "string", "description": "The folder." },

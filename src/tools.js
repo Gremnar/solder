@@ -52,6 +52,7 @@ const GIT_MS = 20_000;
 const GIT_SAFE = ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false",
   "-c", "color.ui=false", "-c", "diff.external="];
 const MAX_REMOVE_BACKUP_BYTES = 200 * 1024 * 1024;
+const BACKUP_GONE = "That step's backup was cleared to keep Solder's storage under its limit (Storage limit in the settings), so it can't be undone.";
 const MAX_REMOVE_BACKUP_FILES = 20_000;
 
 class ToolError extends Error {}
@@ -793,7 +794,8 @@ class WorkspaceTools {
 
   /** Keep the file's text from before a change. @returns {Promise<string>} the backup's path */
   async backup(/** @type {any} */ chat, /** @type {any} */ file, /** @type {string} */ text) {
-    const folder = path.join(this.context.globalStorageUri.fsPath, "backups", chat.id);
+    const folder = path.join(this.backupsRoot(), chat.id);
+    this.pruneSoon();
     fs.mkdirSync(folder, { recursive: true });
     const name = `${Date.now().toString(36)}-${path.basename(file.full)}`;
     const target = path.join(folder, name);
@@ -864,7 +866,8 @@ class WorkspaceTools {
     // A copy first, so Undo can put it back (the Recycle Bin isn't there on every drive).
     let backup = "";
     if (bytes <= MAX_REMOVE_BACKUP_BYTES && files <= MAX_REMOVE_BACKUP_FILES) {
-      const store = path.join(this.context.globalStorageUri.fsPath, "backups", chat.id);
+      const store = path.join(this.backupsRoot(), chat.id);
+      this.pruneSoon();
       fs.mkdirSync(store, { recursive: true });
       backup = path.join(store, `${Date.now().toString(36)}-${path.basename(target.full)}`);
       fs.cpSync(target.full, backup, { recursive: true });
@@ -906,7 +909,8 @@ class WorkspaceTools {
       return;
     }
     if (change.removed) {
-      if (!change.backup || !fs.existsSync(change.backup)) throw new Error("There's no copy to put back (it was too big to keep).");
+      if (!change.backup) throw new Error("There's no copy to put back (it was too big to keep).");
+      if (!fs.existsSync(change.backup)) throw new Error(BACKUP_GONE);
       if (fs.existsSync(change.path)) throw new Error(`Something is already at ${change.shown}; move it first.`);
       fs.cpSync(change.backup, change.path, { recursive: true });
       return;
@@ -916,6 +920,7 @@ class WorkspaceTools {
       removeEmpty(path.dirname(change.path), change.madeFolder);
       return;
     }
+    if (!fs.existsSync(change.backup)) throw new Error(BACKUP_GONE);
     const text = fs.readFileSync(change.backup, "utf8");
     const document = await vscode.workspace.openTextDocument(uri);
     const now = document.getText();
@@ -928,6 +933,58 @@ class WorkspaceTools {
       await vscode.workspace.applyEdit(back);
       throw new Error(`VS Code couldn't save ${change.shown}, so it wasn't undone. Save or reload the file, then try again.`);
     }
+  }
+
+  /** Where every chat's backups live (one folder per chat). */
+  backupsRoot() {
+    return path.join(this.context.globalStorageUri.fsPath, "backups");
+  }
+
+  /** A chat was deleted: its backups go too (its steps can't be undone any more). @param {string} chatId */
+  removeBackups(chatId) {
+    if (!/^[\w-]+$/.test(chatId)) return;
+    fs.rmSync(path.join(this.backupsRoot(), chatId), { recursive: true, force: true });
+  }
+
+  /** Prune soon, but not on every backup: at most once a minute, after the step. */
+  pruneSoon() {
+    const now = Date.now();
+    if (now - (this._pruned ?? 0) < 60_000) return;
+    this._pruned = now;
+    setTimeout(() => { try { this.pruneBackups(); } catch { /* best effort */ } }, 2000);
+  }
+
+  /**
+   * Keep backups under the storage limit (solder.storageLimitGB, 5 GB by default; no time limit): past it, the
+   * oldest go first, down to 90% of it. An Undo whose backup went says so.
+   * @param {number} [limitBytes] the limit (from the setting when left out) @returns {{bytes: number, removed: number}}
+   */
+  pruneBackups(limitBytes) {
+    const limit = limitBytes ?? Math.max(0.1, Number(vscode.workspace.getConfiguration("solder").get("storageLimitGB", 5)) || 5) * 1024 ** 3;
+    const root = this.backupsRoot();
+    /** @type {{full: string, bytes: number, time: number}[]} */
+    const items = [];
+    let chats = [];
+    try { chats = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()); } catch { return { bytes: 0, removed: 0 }; }
+    for (const chat of chats) {
+      const folder = path.join(root, chat.name);
+      for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        const full = path.join(folder, entry.name);
+        try {
+          const stat = fs.statSync(full);
+          items.push({ full, bytes: entry.isDirectory() ? measure(full).bytes : stat.size, time: stat.mtimeMs });
+        } catch { /* gone */ }
+      }
+    }
+    let bytes = items.reduce((sum, item) => sum + item.bytes, 0);
+    let removed = 0;
+    if (bytes > limit) {
+      for (const item of items.sort((a, b) => a.time - b.time)) {
+        if (bytes <= limit * 0.9) break;
+        try { fs.rmSync(item.full, { recursive: true, force: true }); bytes -= item.bytes; removed++; } catch { /* in use */ }
+      }
+    }
+    return { bytes, removed };
   }
 
   /** VS Code's diff: before the step ↔ the file now. */

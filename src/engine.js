@@ -25,6 +25,8 @@ const TRIM_SLACK_TOKENS = 10_000;
 const MAX_BATCH_RESULT_CHARS = 90_000;
 /** Compaction runs only when what it can summarise is at least this share of the limit. */
 const MIN_COMPACT_SHARE = 0.15;
+/** This task's results are cut only past this many times the compaction limit (a runaway task). */
+const IN_TASK_CEILING = 1.5;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
 const MAX_RESULT_CHARS = 40_000;
 /** Earlier turns' write and edit texts longer than this are left out of what's sent. */
@@ -218,7 +220,7 @@ class Engine {
       // Before every step, not just a new message, so a long task can't run far past the limit. Only
       // earlier turns are summarised: this one's calls carry thought signatures some models check.
       await this._compactIfDue(chat, signal, lastUser(chat));
-      trim(chat);
+      trim(chat, settings.compactAt);
       const system = await this.host.systemPrompt(chat);
       const messages = outbound(chat, system);
       this.emit({ type: "thinking", chat: chat.id });
@@ -230,6 +232,8 @@ class Engine {
         chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
       }
       this._spend(chat, reply.usage, reply.credits);
+      this.emit({ type: "reply", chat: chat.id, model: chat.model || settings.model, ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
+        completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: reply.calls.length });
       /** @type {Stored} */
       const assistant = { role: "assistant", content: reply.content };
       if (reply.calls.length) {
@@ -362,6 +366,7 @@ class Engine {
       result = { output: "Error: " + (error instanceof Error ? error.message : String(error)), summary: label + " failed", failed: true };
     }
     result = { ...result, ms: Date.now() - began };
+    this.emit({ type: "ran", chat: chat.id, name, ms: result.ms, failed: !!result.failed, chars: String(result.output || "").length });
     if (note) {
       result = { ...result, keep: [result.keep, TEXTS.userNote(note)].filter(Boolean).join("\n\n"),
         summary: result.summary + " · with your note" };
@@ -587,12 +592,13 @@ function resultText(message) {
 
 /**
  * Cut older large results to one-line stand-ins once the chat's results pass the budget (sticky).
- * The newest reply's results are never cut: the model hasn't seen them yet.
+ * Earlier tasks' results are cut past KEEP_RESULTS_TOKENS. This task's stay whole: cutting them mid-task made
+ * models that re-read what was cut go round in circles (an A/B run: 0 of 5 finished, against 5 of 5 left whole,
+ * for about the same tokens). Only a runaway task, past IN_TASK_CEILING × the compaction limit, has its oldest
+ * results cut; the newest two steps' results are never cut, as the model reads across a step or two.
  */
-function trim(/** @type {Chat} */ chat) {
+function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
   const start = chat.compaction ? chat.compaction.through : 0;
-  // The results of this task's last two steps stay whole: a model reads across a step or two before it answers
-  // (cutting the step before the newest one made it give up). Older ones are cut as the budget needs.
   let latest = chat.messages.length - 1;
   while (latest >= start && chat.messages[latest].role === "tool") latest--;
   const turn = lastUser(chat);
@@ -604,12 +610,15 @@ function trim(/** @type {Chat} */ chat) {
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
   if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return false;
   const fresh = new Set(chat.messages.slice(latest + 1));
+  const thisTask = new Set(chat.messages.slice(Math.max(start, turn)));
+  const ceiling = compactAt * IN_TASK_CEILING;
   let kept = 0;
   let cut = false;
   for (let index = results.length - 1; index >= 0; index--) {
     const message = results[index];
     kept += estimate(message.content) * ratio;
-    if (!fresh.has(message) && kept > KEEP_RESULTS_TOKENS && message.content.length > STUB_MIN_CHARS) {
+    const budget = thisTask.has(message) ? ceiling : KEEP_RESULTS_TOKENS;
+    if (!fresh.has(message) && kept > budget && message.content.length > STUB_MIN_CHARS) {
       message.meta.stub = true;
       cut = true;
     }

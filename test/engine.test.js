@@ -214,7 +214,7 @@ test("old large results become stand-ins once past the budget, sticky and newest
     chat.messages.push({ role: "assistant", content: "", tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: "{}" } }] },
       { role: "tool", tool_call_id: `c${i}`, content: big, meta: { summary: `read ${i}` } });
   }
-  assert.equal(trim(chat), true);
+  assert.equal(trim(chat, 20_000), true);
   const stubs = chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary);
   assert.deepEqual(stubs, ["read 0", "read 1"]);
   const sent = outbound(chat, "S");
@@ -356,7 +356,7 @@ test("the newest reply's results are never cut, however big: the model hasn't se
   const ids = ["a", "b", "c", "d", "e", "f", "g"];
   chat.messages.push({ role: "assistant", content: "", tool_calls: ids.map(readCall) });
   for (const id of ids) chat.messages.push({ role: "tool", tool_call_id: id, content: big, meta: { summary: `read ${id}` } });
-  trim(chat);
+  trim(chat, 20_000);
   assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["read old"]);
 });
 
@@ -370,7 +370,7 @@ test("your steer and a folder's AGENTS.md survive their result being cut; a huge
   const client = fakeClient([{ calls: [call("1", "read_file", { path: "a" })] },
     ...["big", "c", "d", "e"].map((p, i) => ({ calls: [call(String(i + 2), "read_file", { path: p })] })), { content: "done" }]);
   const chat = Engine.newChat();
-  e = engine(client, host);
+  e = engine(client, host, [], { compactAt: 20_000 });
   await e.ask(chat, "go");
   const first = client.sent[5].find((m) => m.tool_call_id === "1");
   assert.ok(first.content.startsWith(TEXTS.stub("read a")), "it was cut");
@@ -544,8 +544,31 @@ test("results from a task's last two steps stay whole, so reading spread over tw
       { role: "tool", tool_call_id: step + "a", content: big, meta: { summary: step + "a" } },
       { role: "tool", tool_call_id: step + "b", content: big, meta: { summary: step + "b" } });
   }
-  trim(chat);
+  trim(chat, 20_000);
   assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["s1a", "s1b"]);
+});
+
+test("this task's results stay whole up to 1.5× the compaction limit; earlier tasks' are cut past the budget", () => {
+  const chat = Engine.newChat();
+  const big = "y".repeat(80_000); // 20k tokens each
+  const task = (/** @type {string} */ name, /** @type {number} */ steps) => {
+    chat.messages.push({ role: "user", content: name, meta: { typed: name } });
+    for (let i = 0; i < steps; i++) {
+      chat.messages.push({ role: "assistant", content: "", tool_calls: [readCall(name + i)] },
+        { role: "tool", tool_call_id: name + i, content: big, meta: { summary: name + i } });
+    }
+  };
+  task("old", 2);
+  task("now", 6); // 120k tokens: past the 30k budget, under the 150k ceiling
+  trim(chat, 100_000);
+  assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["old0", "old1"]);
+  task("runaway", 0);
+  for (let i = 0; i < 9; i++) {
+    chat.messages.push({ role: "assistant", content: "", tool_calls: [readCall("r" + i)] },
+      { role: "tool", tool_call_id: "r" + i, content: big, meta: { summary: "r" + i } });
+  }
+  trim(chat, 100_000); // 180k tokens in this task: the oldest go, the newest 150k stay
+  assert.deepEqual(chat.messages.filter((m) => m.meta?.stub && m.meta.summary.startsWith("r")).map((m) => m.meta.summary), ["r0", "r1"]);
 });
 
 test("a message queued while it works keeps its selection, and goes as the next message if no step comes", async () => {

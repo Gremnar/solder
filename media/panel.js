@@ -187,8 +187,9 @@
     $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : state.chat.title;
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
-    if (state.setup) { renderSetup(); return; }
-    if (state.settings) { renderSettings(); return; }
+    // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
+    if (state.setup) { shownParts = []; renderSetup(); return; }
+    if (state.settings) { shownParts = []; renderSettings(); return; }
     settingsShape = "";
     setupDraft = null;
     setupShown = "";
@@ -420,15 +421,15 @@
     const quiet = shownChat !== state.chat.id;
     if (quiet && shownChat) replay(transcript, "swap");
     shownChat = state.chat.id;
+    /** @type {string[]} one top-level element each, so only the ones that changed are redrawn */
     const parts = [];
     if (!items.length && !state.busy) parts.push(welcome());
-    let inSteps = false; // consecutive steps share one timeline
-    const endSteps = () => { if (inSteps) parts.push("</div>"); inSteps = false; };
+    /** @type {string[]} consecutive steps share one timeline */
+    let timeline = [];
+    const endSteps = () => { if (timeline.length) parts.push(`<div class="steps">${timeline.join("")}</div>`); timeline = []; };
     items.forEach((/** @type {any} */ item, /** @type {number} */ index) => {
       if (item.kind === "step") {
-        if (!inSteps) parts.push(`<div class="steps">`);
-        inSteps = true;
-        parts.push(step(item));
+        timeline.push(step(item));
         return;
       }
       endSteps();
@@ -437,7 +438,7 @@
           (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c)}</span>`).join("")}</div>` : "") + "</div>");
       } else if (item.kind === "answer") {
         // no entrance: an answer arrives word by word, through the fade-in
-        parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${markdown(item.text)}</div>`);
+        parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`);
       } else if (item.kind === "note") {
         parts.push(`<div class="note" data-enter="i:n${index}">${escape(item.text)}</div>`);
       }
@@ -447,7 +448,7 @@
       if (reveal.shown) { endSteps(); parts.push(`<div class="answer" id="live">${markdown(closeOpenMarks(reveal.shown))}</div>`); }
       else if (!stepRunning || state.status) {
         // after steps, the status is the timeline's next node
-        parts.push(`<div class="status" id="status" data-enter="s:status"><span class="spinner"></span><span class="what">${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
+        timeline.push(`<div class="status" id="status" data-enter="s:status"><span class="spinner"></span><span class="what">${escape(state.status || "Working…")}</span><span class="clock"></span></div>`);
       }
     }
     endSteps();
@@ -457,10 +458,48 @@
         `<button data-unsteer="${index}" title="Take it back (into the box)" aria-label="Take it back">✕</button></div></div>`);
     }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
-    transcript.innerHTML = parts.join("");
+    if (quiet) { transcript.innerHTML = ""; shownParts = []; }
+    patch(transcript, parts);
     entrances(transcript, bornInTranscript, quiet);
     if (atBottom || stickToBottom) transcript.scrollTop = transcript.scrollHeight;
     stickToBottom = false;
+  }
+
+  /** @type {string[]} what each of the transcript's top-level elements was drawn from */
+  let shownParts = [];
+
+  /**
+   * Bring the transcript up to `parts` (one HTML string per top-level element), replacing only the elements whose
+   * HTML changed: a long chat with one new step redraws one element, not hundreds.
+   * @param {HTMLElement} container @param {string[]} parts
+   */
+  function patch(container, parts) {
+    const nodes = container.children;
+    if (nodes.length !== shownParts.length) { container.innerHTML = parts.join(""); shownParts = parts.slice(); return; }
+    for (let index = 0; index < parts.length; index++) {
+      if (shownParts[index] === parts[index] && nodes[index]) continue;
+      const holder = document.createElement("template");
+      holder.innerHTML = parts[index];
+      const fresh = holder.content.firstElementChild;
+      if (!fresh) continue;
+      if (nodes[index]) container.replaceChild(fresh, nodes[index]);
+      else container.appendChild(fresh);
+    }
+    while (container.children.length > parts.length) /** @type {Element} */ (container.lastElementChild).remove();
+    shownParts = parts.slice();
+  }
+
+  /** @type {Map<string, string>} an answer's text → its HTML (Markdown is rendered once per answer, not per update) */
+  const renderedAnswers = new Map();
+  /** @param {string} text */
+  function renderedOnce(text) {
+    let html = renderedAnswers.get(text);
+    if (html === undefined) {
+      html = markdown(text);
+      renderedAnswers.set(text, html);
+      if (renderedAnswers.size > 500) renderedAnswers.delete(/** @type {string} */ (renderedAnswers.keys().next().value));
+    }
+    return html;
   }
 
   /** A step's label: the tool's name in code type while it waits; after it, the summary with its detail quieter. @param {any} item @param {string} label */

@@ -15,7 +15,7 @@ class Position { constructor(/** @type {number} */ line, /** @type {number} */ c
 const SymbolKind = Object.fromEntries(KINDS.flatMap((name, index) => [[name, index], [index, name]]));
 const load = /** @type {any} */ (Module)._load;
 /** @type {any} */ (Module)._load = function (/** @type {string} */ request, /** @type {any[]} */ ...rest) {
-  return request === "vscode" ? { SymbolKind, Position } : load.call(this, request, ...rest);
+  return request === "vscode" ? { SymbolKind, Position, languages: { onDidChangeDiagnostics: () => ({ dispose() {} }) }, workspace: { textDocuments: [] } } : load.call(this, request, ...rest);
 };
 const { outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf } = require("../src/tools.js");
 
@@ -108,5 +108,35 @@ test("git runs as one fixed program with the safe options, in a real repository"
     await assert.rejects(runGit(git, os.tmpdir(), ["rev-parse", "--show-toplevel"]), /not a git repository/i);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("backups stay under the storage limit, oldest first; a deleted chat's backups go with it", () => {
+  const { WorkspaceTools } = require("../src/tools.js");
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), "solder-store-"));
+  try {
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: store }, subscriptions: [] }));
+    const root = tools.backupsRoot();
+    const put = (/** @type {string} */ chat, /** @type {string} */ name, /** @type {number} */ bytes, /** @type {number} */ age) => {
+      fs.mkdirSync(path.join(root, chat), { recursive: true });
+      const file = path.join(root, chat, name);
+      fs.writeFileSync(file, Buffer.alloc(bytes));
+      const when = new Date(Date.now() - age * 1000);
+      fs.utimesSync(file, when, when);
+    };
+    put("c1", "oldest.js", 4000, 300);
+    put("c1", "older.js", 4000, 200);
+    put("c2", "newer.js", 4000, 100);
+    put("c2", "newest.js", 4000, 10);
+    const result = tools.pruneBackups(10_000);
+    assert.equal(result.removed, 2, "down to 90% of the limit, oldest first");
+    assert.ok(!fs.existsSync(path.join(root, "c1", "oldest.js")) && !fs.existsSync(path.join(root, "c1", "older.js")));
+    assert.ok(fs.existsSync(path.join(root, "c2", "newest.js")));
+    assert.equal(tools.pruneBackups(10_000).removed, 0, "under the limit: nothing goes");
+    tools.removeBackups("c2");
+    assert.ok(!fs.existsSync(path.join(root, "c2")));
+    tools.removeBackups("../escape"); // not a chat id: ignored
+  } finally {
+    fs.rmSync(store, { recursive: true, force: true });
   }
 });

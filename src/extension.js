@@ -16,7 +16,7 @@ const FEEDBACK_SUBJECT = "VS Code Solder extension feedback or support";
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
   const output = vscode.window.createOutputChannel("Solder");
-  const panel = new SolderPanel(context);
+  const panel = new SolderPanel(context, output);
   // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
   panel.setup.needed().then(async (needed) => {
     if (!needed) return;
@@ -45,10 +45,16 @@ function activate(context) {
     vscode.commands.registerCommand("solder.feedback", () => {
       // Your own email app, through the system: Solder itself sends nothing. Versions only, nothing from your chats.
       const version = context.extension?.packageJSON?.version ?? "";
-      const body = `\n\n\n---\nSolder ${version} · VS Code ${vscode.version} · ${process.platform} ${os.release()}\n`;
+      const body = `\n\n\n---\nSolder ${version} · VS Code ${vscode.version} · ${process.platform} ${os.release()}\n` +
+        "(For a problem: ⋯ → Copy diagnostics in Solder's panel, then paste them here.)\n";
       const link = `mailto:${FEEDBACK_TO}?subject=${encodeURIComponent(FEEDBACK_SUBJECT)}&body=${encodeURIComponent(body)}`;
       return vscode.env.openExternal(vscode.Uri.parse(link, true));
     }),
+    vscode.commands.registerCommand("solder.copyDiagnostics", async () => {
+      await vscode.env.clipboard.writeText(panel.diagnostics());
+      vscode.window.showInformationMessage("Solder: diagnostics copied (versions, settings in outline, and the recent log: no paths, code or keys). Paste them into your email.");
+    }),
+    vscode.commands.registerCommand("solder.showLog", () => output.show(true)),
     vscode.commands.registerCommand("solder.openGuide", () =>
       vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(context.extensionUri, "README.md"))),
     vscode.commands.registerCommand("solder.useFolder", async (/** @type {vscode.Uri | undefined} */ uri) => {

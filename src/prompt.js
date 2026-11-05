@@ -335,6 +335,16 @@ with my code, and what you can't do (such as running commands). Then ask me what
 a few concrete things you could take off my hands." },
 ];
 
+/** What goes with your message: where you're working, the open file, your selection, an undo you made. */
+const CONTEXT = {
+  workingIn: (/** @type {string} */ folder) => `(I'm working in ${folder}: relative paths and searches start there.)`,
+  openFile: (/** @type {string} */ file) => `(The file open in my editor, for reference: ${file}.)`,
+  selected: (/** @type {string} */ file, /** @type {number} */ first, /** @type {number} */ last, /** @type {string} */ language,
+    /** @type {string} */ text, /** @type {string} */ fence) => `(Selected in ${file}, lines ${first}–${last}:)\n${fence}${language}\n${text}\n${fence}`,
+  cutShort: "\n…(cut short)",
+  undid: (/** @type {string} */ file, /** @type {string} */ step) => `(I undid your change to ${file}: ${step}.)`,
+};
+
 /** What the editor's right-click menu sends with the selected code (the selection itself goes along as context). */
 const SELECTION = {
   explain: "Explain the selected code: what it does, how it does it, and anything surprising or risky in it. Keep it short.",
@@ -349,4 +359,4 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, systemPrompt, toolDefinitions, timeNote };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote };
