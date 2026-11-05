@@ -62,7 +62,39 @@ async function documentText(full) {
     try { return officeText(await fs.promises.readFile(full), ext); } catch { return null; }
   }
   if (BINARY.has(ext) || stat.size > MAX_TEXT_BYTES) return null;
-  return decodeText(await fs.promises.readFile(full));
+  return withoutSignatures(decodeText(await fs.promises.readFile(full)));
+}
+
+/**
+ * Code-signing blocks (Authenticode), as PowerShell, VBScript and JScript files carry them: a begin line, about
+ * 100 to 200 lines of base64, an end line. Several thousand tokens the model can do nothing with.
+ */
+const SIGNATURE_BEGIN = /^\s*(#|''|\/\/) SIG \1 Begin signature block\s*$/;
+const SIGNATURE_END = /^\s*(#|''|\/\/) SIG \1 End signature block\s*$/;
+/** A quick test before looking line by line. */
+const SIGNED = /SIG (?:#|''|\/\/) Begin signature block/;
+
+/**
+ * The signature blocks' contents, between their begin and end lines: [first, last] line indexes (0-based).
+ * @param {string[]} lines @returns {[number, number][]}
+ */
+function signatureBlocks(lines) {
+  /** @type {[number, number][]} */
+  const blocks = [];
+  let open = -1;
+  for (let index = 0; index < lines.length; index++) {
+    if (open < 0) { if (SIGNATURE_BEGIN.test(lines[index])) open = index; }
+    else if (SIGNATURE_END.test(lines[index])) { if (index - open > 1) blocks.push([open + 1, index - 1]); open = -1; }
+  }
+  return blocks;
+}
+
+/** Text with each signature's contents taken out (its begin and end lines stay). @param {string} text */
+function withoutSignatures(text) {
+  if (!SIGNED.test(text)) return text;
+  const lines = text.split(/\r\n|\r|\n/);
+  for (const [first, last] of signatureBlocks(lines).reverse()) lines.splice(first, last - first + 1);
+  return lines.join("\n");
 }
 
 /** Whether read_file should go through documentText (an Office file). @param {string} full */
@@ -501,5 +533,5 @@ async function listFiles(root, late) {
   return { files, complete: true, truncated };
 }
 
-module.exports = { DocsIndex, available, documentText, isOffice, decodeText, unzip, officeText, sections, queryTerms,
+module.exports = { DocsIndex, available, documentText, isOffice, decodeText, SIGNED, signatureBlocks, withoutSignatures, unzip, officeText, sections, queryTerms,
   matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES };

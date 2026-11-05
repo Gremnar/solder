@@ -15,7 +15,13 @@ class Position { constructor(/** @type {number} */ line, /** @type {number} */ c
 const SymbolKind = Object.fromEntries(KINDS.flatMap((name, index) => [[name, index], [index, name]]));
 const load = /** @type {any} */ (Module)._load;
 /** @type {any} */ (Module)._load = function (/** @type {string} */ request, /** @type {any[]} */ ...rest) {
-  return request === "vscode" ? { SymbolKind, Position, Uri: { file: (/** @type {string} */ fsPath) => ({ fsPath, scheme: "file" }) }, languages: { onDidChangeDiagnostics: () => ({ dispose() {} }) }, workspace: { textDocuments: [] } } : load.call(this, request, ...rest);
+  return request === "vscode" ? { SymbolKind, Position, Uri: { file: (/** @type {string} */ fsPath) => ({ fsPath, scheme: "file" }) }, languages: { onDidChangeDiagnostics: () => ({ dispose() {} }) }, FileType: { File: 1, Directory: 2 },
+    workspace: { textDocuments: [], getConfiguration: () => ({ get: (/** @type {string} */ _key, /** @type {any} */ fallback) => fallback }),
+      fs: { stat: async (/** @type {any} */ uri) => { const st = fs.statSync(uri.fsPath); return { type: st.isDirectory() ? 2 : 1, size: st.size }; } },
+      openTextDocument: async (/** @type {any} */ uri) => {
+        const all = fs.readFileSync(uri.fsPath, "utf8").split(/\r\n|\r|\n/);
+        return { lineCount: all.length, lineAt: (/** @type {number} */ i) => ({ text: all[i] }), getText: () => all.join("\n") };
+      } } } : load.call(this, request, ...rest);
 };
 const { outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf } = require("../src/tools.js");
 
@@ -174,4 +180,34 @@ test("asked first: git's and VS Code's files, links out of the workspace, reads 
   } finally {
     fs.rmSync(top, { recursive: true, force: true });
   }
+});
+
+test("read_file shows a signed script with its signature as one line, and later lines keep their numbers", async () => {
+  const { WorkspaceTools } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-sig-"));
+  try {
+    const base64 = Array.from({ length: 150 }, (_, i) => "# MIIfZwYJKoZIhvcNAQcCoIIfWDCCH1QCAQExCzAJBgUrDgMCGgUAMGkGCisG" + String(i).padStart(4, "A"));
+    fs.writeFileSync(path.join(top, "run.ps1"), ["Write-Host 'one'", "Write-Host 'two'", "# SIG # Begin signature block", ...base64, "# SIG # End signature block", ""].join("\r\n"));
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.root = () => top;
+    const { output } = await tools.readFile({ path: "run.ps1" }, {});
+    const lines = output.split("\n");
+    assert.equal(lines.length, 6, output.slice(0, 300));
+    assert.equal(lines[2], "3\t# SIG # Begin signature block");
+    assert.match(lines[3], /lines 4–153: the file's digital signature, left out/);
+    assert.equal(lines[4], "154\t# SIG # End signature block");
+    assert.ok(output.length < 400, "about 3,000 tokens of base64 become one line");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a diff's run of signature lines is one line; ordinary comments are left alone", () => {
+  const { withoutSignatureLines } = require("../src/tools.js");
+  const { RESULTS } = require("../src/prompt.js");
+  const sig = (/** @type {string} */ mark, /** @type {number} */ n) => Array.from({ length: n }, (_, i) => mark + "# MIIfZwYJKoZIhvcNAQcCoIIfWDCC" + String(i).padStart(6, "B"));
+  const diff = ["@@ -10,8 +10,8 @@", " Write-Host 'done'", ...sig("-", 40), ...sig("+", 40), " # SIG # End signature block"].join("\n");
+  assert.equal(withoutSignatureLines(diff), ["@@ -10,8 +10,8 @@", " Write-Host 'done'", "-" + RESULTS.signatureInDiff(40), "+" + RESULTS.signatureInDiff(40), " # SIG # End signature block"].join("\n"));
+  const comments = ["+# This is a normal comment", "+# another one here", "+# and a third", "+# and a fourth"].join("\n");
+  assert.equal(withoutSignatureLines(comments), comments);
 });

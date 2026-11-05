@@ -1,6 +1,7 @@
 // @ts-check
 "use strict";
 const test = require("node:test");
+const { signatureBlocks, withoutSignatures } = require("../src/docs.js");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -156,4 +157,15 @@ test("a refresh that's running doesn't hold up another caller, and a search runs
     index.close();
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test("a script's digital signature is found and left out: PowerShell, VBScript and JScript marks", () => {
+  const base64 = Array.from({ length: 120 }, (_, i) => "# MIIfZwYJKoZIhvcNAQcCoIIfWDCCH1QCAQExCzAJBgUrDgMCGgUAMGkGCisG" + String(i).padStart(4, "A"));
+  const ps = ["Write-Host 'hi'", "", "# SIG # Begin signature block", ...base64, "# SIG # End signature block"];
+  assert.deepEqual(signatureBlocks(ps), [[3, 122]]);
+  assert.equal(withoutSignatures(ps.join("\r\n")), "Write-Host 'hi'\n\n# SIG # Begin signature block\n# SIG # End signature block");
+  assert.deepEqual(signatureBlocks(["'' SIG '' Begin signature block", "'' MIIa", "'' SIG '' End signature block"]), [[1, 1]]);
+  assert.deepEqual(signatureBlocks(["// SIG // Begin signature block", "// MIIa", "// SIG // End signature block"]), [[1, 1]]);
+  assert.deepEqual(signatureBlocks(["# SIG # Begin signature block", "# MIIa"]), [], "no end: not a block");
+  assert.equal(withoutSignatures("no signature here"), "no signature here");
 });

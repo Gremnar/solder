@@ -12,7 +12,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, available: docsAvailable, documentText, isOffice, loose } = require("./docs.js");
+const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks } = require("./docs.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -217,7 +217,18 @@ class WorkspaceTools {
     if (end < start) end = start;
     const lines = [];
     let size = 0;
+    // A digital signature's lines (several thousand tokens of base64) are one line here.
+    const signature = SIGNED.test(document.getText())
+      ? signatureBlocks(Array.from({ length: total }, (_, index) => document.lineAt(index).text)) : [];
     for (let line = start; line <= end; line++) {
+      const block = signature.find(([first, last]) => line - 1 >= first && line - 1 <= last);
+      if (block) {
+        const note = RESULTS.signatureLeftOut(block[0] + 1, block[1] + 1);
+        lines.push(note);
+        size += note.length + 1;
+        line = block[1] + 1;
+        continue;
+      }
       const text = `${line}\t${document.lineAt(line - 1).text}`;
       if (size + text.length > MAX_OUTPUT_CHARS) {
         if (lines.length) { end = line - 1; break; }
@@ -418,13 +429,13 @@ class WorkspaceTools {
       }
       const lines = entries.slice(0, MAX_CHANGED).map((entry) =>
         `${this.shown(fullOf(entry.path))} · ${entry.label}${counts.has(entry.path) ? " · " + counts.get(entry.path) : ""}`);
-      const diff = hasHead ? await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(() => "") : "";
+      const diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(() => "")) : "";
       const inline = diff.trim() && diff.length <= INLINE_DIFF_CHARS ? "\n\n" + diff.trim() : "";
       return { output: RESULTS.changedFiles(entries.length, !!inline) + "\n" + lines.join("\n")
         + (entries.length > MAX_CHANGED ? "\n" + RESULTS.changedCapped(entries.length - MAX_CHANGED) : "") + inline + tail,
         summary: `Changes · ${entries.length} file${entries.length === 1 ? "" : "s"}` };
     }
-    let diff = hasHead ? await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(fail) : "";
+    let diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(fail)) : "";
     if (diff.length > MAX_DIFF_CHARS) diff = diff.slice(0, MAX_DIFF_CHARS) + "\n" + TEXTS.resultCut(diff.length - MAX_DIFF_CHARS);
     const parts = [diff.trim(), fresh.length ? RESULTS.newFiles(fresh) : ""].filter(Boolean);
     return { output: (parts.join("\n\n") || RESULTS.noChanges(where)) + tail,
@@ -703,7 +714,7 @@ class WorkspaceTools {
     const removed = lineCount(old);
     const added = lineCount(replacement);
     const problems = await this.newProblems(file, before);
-    return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + problems.text,
+    return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: false, after: hash(document.getText()) } };
   }
@@ -739,7 +750,7 @@ class WorkspaceTools {
     }
     const lines = lineCount(content);
     const problems = await this.newProblems(file, before);
-    return { output: RESULTS.written(exists, file.shown, lines) + problems.text,
+    return { output: RESULTS.written(exists, file.shown, lines) + problems.text + (exists && SIGNED.test(previous) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder,
         after: hash(open ? open.getText() : content) } };
@@ -1299,6 +1310,21 @@ function plainNames(names) {
   return (Array.isArray(names) ? names : []).filter((name) => typeof name === "string" && /^[^\\/:]+$/.test(name) && name !== "." && name !== "..");
 }
 
+/** A diff with each run of signature lines (base64 after a comment mark) as one line. @param {string} diff */
+function withoutSignatureLines(diff) {
+  // Not keyed on the begin line: a hunk deep inside a re-signed block doesn't show it.
+  const lines = diff.split("\n");
+  const out = [];
+  for (let index = 0; index < lines.length;) {
+    let run = index;
+    while (run < lines.length && SIGNATURE_LINE.test(lines[run]) && lines[run][0] === lines[index][0]) run++;
+    if (run - index >= 4) { out.push(lines[index][0] + RESULTS.signatureInDiff(run - index)); index = run; }
+    else { out.push(lines[index]); index++; }
+  }
+  return out.join("\n");
+}
+const SIGNATURE_LINE = /^[ +-]\s*(?:#|''|\/\/) [A-Za-z0-9+/=]{16,}\s*$/;
+
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
 function within(full, folder) {
   const a = path.resolve(full).toLowerCase();
@@ -1388,4 +1414,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

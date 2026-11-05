@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "34faca34c1520282";
+const PINNED = "a3e15111893edc68";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -18,7 +18,7 @@ const SAMPLES = {
   wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]], argumentLeftOut: [[412]],
 };
 const RESULT_SAMPLES = {
-  error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
+  signatureLeftOut: [[412, 520]], signatureInDiff: [[150]], error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
   notText: [["a.bin"]], outlineHead: [["a.js", 412], ["b.js", 1]], outlineCapped: [[52]], noOutline: [["a.txt", 3]], notInFile: [["total", "a.js"]], definitions: [["total", 1], ["total", 3]],
   references: [["total", 1, 1], ["total", 1200, 9]], referencesCapped: [[1100]], noLanguageHits: [["total"]], noHitsAtAll: [["total"]],
   notGit: [["src"]], gitFailed: [["bad"]], noChanges: [[""], ["src"]], changedFiles: [[1, false], [7, true]], changedCapped: [[30]],

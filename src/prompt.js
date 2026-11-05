@@ -199,6 +199,10 @@ const RESULTS = {
   readFolder: (/** @type {string} */ file) => `${file} is a folder; use find_files to list it.`,
   tooLarge: (/** @type {string} */ file, /** @type {number} */ mb) => `${file} is too large to read (${mb} MB).`,
   notText: (/** @type {string} */ file) => `${file} couldn't be opened as text (it may be a binary file).`,
+  signatureLeftOut: (/** @type {number} */ first, /** @type {number} */ last) =>
+    `…(lines ${first}–${last}: the file's digital signature, left out to save space)`,
+  signatureInDiff: (/** @type {number} */ lines) => `…(${lines} lines of a digital signature, left out)`,
+  signatureBroken: "This file was digitally signed, so this change makes its signature invalid: tell the user to sign it again.",
   readPart: (/** @type {number} */ start, /** @type {number} */ end, /** @type {number} */ total) =>
     `(lines ${start}–${end} of ${total}; ask for a range for more)`,
   readEmpty: "(the file is empty)",
