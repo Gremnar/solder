@@ -32,7 +32,9 @@ const DIAGNOSTICS_WAIT_MS = 2500;
 const DIAGNOSTICS_SHORT_MS = 600;
 /** problems with a path: how long to wait for the file's diagnostics to arrive (or refresh). */
 const PROBLEMS_WAIT_MS = 1500;
-const PROBLEMS_COLD_MS = 3000;
+/** ... and for a file opened just for the check: its language server may be starting (shorter where it never reports). */
+const PROBLEMS_COLD_MS = 4000;
+const PROBLEMS_UNKNOWN_MS = 2000;
 /** A definition's code: at most this many characters (a minified line can be enormous). */
 const MAX_DEFINITION_CHARS = 8_000;
 /** Whole-word text matches added to references the language server didn't count. */
@@ -902,18 +904,22 @@ class WorkspaceTools {
     if (args.path) {
       const file = this.resolve(args.path);
       await this.mustBeFile(file);
-      // VS Code only checks open files: open it, and give its language server a moment (a file it hasn't
-      // seen yet takes longer: up to 5 s, sooner if its diagnostics arrive).
-      // Solder's own reads open files without showing them; language servers like TypeScript's check only shown ones.
+      // VS Code only checks open files, and some language servers (TypeScript's among them) only ones in a tab.
+      // A file that isn't in one is opened in a background tab, which takes neither the view nor the cursor,
+      // checked, and closed again.
       const wasOpen = shownInEditor(file.full);
       const doc = await vscode.workspace.openTextDocument(file.uri).then((d) => d, () => null);
       const reports = !!doc && this._diagnosed.has(doc.languageId);
-      const heard = await this.diagnosticsFor(file, wasOpen ? PROBLEMS_WAIT_MS : reports ? PROBLEMS_COLD_MS : DIAGNOSTICS_SHORT_MS);
+      const waiting = this.diagnosticsFor(file, wasOpen ? PROBLEMS_WAIT_MS : reports ? PROBLEMS_COLD_MS : PROBLEMS_UNKNOWN_MS);
+      const tab = wasOpen || !doc ? null : await openInBackground(file);
+      const heard = await waiting;
       list = [[file.uri, vscode.languages.getDiagnostics(file.uri)]];
-      // Some language servers (TypeScript's among them) only check files shown in an editor: silence about
-      // a file that wasn't open means "not checked", not "no problems".
+      if (tab) await closeTab(file);
+      // A clean file reports nothing (VS Code says nothing when an empty list stays empty), so silence is
+      // "no problems" only where this kind of file does get checked.
       if (!wasOpen && !heard && !list[0][1].length) {
-        return { output: RESULTS.notChecked(file.shown), summary: `Problems · ${file.shown} not checked` };
+        if (!tab) return { output: RESULTS.notChecked(file.shown), summary: `Problems · ${file.shown} not checked` };
+        if (!this._diagnosed.has(doc.languageId)) return { output: RESULTS.notReported(file.shown), summary: `Problems · ${file.shown} maybe not checked` };
       }
     } else {
       list = vscode.languages.getDiagnostics();
@@ -1381,6 +1387,33 @@ function hash(text) {
 }
 
 /** Whether a file is shown in an editor tab (not just opened by Solder in the background). @param {string} full */
+/**
+ * Open a file in a tab without bringing it forward (the editor in view and the cursor stay where they are). Pinned,
+ * so it doesn't replace a preview tab. False when VS Code wouldn't, or brought it forward anyway (then it's closed).
+ * @param {any} file @returns {Promise<boolean>}
+ */
+async function openInBackground(file) {
+  const before = vscode.window.activeTextEditor;
+  try { await vscode.commands.executeCommand("vscode.open", file.uri, { background: true, preview: false, preserveFocus: true }); }
+  catch { return false; }
+  const now = vscode.window.activeTextEditor;
+  if (before && now && now !== before && now.document.uri.fsPath.toLowerCase() === file.full.toLowerCase()) {
+    await closeTab(file); // this VS Code ignored "background": put the view back as it was
+    return false;
+  }
+  return shownInEditor(file.full);
+}
+
+/** Close the tabs Solder opened on a file for a check (one with unsaved changes stays). @param {any} file */
+async function closeTab(file) {
+  const key = file.full.toLowerCase();
+  const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => {
+    const uri = /** @type {any} */ (tab.input)?.uri;
+    return !!uri && uri.scheme === "file" && uri.fsPath.toLowerCase() === key && !tab.isDirty;
+  });
+  if (tabs.length) await Promise.resolve(vscode.window.tabGroups.close(tabs, true)).catch(() => {});
+}
+
 function shownInEditor(full) {
   const key = full.toLowerCase();
   return vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => {

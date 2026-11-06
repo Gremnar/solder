@@ -253,7 +253,8 @@ line${lines === 1 ? "" : "s"}: read it, or a range of it.`,
   symbolsNeedsPath: "symbols needs a path (for an outline) or a name.",
   alsoText: (/** @type {string} */ name) => `Also, whole-word text matches for ${name} that VS Code didn't count as uses (comments, \
 strings, or uses it missed, such as through require):`,
-  notChecked: (/** @type {string} */ file) => `VS Code hasn't checked ${file}: its language support only checks files open in an editor, and this one isn't. Its problems are unknown, not necessarily none; the user can open it to have it checked.`,
+  notChecked: (/** @type {string} */ file) => `VS Code hasn't checked ${file}: it couldn't be opened in an editor, where its language support checks files. Its problems are unknown, not necessarily none. Tell the user it wasn't checked, so they can open it to have it checked.`,
+  notReported: (/** @type {string} */ file) => `Nothing was reported for ${file}, even opened in an editor, and nothing in VS Code has reported problems in this kind of file yet: it may have no language support that checks it. Its problems are unknown, not necessarily none. Tell the user it may not have been checked.`,
   pastEnd: (/** @type {string} */ file, /** @type {number} */ lines) => `${file} has only ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}.`,
   sameText: "old_text and new_text are the same, so there's nothing to change.",
   changedOnDisk: (/** @type {string} */ file) => `${file} changed on disk a moment ago and VS Code hasn't caught up yet, so nothing \
