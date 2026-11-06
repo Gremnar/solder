@@ -269,7 +269,8 @@ on without it rather than searching again with other words (unless you have an e
 files so far, so these results may be incomplete.)`,
   docsTruncated: `(Some docs folders hold more than 20,000 files; the rest aren't searched.)`,
   longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
-    `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown; use search to find text in it)`,
+    `(line ${line} is ${chars.toLocaleString("en-US")} characters long, probably minified or generated code, so only its start is shown. \
+Reading it in pieces won't work: search for the names you need instead, which shows the text around each match in a long line.)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
     `This folder's ${file} says (it applies to files under it):\n${text}`,
   noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \

@@ -302,3 +302,30 @@ test("file names match regardless of case (VS Code's findFiles doesn't, even on 
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("minified code: a search shows the text around each match in a long line; read_file shows a long line's start only", async () => {
+  const { WorkspaceTools, around, aroundLongMatches } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-min-"));
+  try {
+    let bundle = "var a=1;";
+    for (let i = 0; i < 3000; i++) bundle += `function f${i}(){return ${i}}`;
+    bundle += 'vscode.commands.registerCommand("ext.hello",()=>{});' + "x".repeat(400) + 'vscode.commands.registerCommand("ext.bye",()=>{});';
+    fs.writeFileSync(path.join(top, "extension.js"), bundle + "\nconsole.log(1)\n");
+    // What ripgrep printed: the line's first columns, and its mark. Solder shows the matches instead.
+    const shown = aroundLongMatches(["extension.js:1:var a=1;function f0(){return 0} [... omitted end of long line]"], top, "registerCommand", false, false);
+    assert.match(shown[0], /^extension\.js:1:…/);
+    assert.match(shown[0], /registerCommand\("ext\.hello"/);
+    assert.match(shown[0], /registerCommand\("ext\.bye"/);
+    assert.ok(shown[0].length < 700, `${shown[0].length} characters, not the whole line`);
+    assert.equal(around("short line with a hit", /hit/i), "short line with a hit");
+    // read_file: the long line by its start (with the note), and the next lines too.
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [top];
+    const { output } = await tools.readFile({ path: "extension.js" }, {});
+    assert.ok(output.length < 1600, `${output.length} characters`);
+    assert.match(output, /line 1 is [\d,]+ characters long, probably minified/);
+    assert.match(output, /\n2\tconsole\.log\(1\)/, "the lines after it are still read");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});

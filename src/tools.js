@@ -16,6 +16,15 @@ const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGN
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
+/** A line longer than this (minified or generated code) is shown by its start only... */
+const LONG_LINE_CHARS = 2_000;
+/** ...this much of it. */
+const LONG_LINE_SHOWN = 1_000;
+/** In a search, the text either side of a match in a long line, and how many matches a line shows. */
+const AROUND_MATCH = 120;
+const MATCHES_A_LINE = 3;
+/** What ripgrep puts after a long line's first columns. */
+const RG_OMITTED = " [... omitted end of long line]";
 const MAX_SEARCH_LINES = 200;
 const MAX_FOUND = 300;
 const DIAGNOSTICS_WAIT_MS = 2500;
@@ -251,7 +260,9 @@ class WorkspaceTools {
         line = block[1] + 1;
         continue;
       }
-      const text = `${line}\t${document.lineAt(line - 1).text}`;
+      const raw = document.lineAt(line - 1).text;
+      const text = raw.length > LONG_LINE_CHARS
+        ? `${line}\t${raw.slice(0, LONG_LINE_SHOWN)}…\n${RESULTS.longLine(line, raw.length)}` : `${line}\t${raw}`;
       if (size + text.length > MAX_OUTPUT_CHARS) {
         if (lines.length) { end = line - 1; break; }
         // One line longer than the whole cap (minified code, a data file): its start only.
@@ -714,7 +725,8 @@ class WorkspaceTools {
           reject(new ToolError(lines[0] || RESULTS.searchFailed));
           return;
         }
-        resolve(out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/")));
+        const lines = out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/"));
+        resolve(lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines);
       });
     });
   }
@@ -740,7 +752,7 @@ class WorkspaceTools {
       if (text.includes("\u0000")) continue;
       const shown = this.shown(uri.fsPath);
       text.split(/\r?\n/).forEach((line, index) => {
-        if (lines.length <= MAX_SEARCH_LINES && pattern.test(line)) lines.push(`${shown}:${index + 1}:${line.slice(0, 300)}`);
+        if (lines.length <= MAX_SEARCH_LINES && pattern.test(line)) lines.push(`${shown}:${index + 1}:${line.length > 300 ? around(line, pattern) : line}`);
       });
       if (lines.length > MAX_SEARCH_LINES) break;
     }
@@ -1462,6 +1474,52 @@ function measure(folder) {
 }
 
 /** A bare pattern like *.json matches anywhere, as people mean it. @param {string} glob */
+/**
+ * A search's pattern as a regular expression, as ripgrep reads it: fixed text unless `regex`, and case-insensitive
+ * unless asked, or (smart case) the query has a capital. @param {string} query @param {boolean} regex @param {boolean} caseSensitive
+ */
+function searchPattern(query, regex, caseSensitive) {
+  const flags = caseSensitive || /[A-Z]/.test(query) ? "g" : "gi";
+  try { return new RegExp(regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags); } catch { return null; }
+}
+
+/** A long line as the text around its first few matches: "…before MATCH after… | …". @param {string} line @param {RegExp} pattern */
+function around(line, pattern) {
+  const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
+  const pieces = [];
+  for (const match of line.matchAll(global)) {
+    if (!match[0]) break;
+    const start = Math.max(0, (match.index ?? 0) - AROUND_MATCH);
+    const end = Math.min(line.length, (match.index ?? 0) + match[0].length + AROUND_MATCH);
+    pieces.push((start > 0 ? "…" : "") + line.slice(start, end).trim() + (end < line.length ? "…" : ""));
+    if (pieces.length >= MATCHES_A_LINE) break;
+  }
+  return pieces.length ? pieces.join(" | ") : line.slice(0, 300);
+}
+
+/**
+ * ripgrep shows a long line's first columns only, where the match usually isn't (minified code): those lines again,
+ * as the text around each match, read from the file. @param {string[]} lines "path:line:text" @param {string} root
+ * @param {string} query @param {boolean} regex @param {boolean} caseSensitive
+ */
+function aroundLongMatches(lines, root, query, regex, caseSensitive) {
+  const pattern = searchPattern(query, regex, caseSensitive);
+  if (!pattern) return lines.map((line) => line.replace(RG_OMITTED, "…"));
+  /** @type {Map<string, string[] | null>} */
+  const files = new Map();
+  return lines.map((line) => {
+    if (!line.endsWith(RG_OMITTED)) return line;
+    const found = /^(.+?):(\d+):/.exec(line);
+    if (!found) return line.replace(RG_OMITTED, "…");
+    const [head, file, number] = found;
+    if (!files.has(file)) {
+      try { files.set(file, fs.readFileSync(path.resolve(root, file), "utf8").split(/\r\n|\r|\n/)); } catch { files.set(file, null); }
+    }
+    const text = files.get(file)?.[Number(number) - 1];
+    return text === undefined ? line.replace(RG_OMITTED, "…") : head + around(text, pattern);
+  });
+}
+
 /** A glob that matches regardless of case: each letter as [xX] (outside a [...] class). @param {string} glob */
 function caseless(glob) {
   let out = "";
@@ -1583,4 +1641,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

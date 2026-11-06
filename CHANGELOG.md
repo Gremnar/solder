@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Minified and generated files.** A search that matches inside a very long line (a bundled `extension.js`, minified code, one-line JSON) shows the text around each match instead of the line's first 300 characters, where the match almost never is. `read_file` shows such a line by its first 1,000 characters with a note to search instead of reading it in pieces, then goes on with the next lines. In a live test on a minified bundle, both models got the answer right 4 times in 4 (0 in 4 before), with a quarter of the tokens.
+
 ## 0.1.6 (2026-11-05)
 
 - **Docs search by meaning (optional).** Settings → Your docs → **Keywords + meaning**, with your gateway's embeddings model (**Test** checks it). Each passage gets a vector from the gateway, kept in the same local SQLite index; a search ranks passages by meaning as well as by keywords and merges the two, so it finds passages that say the same thing in other words. Only new and changed files are sent again. Each run's token count is in the log. Off by default: it sends your docs' text to the gateway once.
