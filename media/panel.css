@@ -523,6 +523,8 @@ button.chip:active { transform: scale(0.95); }
 .banner > svg { flex: none; width: 15px; height: 15px; align-self: flex-start; margin-top: 1px; color: var(--bad); }
 .banner.soft { border-color: var(--line); background: var(--raised); color: var(--muted); }
 .banner.soft > svg { color: var(--muted); }
+.banner > .spinner { flex: none; align-self: center; }
+.banner.waiting { border-color: var(--vscode-inputValidation-warningBorder, var(--warn)); }
 .banner .msg { flex: 1; }
 .banner button { flex: none; padding: 3px 10px; border-radius: 6px; background: var(--accent); color: var(--accent-fg); border: 1px solid var(--vscode-button-border, transparent);
   transition: background var(--t-fast) ease, transform var(--t-fast) ease; }

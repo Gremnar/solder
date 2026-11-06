@@ -48,6 +48,11 @@ class SolderPanel {
     this.approvals = [];
     /** @type {any} */
     this.error = null;
+    this.errorChat = "";   // the chat the error is about
+    this.runId = "";       // the chat a task runs (or last ran) in: the state above is its
+    /** @type {any} */
+    this.runChat = null;
+    this.awayDone = "";    // a task that finished while another chat was open
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
@@ -177,12 +182,15 @@ class SolderPanel {
   /** @param {any} event */
   onEvent(event) {
     this.log.event(event);
-    if (event.chat !== this.chat.id) {
-      if (event.type === "busy") this.post();
-      return;
+    if (event.type === "busy" && event.busy) {
+      // The task's chat: its state below is that chat's, shown only while it's the one open.
+      this.runId = event.chat;
+      this.runChat = event.chat === this.chat.id ? this.chat : (this.store.load(event.chat) ?? this.chat);
+      this.awayDone = "";
     }
+    if (event.chat !== this.runId) { this.post(); return; }
     switch (event.type) {
-      case "delta": this.live += event.text; this.status = ""; this.postLive(); return;
+      case "delta": this.live += event.text; this.status = ""; if (this.chat.id === this.runId) this.postLive(); return;
       case "thinking": this.status = "Thinking…"; this.running = ""; break;
       case "drafting": this.status = draftingLabel(event.calls); break;
       case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
@@ -191,19 +199,31 @@ class SolderPanel {
       case "message": this.live = ""; this.running = ""; this.status = ""; break;
       case "running": this.running = event.id; this.runningSince = Date.now(); this.status = ""; break;
       case "titled": break; // the new title goes out with the state below
-      case "approval": this.approvals.push(event); break;
+      case "approval":
+        this.approvals.push(event);
+        if (this.chat.id !== this.runId) {
+          // You're reading another chat: a banner there, and a notification (the task waits for you).
+          vscode.window.showInformationMessage(`Solder is waiting for your approval in "${this.runChat?.title ?? "another chat"}".`, "Go back")
+            .then((pick) => { if (pick) this.onMessage({ type: "open", id: event.chat }); });
+        }
+        break;
       case "approval-done": this.approvals = this.approvals.filter((a) => a.id !== event.id); break;
       case "usage": this.answerTokens = event.answer; this.credits = event.credits || this.credits; this.updateStatusBar(); break;
       case "busy":
-        if (event.busy) { this.error = null; this.answerTokens = 0; } else { this.status = ""; this.live = ""; this.running = ""; this.approvals = []; }
+        if (event.busy) { this.error = null; this.answerTokens = 0; } else {
+          this.status = ""; this.live = ""; this.running = ""; this.approvals = [];
+          if (this.chat.id !== this.runId) this.awayDone = this.runId; // finished while you were reading another chat
+        }
         break;
-      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; break;
-      case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; break;
-      case "done": if (event.limit) this.error = { message: `Stopped at the limit of ${event.limit} steps for one message.`, resumable: true }; break;
+      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; this.errorChat = event.chat; break;
+      case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; this.errorChat = event.chat; break;
+      case "done": if (event.limit) { this.error = { message: `Stopped at the limit of ${event.limit} steps for one message.`, resumable: true }; this.errorChat = event.chat; } break;
       case "steer-unsent":
         // Typed while it worked but never delivered: the next message (after a Stop, back into the box instead).
         if (event.send) { setImmediate(() => this.sendQueued(event)); return; }
-        this.post(); this.view?.webview.postMessage({ type: "restore", text: event.text }); return;
+        this.post();
+        if (this.chat.id === this.runId) this.view?.webview.postMessage({ type: "restore", text: event.text });
+        return;
     }
     this.post();
   }
@@ -219,7 +239,9 @@ class SolderPanel {
       case "command": return this.command(String(message.name || ""), String(message.arg || "").trim());
       case "chatAction": return this.chatAction(String(message.action || ""), String(message.id || ""));
       case "stop": this.engine.stop(); return;
-      case "resume": this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
+      case "resume":
+        if (this.engine.busy) { vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Resume this one when it's done.`); return; }
+        this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
       case "unsteer": {
         // Taken back before it went: back into the box, to change or send later.
@@ -241,6 +263,7 @@ class SolderPanel {
       }
       case "new":
         if (!this.engine.busy) {
+          this.awayDone = "";
           const folder = this.chat.folder || "";
           this.chat = Engine.newChat();
           if (folder) this.chat.folder = folder; // a new chat keeps working where you were
@@ -249,13 +272,17 @@ class SolderPanel {
         }
         return;
       case "open": {
-        if (this.engine.busy) return;
-        const chat = this.store.load(message.id);
-        if (chat) { this.chat = chat; this.error = null; this.post(); }
+        // While a task runs, any chat can be read; the task's own state shows again when you go back to it.
+        const chat = message.id === this.runId && this.runChat ? this.runChat : this.store.load(message.id);
+        if (!chat) return;
+        this.chat = chat;
+        if (chat.id === this.awayDone) this.awayDone = "";
+        this.post();
+        if (this.engine.busy && chat.id === this.runId && this.live) this.postLive();
         return;
       }
       case "delete": {
-        if (this.engine.busy) return;
+        if (this.engine.busy && this.chat.id === this.runId) return;
         const pick = await vscode.window.showWarningMessage(`Delete the chat "${this.chat.title}"?`, { modal: true }, "Delete");
         if (pick !== "Delete") return;
         this.store.remove(this.chat.id);
@@ -398,7 +425,7 @@ class SolderPanel {
         return;
       }
       case "delete": {
-        if (current && this.engine.busy) return busy();
+        if (chat.id === this.runId && this.engine.busy) return busy();
         const pick = await vscode.window.showWarningMessage(`Delete the chat "${chat.title}"?`, { modal: true }, "Delete");
         if (pick !== "Delete") return;
         this.store.remove(chat.id);
@@ -451,12 +478,17 @@ class SolderPanel {
   async sendQueued(queued) {
     if (this.engine.busy) { this.engine.steer(queued.text, { context: queued.context, chips: queued.chips }); this.post(); return; }
     this.error = null;
-    this.engine.ask(this.chat, queued.text, { context: queued.context, chips: queued.chips });
+    this.engine.ask(this.runChat ?? this.chat, queued.text, { context: queued.context, chips: queued.chips });
   }
 
   async send(message) {
     const text = String(message.text || "").trim();
     if (!text) return;
+    if (this.awayBusy()) {
+      vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Go back to it to add to that task, or send this once it's done.`);
+      this.view?.webview.postMessage({ type: "restore", text });
+      return;
+    }
     if (this.engine.busy) {
       // Busy: it goes with the next step, the selection with it when it came from the menu.
       const picked = message.picked ?? (message.editor ? this.selectionBlock(message.editor) : null);
@@ -517,6 +549,7 @@ class SolderPanel {
    * VS Code's File → Add Folder to Workspace does. @param {string} full "" for the whole workspace
    */
   async setFolder(full) {
+    if (this.awayBusy()) { vscode.window.showInformationMessage("Solder is working in another chat: change this chat's folder once it's done."); return; }
     const root = this.tools.root();
     let folder = "";
     if (full && root) {
@@ -571,6 +604,7 @@ class SolderPanel {
 
   /** @param {string} id */
   async undo(id) {
+    if (this.awayBusy()) { vscode.window.showInformationMessage("Solder is working in another chat: undo this once it's done, so the two don't change files at once."); return; }
     const message = this.chat.messages.find((/** @type {any} */ m) => m.role === "tool" && m.tool_call_id === id);
     const change = message?.meta?.change;
     if (!change || message.meta.undone) return;
@@ -584,7 +618,8 @@ class SolderPanel {
 
   /** @param {string} file @param {number} [line] */
   async openFile(file, line) {
-    this.tools.useFolder(this.chat.folder);
+    if (!this.awayBusy()) this.tools.useFolder(this.chat.folder); // the running task keeps its folder
+
     const target = this.tools.resolve(file);
     try {
       const document = await vscode.workspace.openTextDocument(target.uri);
@@ -596,6 +631,22 @@ class SolderPanel {
   }
 
   // ------------------------------------------------------------------- posting --
+
+  /** Whether a task is running in a chat other than the one shown. */
+  awayBusy() {
+    return this.engine.busy && this.chat.id !== this.runId;
+  }
+
+  /** Where Solder is working (or waiting for your approval), when it's another chat; or that one finished meanwhile. */
+  elsewhere() {
+    const title = this.runChat?.title || "another chat";
+    if (this.awayBusy()) return { id: this.runId, title, waiting: this.approvals.length > 0 };
+    if (this.awayDone && this.awayDone !== this.chat.id) {
+      const problem = this.error && this.errorChat === this.awayDone ? this.error.message : "";
+      return { id: this.awayDone, title, done: true, problem };
+    }
+    return null;
+  }
 
   post() {
     if (!this.view) return;
@@ -609,16 +660,17 @@ class SolderPanel {
       modelsProblem: this.modelsProblem,
       model: current,
       effort: chat.effort || this.settings().effort,
-      busy: this.engine.busy,
+      busy: this.engine.busy && !this.awayBusy(),
+      elsewhere: this.elsewhere(),
       folder: this.chat.folder || "",
       workspaceName: (vscode.workspace.workspaceFolders || []).map((folder) => folder.name).join(" + "),
-      status: this.status,
-      live: this.live,
-      approvals: this.approvals.map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "" })),
-      error: this.error,
-      answerTokens: this.answerTokens,
+      status: this.awayBusy() ? "" : this.status,
+      live: this.awayBusy() ? "" : this.live,
+      approvals: (this.awayBusy() ? [] : this.approvals).map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "" })),
+      error: this.error && (!this.errorChat || this.errorChat === chat.id) ? this.error : null,
+      answerTokens: this.awayBusy() ? 0 : this.answerTokens,
       credits: this.credits,
-      steers: this.engine.steers.map((s) => s.text),
+      steers: this.awayBusy() ? [] : this.engine.steers.map((s) => s.text),
       workspace: !!this.tools.root(),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
@@ -678,7 +730,7 @@ class SolderPanel {
     }
     for (const step of steps.values()) {
       if (!step.pending) continue;
-      step.running = step.id === this.running;
+      step.running = !this.awayBusy() && step.id === this.running;
       if (step.running) step.since = this.runningSince; // the panel shows a clock on it
     }
     return items;

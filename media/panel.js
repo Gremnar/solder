@@ -745,10 +745,17 @@
     }
     // banner: redrawn only when it changes, so it's announced once and Resume keeps focus
     const banner = $("banner");
-    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped ? " soft" : "") : "banner hidden";
+    // Another chat is working (or waiting for you, or finished meanwhile): say so, with a way back to it.
+    const away = state.elsewhere;
+    const awayText = !away ? "" : away.done ? (away.problem ? `"${away.title}" stopped: ${away.problem}` : `"${away.title}" is done.`)
+      : away.waiting ? `"${away.title}" is waiting for your approval.` : `Solder is working in "${away.title}".`;
+    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped ? " soft" : "")
+      : away ? "banner soft" + (away.waiting ? " waiting" : "") : "banner hidden";
     const bannerHtml = state.error && !state.busy ? (state.error.stopped ? ICONS.pause : ICONS.alert) + `<span class="msg">${escape(state.error.message)}` +
       (state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
-      (state.error.resumable ? `<button data-action="resume">Resume</button>` : "") : "";
+      (state.error.resumable && !(away && !away.done) ? `<button data-action="resume">Resume</button>` : "")
+      : away ? (away.done ? (away.problem ? ICONS.pause : ICONS.check) : `<span class="spinner" aria-hidden="true"></span>`) + `<span class="msg">${escape(awayText)}</span>` +
+        `<button data-open="${escape(away.id)}">${away.done ? "Open it" : "Go back"}</button>` : "";
     if (bannerClass + bannerHtml !== shownBanner) {
       shownBanner = bannerClass + bannerHtml;
       const hadFocus = banner.contains(document.activeElement);
@@ -756,7 +763,8 @@
       banner.innerHTML = bannerHtml;
       if (hadFocus) /** @type {HTMLElement} */ (banner.querySelector("button") || input).focus();
     }
-    input.placeholder = state.busy ? "Add to this: it goes with the next step…" : "Ask Solder to read or change your code…";
+    input.placeholder = state.busy ? "Add to this: it goes with the next step…"
+      : away && !away.done ? "Solder is working in another chat…" : "Ask Solder to read or change your code…";
     // chips
     const chips = [];
     if (state.workspace) {
