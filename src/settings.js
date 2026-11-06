@@ -168,7 +168,7 @@ class SettingsScreen {
         await save("docsFolders", stored(docs), "docs-" + index);
         return;
       }
-      case "reindex": this.hooks.refreshDocs(); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
       case "testEmbedding": {
         const model = String(vscode.workspace.getConfiguration("solder").get("embeddingModel", "")).trim();
         if (!model) { this.notice("Type the embeddings model's id first.", "bad"); return; }

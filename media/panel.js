@@ -399,7 +399,8 @@
     if (!d.available) return { text: "Needs a newer VS Code", busy: false };
     if (!d.folders) return { text: "No folders yet", busy: false };
     const m = d.meaning;
-    const meaning = !m ? "" : m.error ? " · meaning: stopped, see the log" : m.passages
+    const meaning = !m ? "" : m.error ? " · meaning: stopped, see the log"
+      : m.waiting ? ` · meaning: waiting for your OK to send ${Number(m.waiting.passages).toLocaleString()} passages (Index again asks)` : m.passages
       ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages${m.tokens ? `, ${compact(m.tokens)} tokens` : ""}` : "";
     if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far${meaning}`, busy: true };
     return { text: `Ready · ${Number(d.indexed).toLocaleString()} file${d.indexed === 1 ? "" : "s"} indexed${meaning}`, busy: false };

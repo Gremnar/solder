@@ -30,6 +30,10 @@ const RESULT_COUNT = 5;
 const INDEX_VERSION = 2;
 /** Files whose "# " lines are headings (Office files are converted to Markdown). */
 const MARKDOWN = new Set([".md", ".markdown", ".mdx", ".mdown"]);
+/** A folder no longer listed keeps its index this long (so a settings mishap doesn't cost a rebuild and its tokens). */
+const UNLISTED_KEPT_MS = 14 * 24 * 60 * 60 * 1000;
+/** An embedding run of this many passages or more asks first, with its estimated cost. */
+const CONFIRM_PASSAGES = 300;
 /** Passages sent to the embeddings model at once. */
 const EMBED_BATCH = 32;
 /** How many each search takes from the keyword ranking and from the meaning ranking before they're merged. */
@@ -347,6 +351,22 @@ class DocsIndex {
     /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
     this.loaded = null;
     this.version = 0;
+    /** @type {string[] | null} the folders listed now (their keys): searches and counts cover only these */
+    this.listed = null;
+  }
+
+  /** The folders listed now: searches, counts and embedding cover only these. @param {string[]} roots */
+  setRoots(roots) {
+    const keys = roots.map((root) => keyOf(root));
+    if (this.listed?.join("\n") !== keys.join("\n")) this.version++;
+    this.listed = keys;
+  }
+
+  /** SQL that keeps a query to the listed folders' files, and its values. @param {string} column a column holding file keys */
+  _inListed(column) {
+    if (!this.listed) return { sql: "1", values: [] };
+    if (!this.listed.length) return { sql: "0", values: [] };
+    return { sql: `${column} IN (SELECT key FROM files WHERE root IN (${this.listed.map(() => "?").join(",")}))`, values: this.listed };
   }
 
   _open() {
@@ -360,7 +380,8 @@ class DocsIndex {
         CREATE VIRTUAL TABLE IF NOT EXISTS sections USING fts5(key UNINDEXED, path UNINDEXED, location UNINDEXED,
           heading, body, tokenize = 'porter unicode61');
         CREATE TABLE IF NOT EXISTS vectors(sid INTEGER PRIMARY KEY, key TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL);
-        CREATE INDEX IF NOT EXISTS vectors_key ON vectors(key);`);
+        CREATE INDEX IF NOT EXISTS vectors_key ON vectors(key);
+        CREATE TABLE IF NOT EXISTS roots(root TEXT PRIMARY KEY, seen INTEGER NOT NULL);`);
       return db;
     };
     try {
@@ -384,7 +405,8 @@ class DocsIndex {
 
   /** How many files the index holds. */
   count() {
-    return Number(this._open().prepare("SELECT count(*) AS n FROM files").get().n);
+    const listed = this._inListed("key");
+    return Number(this._open().prepare(`SELECT count(*) AS n FROM files WHERE ${listed.sql}`).get(...listed.values).n);
   }
 
   /**
@@ -416,17 +438,26 @@ class DocsIndex {
    */
   async _embed(embed, stop, signal) {
     const db = this._open();
-    if (db.prepare("SELECT count(*) AS n FROM vectors WHERE model <> ?").get(embed.model).n) {
-      db.prepare("DELETE FROM vectors WHERE model <> ?").run(embed.model); // another model's vectors don't compare
-      this.version++;
-    }
     this.embedding.runTokens = 0;
     this.embedding.error = "";
-    const pending = db.prepare("SELECT rowid AS sid, key, path, heading, body FROM sections WHERE rowid NOT IN (SELECT sid FROM vectors) LIMIT ?");
+    this.embedding.waiting = null;
+    // Another model's vectors aren't deleted (a model switched by mistake would cost a rebuild): they're replaced one by
+    // one as this model's come, and only after the run below is agreed to.
+    const listed = this._inListed("key");
+    const where = `rowid NOT IN (SELECT sid FROM vectors WHERE model = ?) AND ${listed.sql}`;
+    const todo = db.prepare(`SELECT count(*) AS n, coalesce(sum(length(body) + length(heading) + 40), 0) AS chars FROM sections WHERE ${where}`)
+      .get(embed.model, ...listed.values);
+    const passages = Number(todo.n);
+    if (!passages) return;
+    if (passages >= CONFIRM_PASSAGES && embed.confirm) {
+      const tokens = Math.round(Number(todo.chars) / 4);
+      if (!await embed.confirm(passages, tokens)) { this.embedding.waiting = { passages, tokens }; return; }
+    }
+    const pending = db.prepare(`SELECT rowid AS sid, key, path, heading, body FROM sections WHERE ${where} LIMIT ?`);
     const add = db.prepare("INSERT OR REPLACE INTO vectors (sid, key, model, vec) VALUES (?, ?, ?, ?)");
     for (;;) {
       if (Date.now() > stop || signal?.aborted) return;
-      const rows = pending.all(EMBED_BATCH);
+      const rows = pending.all(embed.model, ...listed.values, EMBED_BATCH);
       if (!rows.length) return;
       let answer;
       try {
@@ -455,8 +486,9 @@ class DocsIndex {
   /** How many passages there are, and how many have this model's vectors. @param {string} model */
   vectorCount(model) {
     const db = this._open();
-    return { passages: Number(db.prepare("SELECT count(*) AS n FROM sections").get().n),
-      embedded: Number(db.prepare("SELECT count(*) AS n FROM vectors WHERE model = ?").get(model).n) };
+    const listed = this._inListed("key");
+    return { passages: Number(db.prepare(`SELECT count(*) AS n FROM sections WHERE ${listed.sql}`).get(...listed.values).n),
+      embedded: Number(db.prepare(`SELECT count(*) AS n FROM vectors WHERE model = ? AND ${listed.sql}`).get(model, ...listed.values).n) };
   }
 
   /**
@@ -466,7 +498,8 @@ class DocsIndex {
    */
   nearest(query, model, limit) {
     if (!this.loaded || this.loaded.model !== model || this.loaded.version !== this.version) {
-      const rows = this._open().prepare("SELECT sid, vec FROM vectors WHERE model = ?").all(model);
+      const listed = this._inListed("key");
+      const rows = this._open().prepare(`SELECT sid, vec FROM vectors WHERE model = ? AND ${listed.sql}`).all(model, ...listed.values);
       const dims = rows.length ? rows[0].vec.byteLength / 4 : 0;
       const all = new Float32Array(rows.length * dims);
       const ids = [];
@@ -501,8 +534,17 @@ class DocsIndex {
       const stop = Date.now() + ms;
       const late = () => Date.now() > stop || !!signal?.aborted;
       const keys = roots.map((root) => keyOf(root));
+      this.setRoots(roots);
+      const now = Date.now();
+      const seen = db.prepare("INSERT OR REPLACE INTO roots (root, seen) VALUES (?, ?)");
+      for (const key of keys) seen.run(key, now);
       for (const { root } of db.prepare("SELECT DISTINCT root FROM files").all()) {
-        if (!keys.includes(String(root))) this._forget(db, "root = ?", String(root));
+        const key = String(root);
+        if (keys.includes(key)) continue;
+        // Not listed (removed, or a settings file lost for a while): kept, out of searches, until it's been gone 14 days.
+        db.prepare("INSERT OR IGNORE INTO roots (root, seen) VALUES (?, ?)").run(key, now);
+        const last = Number(db.prepare("SELECT seen FROM roots WHERE root = ?").get(key)?.seen ?? now);
+        if (now - last > UNLISTED_KEPT_MS) { this._forget(db, "root = ?", key); db.prepare("DELETE FROM roots WHERE root = ?").run(key); }
       }
       const result = { files: 0, changed: 0, unfinished: false, truncated: false };
       for (const root of roots) {
@@ -522,11 +564,29 @@ class DocsIndex {
           try { text = await documentText(file.full); } catch { text = null; }
           db.exec("BEGIN");
           try {
-            if (db.prepare("DELETE FROM vectors WHERE key = ?").run(key).changes) this.version++;
-            db.prepare("DELETE FROM sections WHERE key = ?").run(key);
-            const add = db.prepare("INSERT INTO sections (key, path, location, heading, body) VALUES (?, ?, ?, ?, ?)");
+            // Passages whose text is unchanged keep their row (and so their vector): a file copied with a new date, or
+            // edited in one place, re-sends only what's new. The rest go, with their vectors.
             const ext = path.extname(file.full).toLowerCase();
-            for (const piece of text ? sections(text, MARKDOWN.has(ext) || OFFICE.has(ext)) : []) add.run(key, file.full, piece.location, piece.heading, piece.body);
+            const pieces = text ? sections(text, MARKDOWN.has(ext) || OFFICE.has(ext)) : [];
+            /** @type {Map<string, {rowid: number, location: string}[]>} */
+            const old = new Map();
+            for (const row of db.prepare("SELECT rowid, location, heading, body FROM sections WHERE key = ?").all(key)) {
+              const same = String(row.heading) + "\u0000" + String(row.body);
+              old.set(same, [...(old.get(same) ?? []), { rowid: Number(row.rowid), location: String(row.location) }]);
+            }
+            const add = db.prepare("INSERT INTO sections (key, path, location, heading, body) VALUES (?, ?, ?, ?, ?)");
+            const move = db.prepare("UPDATE sections SET location = ?, path = ? WHERE rowid = ?");
+            for (const piece of pieces) {
+              const kept = old.get(piece.heading + "\u0000" + piece.body)?.shift();
+              if (kept) { if (kept.location !== piece.location) move.run(piece.location, file.full, kept.rowid); }
+              else add.run(key, file.full, piece.location, piece.heading, piece.body);
+            }
+            const gone = [...old.values()].flat().map((row) => row.rowid);
+            if (gone.length) {
+              const marks = gone.map(() => "?").join(",");
+              if (db.prepare(`DELETE FROM vectors WHERE sid IN (${marks})`).run(...gone).changes) this.version++;
+              db.prepare(`DELETE FROM sections WHERE rowid IN (${marks})`).run(...gone);
+            }
             db.prepare("INSERT OR REPLACE INTO files (key, root, stamp) VALUES (?, ?, ?)").run(key, rootKey, stamp);
             db.exec("COMMIT");
           } catch (error) {
@@ -577,17 +637,18 @@ class DocsIndex {
       const expression = matchQuery(query);
       if (!expression && !meaning) return [];
       const db = this._open();
+      const listed = this._inListed("key");
       const sql = "SELECT rowid, path, location, heading, snippet(sections, 4, '[', ']', '…', 24) AS excerpt "
-        + "FROM sections WHERE sections MATCH ? ORDER BY bm25(sections, 0, 0, 0, 2.0, 1.0) LIMIT ?";
+        + `FROM sections WHERE sections MATCH ? AND ${listed.sql} ORDER BY bm25(sections, 0, 0, 0, 2.0, 1.0) LIMIT ?`;
       const take = meaning ? CANDIDATES : limit;
       /** @type {any[]} */
       let rows = [];
       try {
-        rows = expression ? db.prepare(sql).all(expression, take) : [];
+        rows = expression ? db.prepare(sql).all(expression, ...listed.values, take) : [];
       } catch {
         // FTS5 syntax that isn't quite right: its words instead.
         const words = matchQuery(query.replace(/["()*^]|\b(AND|OR|NOT)\b/g, " "));
-        rows = words ? db.prepare(sql).all(words, take) : [];
+        rows = words ? db.prepare(sql).all(words, ...listed.values, take) : [];
       }
       if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES), limit);
       /** @type {Map<number, number>} */

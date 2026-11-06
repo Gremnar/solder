@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Nothing already embedded is sent again by accident.** A docs folder that drops off the list (removed, or a settings file lost for a while) keeps its index and vectors for 14 days, out of searches, so putting it back costs nothing. Vectors made with another embeddings model are no longer deleted when you switch. A file that looks changed keeps the vectors of its unchanged passages, so a copy with new dates sends nothing and an edit to one function sends one passage. And an embedding run of 300 passages or more now asks first, with its estimated tokens (Embed them, or Not now).
+
 ## 0.1.8 (2026-11-06)
 
 - **Plans for longer tasks (an 11th tool, `plan`).** For a task of three or more steps, the model sets out a plan: each step's goal, which you see as a checklist in the chat (done ✓, now, to do), and the details it needs, which only it sees. When it finishes a step it writes notes on what it did and what later steps need, and that step's tool output is then left out of the chat, replaced by the notes, so long tasks stay small and focused.

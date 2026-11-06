@@ -584,7 +584,7 @@ class WorkspaceTools {
     const model = this.semantic();
     let meaning = null;
     if (model) {
-      try { meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error }; } catch { meaning = null; }
+      try { meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error, waiting: index.embedding.waiting ?? null }; } catch { meaning = null; }
     }
     return { available: true, folders, indexed, active: !!index.active, meaning };
   }
@@ -613,6 +613,7 @@ class WorkspaceTools {
         let logged = 0;
         const embed = model && this.embedder ? { model,
           fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal),
+          confirm: (/** @type {number} */ passages, /** @type {number} */ tokens) => this.confirmEmbedding(model, passages, tokens),
           onBatch: () => {
             const { passages, embedded } = index.vectorCount(model);
             progress?.report({ message: `${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages` });
@@ -632,6 +633,25 @@ class WorkspaceTools {
     }
   }
 
+  /**
+   * A big embedding run (a first build, a new model, many new files) asks first, with its estimated cost: it can use a
+   * real share of a day's allowance. Asked once a session per model; "Not now" isn't asked again for 6 hours (Index
+   * again asks again). No answer in 2 minutes counts as not now.
+   * @param {string} model @param {number} passages @param {number} tokens
+   */
+  async confirmEmbedding(model, passages, tokens) {
+    if (this.embedAgreed === model) return true;
+    if (Date.now() - (this.embedDeclinedAt ?? 0) < 6 * 60 * 60 * 1000) return false;
+    const pick = await Promise.race([
+      vscode.window.showWarningMessage(`Solder's docs search by meaning needs to send ${passages.toLocaleString("en-US")} passages to the gateway's embeddings model: about ${compactCount(tokens)} tokens, once. Go ahead?`,
+        "Embed them", "Not now"),
+      new Promise((resolve) => setTimeout(() => resolve(undefined), 120_000)),
+    ]);
+    if (pick === "Embed them") { this.embedAgreed = model; return true; }
+    this.embedDeclinedAt = Date.now();
+    return false;
+  }
+
   /** The embeddings model when docs search by meaning is on (Settings → Your docs), else "". */
   semantic() {
     const config = vscode.workspace.getConfiguration("solder");
@@ -645,6 +665,7 @@ class WorkspaceTools {
     const index = this.docsIndex();
     if (!index) throw new ToolError(RESULTS.docsUnavailable);
     const roots = folders.map((folder) => folder.path);
+    index.setRoots(roots);
     const stale = roots.some((root) => Date.now() - index.walkedAt(root) > 2 * 60_000);
     const state = index.active ? { files: index.count(), unfinished: true, truncated: false }
       : stale ? await index.refresh(roots, { ms: 4000, signal }) : { files: index.count(), unfinished: false, truncated: false };
@@ -1518,6 +1539,11 @@ function aroundLongMatches(lines, root, query, regex, caseSensitive) {
     const text = files.get(file)?.[Number(number) - 1];
     return text === undefined ? line.replace(RG_OMITTED, "…") : head + around(text, pattern);
   });
+}
+
+/** 1.2M, 340k, 900. @param {number} n */
+function compactCount(n) {
+  return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
 }
 
 /** A glob that matches regardless of case: each letter as [xX] (outside a [...] class). @param {string} glob */

@@ -219,11 +219,11 @@ test("search by meaning: vectors in the same index, found by meaning, merged wit
     await index.refresh([folder], { ms: 20_000, embed });
     assert.equal(calls, 1);
     assert.deepEqual(index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
-    // Another model: the old vectors go (they don't compare); a refusal stops the pass, keywords still work.
+    // Another model: the old vectors stay (a model switched by mistake would cost a rebuild); a refusal stops the pass, keywords still work.
     const refusing = { model: "embed-b", fn: () => Promise.reject(new Error("The gateway answered HTTP 403.")) };
     await index.refresh([folder], { ms: 20_000, embed: refusing });
     assert.deepEqual(index.vectorCount("embed-b"), { passages: 3, embedded: 0 });
-    assert.deepEqual(index.vectorCount("embed-a").embedded, 0);
+    assert.deepEqual(index.vectorCount("embed-a").embedded, 3);
     assert.match(index.embedding.error, /403/);
     assert.match((await index.search("spooler"))[0].path, /printers\.md$/);
   } finally {
@@ -260,6 +260,56 @@ test("an index cut the old way is rebuilt once, and searches return the best 5",
     await again.refresh([folder], { ms: 20_000 });
     assert.equal(again.count(), 8);
     again.close();
+  } finally {
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("nothing already embedded is sent again by accident: a re-dated copy, a folder off the list a while, a big run asks", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-keep-"));
+  const folder = path.join(base, "scripts");
+  fs.mkdirSync(folder);
+  const script = (/** @type {number} */ n) => [`# Script ${n}`, ...Array.from({ length: 30 }, (_, i) => `Write-Host "step ${i} of script ${n}, with some padding text"`), ""].join("\n");
+  for (let n = 0; n < 4; n++) fs.writeFileSync(path.join(folder, `s${n}.ps1`), script(n) + "\n" + script(n + 10));
+  const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
+  let sent = 0;
+  const embed = { model: "embed-a", fn: (/** @type {string[]} */ texts) => { sent += texts.length; return fakeEmbed(texts); } };
+  try {
+    await index.refresh([folder], { ms: 20_000, embed });
+    const all = index.vectorCount("embed-a");
+    assert.equal(all.embedded, all.passages);
+    // Copied again with new dates (a sync tool): same text, so nothing is sent.
+    sent = 0;
+    const later = new Date(Date.now() + 60_000);
+    for (let n = 0; n < 4; n++) fs.utimesSync(path.join(folder, `s${n}.ps1`), later, later);
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.equal(sent, 0, "a re-dated copy sends nothing");
+    // One part of one file edited: only that passage goes.
+    fs.writeFileSync(path.join(folder, "s0.ps1"), script(0) + "\n" + script(99));
+    const later2 = new Date(Date.now() + 120_000);
+    fs.utimesSync(path.join(folder, "s0.ps1"), later2, later2);
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.ok(sent >= 1 && sent < all.passages / 2, `${sent} passages sent for one edit`);
+    // The folder off the list (a settings file lost), then back: kept meanwhile, so nothing is sent.
+    await index.refresh([], { ms: 20_000, embed });
+    assert.equal(index.count(), 0, "not searched while off the list");
+    assert.deepEqual(await index.search("script"), []);
+    sent = 0;
+    await index.refresh([folder], { ms: 20_000, embed });
+    assert.equal(sent, 0, "back on the list: nothing sent again");
+    assert.equal(index.vectorCount("embed-a").embedded, index.vectorCount("embed-a").passages);
+    // A big run asks first; "not now" sends nothing and says it's waiting.
+    let asked = null;
+    const big = { model: "embed-new", fn: embed.fn, confirm: async (/** @type {number} */ passages, /** @type {number} */ tokens) => { asked = { passages, tokens }; return false; } };
+    const many = path.join(base, "many");
+    fs.mkdirSync(many);
+    for (let n = 0; n < 160; n++) fs.writeFileSync(path.join(many, `m${n}.ps1`), script(n) + "\n" + script(n + 500));
+    sent = 0;
+    await index.refresh([folder, many], { ms: 60_000, embed: big });
+    assert.ok(asked && asked.passages >= 300 && asked.tokens > 0, JSON.stringify(asked));
+    assert.equal(sent, 0, "not now: nothing sent");
+    assert.deepEqual(index.embedding.waiting, asked);
   } finally {
     index.close();
     fs.rmSync(base, { recursive: true, force: true });
