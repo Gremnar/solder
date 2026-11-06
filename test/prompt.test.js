@@ -7,9 +7,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
+const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "8b995c4f3859c3ee";
+const PINNED = "33646b5051395f6c";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -51,6 +51,8 @@ function everything() {
     severalFolders: systemPrompt({ workspace: "S:\\repo", folders: ["S:\\repo", "C:\\local\\tools", "C:\\local\\site"] }),
     tools: toolDefinitions(),
     starters: STARTERS,
+    plan: [PLAN.now([{ goal: "G1", work: "W1", state: "done", notes: "N1" }, { goal: "G2", work: "W2", state: "doing", notes: "" }, { goal: "G3", work: "W3", state: "todo", notes: "" }]),
+      PLAN.now([{ goal: "G1", work: "", state: "done", notes: "" }]), PLAN.none, PLAN.badStep(3), PLAN.stub(2, "Read a.js")],
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js")],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
     texts: filled(TEXTS, SAMPLES, "TEXTS"),
@@ -68,14 +70,15 @@ test("the model-facing texts match the pinned fingerprint", () => {
 test("the tools: a fixed order, every argument described and typed, required ones defined", () => {
   const definitions = toolDefinitions();
   assert.deepEqual(definitions.map((d) => d.function.name),
-    ["read_file", "symbols", "search", "find_files", "changes", "edit_file", "write_file", "move_item", "remove_item", "problems"]);
+    ["read_file", "symbols", "search", "find_files", "changes", "edit_file", "write_file", "move_item", "remove_item", "problems", "plan"]);
   assert.deepEqual(toolDefinitions(), definitions, "the same every time");
   for (const { type, function: fn } of definitions) {
     assert.equal(type, "function");
     assert.ok(fn.description.length > 20 && fn.description.length < 400, `${fn.name}: a short description`);
     assert.equal(fn.parameters.type, "object");
     for (const [arg, schema] of Object.entries(fn.parameters.properties)) {
-      assert.ok(["string", "integer", "boolean"].includes(schema.type), `${fn.name}.${arg}: a type`);
+      assert.ok(["string", "integer", "boolean", "array"].includes(schema.type), `${fn.name}.${arg}: a type`);
+      if (schema.type === "array") assert.ok(schema.items && schema.items.type, `${fn.name}.${arg}: its items' type`);
       assert.ok(schema.description && schema.description.endsWith("."), `${fn.name}.${arg}: a one-line description`);
     }
     for (const arg of fn.parameters.required) assert.ok(arg in fn.parameters.properties, `${fn.name}: ${arg} is defined`);
@@ -89,9 +92,9 @@ test("the rules name every tool, say there's no shell, and stay small", () => {
   assert.match(RULES, /can't run commands/);
   assert.match(RULES, /Never guess what a file says/);
   assert.match(RULES, /don't put your reasoning, drafts or second thoughts in it/);
-  // Every request resends these: keep the rules under ~600 tokens and the 10 tools under ~1,400.
-  assert.ok(RULES.length / 4 < 600, `RULES is ${Math.ceil(RULES.length / 4)} tokens`);
-  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1400, "the tool definitions grew");
+  // Every request resends these: keep the rules under ~700 tokens and the 11 tools under ~1,700.
+  assert.ok(RULES.length / 4 < 700, `RULES is ${Math.ceil(RULES.length / 4)} tokens`);
+  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1700, `the tool definitions are ${Math.ceil(JSON.stringify(toolDefinitions()).length / 4)} tokens`);
 });
 
 test("the system prompt is stable: no time, instructions and rules only when given", () => {

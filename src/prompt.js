@@ -35,6 +35,9 @@ before moving on.
 stop later reads). Make several at once only when you already know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
+- For a task of three or more steps, call plan first, then do one step at a time. When a step is done, call plan \
+with done and notes on what you did and what later steps need: that step's results are then left out of the chat. \
+Call it alongside your other calls; skip it for small tasks.
 - If a change could lose the user's work, or the request is unclear, ask first.
 
 # How to answer
@@ -132,10 +135,21 @@ a folder, or ends with /, means into it. Never overwrites; the user can undo it.
 linters), for one file or the whole workspace.", {
     path: { type: "string", description: `Just this file: ${RELATIVE}.` },
   }, []],
+  plan: ["Sets out a task of several steps, or marks one finished. The user sees each step's goal as a checklist. \
+With steps: the plan (replacing any earlier one; steps already done stay done). With done: that step is finished, \
+and its notes are kept in place of its tool results, which are left out of the chat from then on.", {
+    steps: { type: "array", description: "The plan, in order.", items: { type: "object", properties: {
+      goal: { type: "string", description: "One sentence the user sees, such as \"Fix the date parsing in Get-Report\"." },
+      work: { type: "string", description: "What the step needs: files, functions, what to check. Only you see it." } },
+      required: ["goal"] } },
+    done: { type: "integer", description: "The step just finished (numbered from 1)." },
+    notes: { type: "string", description: "With done: what you did, and anything later steps need from it (names, \
+values, decisions), in a few lines." },
+  }, []],
 };
 
 /** Tools that only look: more of them fit in one reply, and one failing doesn't stop the rest. */
-const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems"]);
+const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems", "plan"]);
 
 /** The tools array, in a fixed order. */
 function toolDefinitions() {
@@ -166,7 +180,7 @@ again whatever was stopped or not run, then go on.",
   badArguments: "The call's arguments weren't valid JSON, so it wasn't run.",
   missing: (/** @type {string} */ name, /** @type {string} */ arg) => `${name} needs ${arg}; it wasn't run.`,
   wrongType: (/** @type {string} */ name, /** @type {string} */ arg, /** @type {string} */ type) =>
-    `${name}'s ${arg} must be ${type === "integer" ? "a whole number" : type === "boolean" ? "true or false" : "text"}; it wasn't run.`,
+    `${name}'s ${arg} must be ${type === "integer" ? "a whole number" : type === "boolean" ? "true or false" : type === "array" ? "a list" : "text"}; it wasn't run.`,
   cutOff: "The call was cut off at the length limit before its arguments ended, so it wasn't run. Send it again \
 in smaller parts: for a big file, write_file with the first part, then edit_file to add the rest.",
   emptyReply: "\n\n(Your reply to this came back empty, so here it is again. Please carry on: make your next call, \
@@ -193,6 +207,23 @@ this. Reply with only the title, without quotes.\n\n" + excerpt,
 };
 
 /** The tools' results and errors (src/tools.js). An error reaches the model as "Error: " + the text. */
+/** The plan tool's answers. */
+const PLAN = {
+  /** @param {{goal: string, work: string, state: string, notes: string}[]} steps */
+  now: (steps) => {
+    const at = steps.findIndex((step) => step.state === "doing");
+    const done = steps.filter((step) => step.state === "done").length;
+    const head = at >= 0 ? `Plan: step ${at + 1} of ${steps.length} now (${done} done).` : `Plan: all ${steps.length} steps done.`;
+    return [head, ...steps.map((step, index) => `${index + 1}. [${step.state === "done" ? "done" : step.state === "doing" ? "now" : "to do"}] ${step.goal}` +
+      (step.state === "done" && step.notes ? `\n   Notes: ${step.notes}` : "") + (step.state === "doing" && step.work ? `\n   Work: ${step.work}` : ""))].join("\n");
+  },
+  none: "There's no plan yet: call plan with steps first.",
+  badStep: (/** @type {number} */ count) => `done needs a step number from 1 to ${count}.`,
+  /** A finished step's result, left out. */
+  stub: (/** @type {number} */ step, /** @type {string} */ summary) =>
+    `(Step ${step} is done; this result (${summary}) is left out to save space. The step's notes in the plan say what came of it.)`,
+};
+
 const RESULTS = {
   networkPath: "Network paths (\\\\server\\share) aren't opened, outside the workspace: use a path on this PC.",
   error: (/** @type {string} */ message) => `Error: ${message}`,
@@ -371,4 +402,4 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote };

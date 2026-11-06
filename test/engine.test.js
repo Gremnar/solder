@@ -636,3 +636,44 @@ test("/fork copies the chat to carry on in: its own id and title, the same histo
   assert.equal(chat.compaction.summary, "S");
   assert.equal(Engine.fork(copy).title, "Fix the cart (fork)", "a fork of a fork isn't (fork) (fork)");
 });
+
+test("plan: steps, then a finished step's results leave the chat for its notes; the newest reply's results stay", async () => {
+  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
+  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A", work: "a.js, the null check" }, { goal: "Fix B", work: "b.js" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
+    { calls: [call("r2", "read_file", { path: "a2.js" })] },
+    // Step 1 done, in the same reply as step 2's first read: that read is step 2's, and new, so it stays.
+    { calls: [plan({ done: 1, notes: "a.js: defaulted $Path." }, "p2"), call("r3", "read_file", { path: "b.js" })] },
+    (req) => {
+      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
+      assert.match(results.r1, /^\(Step 1 is done; this result \(Read a\.js\) is left out/);
+      assert.match(results.r2, /^\(Step 1 is done/);
+      assert.match(results.r3, /^b\.js x/, "step 2's read stays whole");
+      assert.match(results.p2, /\[done\] Fix A\n   Notes: a\.js: defaulted \$Path\./);
+      assert.match(results.p2, /\[now\] Fix B\n   Work: b\.js/);
+      return { calls: [plan({ done: 2, notes: "b.js done." }, "p3")] };
+    },
+    { content: "Both fixed." },
+  ]);
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "fix a and b");
+  assert.deepEqual(chat.plan.steps.map((step) => step.state), ["done", "done"]);
+  assert.equal(chat.plan.steps[0].notes, "a.js: defaulted $Path.");
+  // A new plan keeps the steps already done; a step that isn't there is an error the model can read.
+  const again = fakeClient([{ calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix C" }] }, "p4"), plan({ done: 7 }, "p5")] }, { content: "ok" }]);
+  await engine(again, host).ask(chat, "now C");
+  assert.deepEqual(chat.plan.steps.map((step) => [step.goal, step.state]), [["Fix A", "done"], ["Fix C", "doing"]]);
+  const p5 = chat.messages.find((m) => m.tool_call_id === "p5");
+  assert.match(p5.content, /done needs a step number from 1 to 2/);
+});
+
+test("plan: done before any plan says so; a plan alone isn't a step to approve", async () => {
+  const client = fakeClient([{ calls: [call("p1", "plan", { done: 1 })] }, { content: "ok" }]);
+  const chat = Engine.newChat();
+  const events = [];
+  await engine(client, fakeHost(), events).ask(chat, "go");
+  assert.match(chat.messages.find((m) => m.tool_call_id === "p1").content, /no plan yet/);
+  assert.ok(!events.some((e) => e.type === "approval"));
+});

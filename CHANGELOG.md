@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Plans for longer tasks (an 11th tool, `plan`).** For a task of three or more steps, the model sets out a plan: each step's goal, which you see as a checklist in the chat (done ✓, now, to do), and the details it needs, which only it sees. When it finishes a step it writes notes on what it did and what later steps need, and that step's tool output is then left out of the chat, replaced by the notes, so long tasks stay small and focused.
 - **Read other chats while one works.** The chats list opens any chat while Solder is busy in another. A banner there says where it's working, or that it's waiting for your approval (with a notification too), or that it finished, with a button to go back. The task's live text, approvals and messages you queued stay with its own chat; you can't send from another chat until it's done.
 
 ## 0.1.7 (2026-11-06)

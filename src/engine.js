@@ -14,7 +14,7 @@
  */
 
 const { Cancelled } = require("./gateway.js");
-const { READ_ONLY, TEXTS, TOOLS, timeNote, toolDefinitions } = require("./prompt.js");
+const { READ_ONLY, TEXTS, TOOLS, PLAN, timeNote, toolDefinitions } = require("./prompt.js");
 
 const CHARS_PER_TOKEN = 4;
 /** Within the chat, the newest results stay whole up to about this many tokens… */
@@ -37,6 +37,10 @@ const MAX_RESULT_CHARS = 40_000;
 const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
+/** A finished step's results shorter than this stay (an edit's "Edited a.js" costs less than its stand-in). */
+const PLAN_STUB_MIN_CHARS = 400;
+/** The most steps a plan keeps. */
+const MAX_PLAN_STEPS = 20;
 const MAX_BATCH = 5;
 const MAX_READ_BATCH = 8;
 const WRAP_UP_ROUNDS = 3;
@@ -368,6 +372,7 @@ class Engine {
   /** One call: asked about first when it must be, then run. @returns {Promise<ToolResult>} */
   async _runOne(/** @type {Chat} */ chat, /** @type {string} */ id, /** @type {string} */ name, /** @type {any} */ args,
     /** @type {string} */ label, /** @type {AbortSignal} */ signal) {
+    if (name === "plan") return planStep(chat, id, args); // the engine's own: nothing on disk, nothing to approve
     const reason = this.host.needsApproval(name, args);
     let note = "";
     if (reason) {
@@ -628,8 +633,72 @@ function shortCall(call) {
   return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
 }
 
+/**
+ * The plan tool: set the steps, or mark one done. Kept on the chat (chat.plan), with the calls where each step began
+ * and ended, so trim() can leave a finished step's results out. @param {Chat} chat @param {string} id @param {any} args
+ * @returns {ToolResult}
+ */
+function planStep(chat, id, args) {
+  const plan = /** @type {any} */ (chat).plan;
+  if (Array.isArray(args.steps) && args.steps.length) {
+    const before = new Map((plan?.steps || []).map((/** @type {any} */ step) => [String(step.goal).trim().toLowerCase(), step]));
+    const steps = args.steps.slice(0, MAX_PLAN_STEPS).map((/** @type {any} */ given) => {
+      const goal = String(given?.goal ?? "").trim().slice(0, 200) || "(a step)";
+      const old = before.get(goal.toLowerCase()); // a step already done stays done
+      return old && old.state === "done" ? { ...old, goal } : { goal, work: String(given?.work ?? "").trim().slice(0, 2000), state: "todo", notes: "" };
+    });
+    /** @type {any} */ (chat).plan = { steps };
+    const next = steps.find((step) => step.state !== "done");
+    if (next) { next.state = "doing"; next.startCall = id; }
+  }
+  const current = /** @type {any} */ (chat).plan;
+  if (args.done !== undefined && args.done !== null) {
+    if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
+    const index = Math.round(Number(args.done)) - 1;
+    const step = current.steps[index];
+    if (!step) return { output: PLAN.badStep(current.steps.length), summary: "Plan · no such step", failed: true };
+    step.state = "done";
+    step.notes = String(args.notes ?? "").trim().slice(0, 1500);
+    step.endCall = id;
+    step.startCall ??= id;
+    const next = current.steps.find((/** @type {any} */ other) => other.state === "todo");
+    if (next && !current.steps.some((/** @type {any} */ other) => other.state === "doing")) { next.state = "doing"; next.startCall = id; }
+  }
+  if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
+  const done = current.steps.filter((/** @type {any} */ step) => step.state === "done").length;
+  return { output: PLAN.now(current.steps), summary: `Plan · ${done} of ${current.steps.length} done` };
+}
+
+/**
+ * Finished steps' results, left out (sticky): those after the call that began the step, up to the one that ended it.
+ * The newest reply's results are never cut, as everywhere: the model hasn't seen them yet. @param {Chat} chat @param {Set<Stored>} fresh
+ */
+function trimFinishedSteps(chat, fresh) {
+  const plan = /** @type {any} */ (chat).plan;
+  if (!plan) return false;
+  /** @type {Map<string, number>} */
+  const at = new Map();
+  chat.messages.forEach((message, index) => { if (message.role === "tool" && message.tool_call_id) at.set(message.tool_call_id, index); });
+  let cut = false;
+  plan.steps.forEach((/** @type {any} */ step, /** @type {number} */ number) => {
+    if (step.state !== "done" || !step.startCall || !step.endCall) return;
+    const from = at.get(step.startCall);
+    const to = at.get(step.endCall);
+    if (from === undefined || to === undefined) return;
+    for (let index = from + 1; index < to; index++) {
+      const message = chat.messages[index];
+      if (message.role !== "tool" || message.meta?.stub || message.meta?.name === "plan" || fresh.has(message)) continue;
+      if (message.content.length <= PLAN_STUB_MIN_CHARS) continue;
+      message.meta = { ...message.meta, stub: true, stepDone: number + 1 };
+      cut = true;
+    }
+  });
+  return cut;
+}
+
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
 function resultText(message) {
+  if (message.meta?.stub && message.meta.stepDone) return PLAN.stub(message.meta.stepDone, message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
   if (!message.meta?.stub) return message.content;
   return TEXTS.stub(message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
 }
@@ -649,11 +718,12 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
   for (let index = latest - 1; index > Math.max(start, turn); index--) {
     if (chat.messages[index].role === "assistant" && chat.messages[index].tool_calls?.length) { latest = index; break; }
   }
+  const fresh = new Set(chat.messages.slice(latest + 1));
+  const stepped = trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const ratio = chat.tokenRatio || 1;
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
-  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return false;
-  const fresh = new Set(chat.messages.slice(latest + 1));
+  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return stepped;
   const thisTask = new Set(chat.messages.slice(Math.max(start, turn)));
   const ceiling = compactAt * IN_TASK_CEILING;
   let kept = 0;
@@ -667,7 +737,14 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
       cut = true;
     }
   }
-  return cut;
+  return cut || stepped;
+}
+
+/** Where the newest reply (with calls) is: its results come after it, unseen by the model so far. @param {Chat} chat */
+function newestReply(chat) {
+  let index = chat.messages.length - 1;
+  while (index >= 0 && chat.messages[index].role === "tool") index--;
+  return index;
 }
 
 /** A tool's output, capped (head and tail) so no single result can swamp the chat. @param {string} text */
@@ -702,10 +779,16 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
     const type = schema.type;
     let ok = type === "integer" ? Number.isInteger(value) || (typeof value === "string" && /^\d+$/.test(value))
       : type === "boolean" ? typeof value === "boolean" || value === "true" || value === "false"
+      : type === "array" ? Array.isArray(value) || (typeof value === "string" && /^\s*\[/.test(value))
       : typeof value === "string" || typeof value === "number";
     if (!ok) return { args, problem: TEXTS.wrongType(name, arg, type) };
     if (type === "integer" && typeof value === "string") args[arg] = Number(value);
     if (type === "boolean" && typeof value === "string") args[arg] = value === "true";
+    if (type === "array" && typeof value === "string") {
+      // Some models send a list as JSON text: read it, or say so.
+      try { args[arg] = JSON.parse(value); } catch { return { args, problem: TEXTS.wrongType(name, arg, type) }; }
+      if (!Array.isArray(args[arg])) return { args, problem: TEXTS.wrongType(name, arg, type) };
+    }
     if (type === "string" && typeof value === "number") args[arg] = String(value);
   }
   return { args, problem: "" };

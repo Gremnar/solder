@@ -9,7 +9,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 10 tools: read, symbols, search, find, changes, edit, write, move, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
+| 11 tools: read, symbols, search, find, changes, edit, write, move, remove, problems, plan | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
@@ -58,6 +58,7 @@ VS Code extension host (Node)
 | `write_file` | path, content | create or overwrite through `WorkspaceEdit`, then save | none inside the workspace; asks outside it |
 | `move_item` | from, to, copy? | `workspace.fs.rename` or `copy` (plain file operations, not a rename with import updates, which would change files Undo doesn't cover). `to` that's a folder, or ends with `/`, means into it; missing folders are created; it never overwrites, and refuses a file with unsaved editor changes. After a move it lists up to 20 lines that still mention the old name, so the model fixes them (a note alone was ignored three times in four). Undo moves it back, or removes the copy | asks when anything leaves or enters the workspace |
 | `problems` | path? | `languages.getDiagnostics` (errors and warnings, capped) | none |
+| `plan` | steps? (goal, work), done?, notes? | the engine's own: chat.plan; a finished step's results become stand-ins with its notes | none |
 
 Details that matter:
 - **After every edit or write, include the file's new problems.** Wait up to about 2 s for `onDidChangeDiagnostics` on that file, then add any new errors to the result: "New problems in app.ts: 42: Cannot find name 'x'". This is the biggest token saver available. The model sees a broken edit at once instead of running a build to find out.

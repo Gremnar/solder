@@ -699,6 +699,12 @@ class SolderPanel {
     if (this.chat.forkedFrom) {
       items.push({ kind: "note", text: `A copy of "${this.chat.forkedFrom.title}" to carry on in. The original is unchanged.` });
     }
+    // The plan's card goes where the latest plan was set; its other calls (a step done) update it, not the timeline.
+    const plan = /** @type {any} */ (this.chat).plan;
+    let planAt = "";
+    for (const message of messages) for (const call of message.tool_calls || []) {
+      if (call.function.name === "plan" && /"steps"\s*:/.test(call.function.arguments || "")) planAt = call.id;
+    }
     for (let index = 0; index < messages.length; index++) {
       if (this.chat.compaction && index === this.chat.compaction.through) {
         items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
@@ -709,6 +715,13 @@ class SolderPanel {
       } else if (message.role === "assistant") {
         if (message.content?.trim()) items.push({ kind: "answer", text: message.content, incomplete: !!message.meta?.incomplete });
         for (const call of message.tool_calls || []) {
+          if (call.function.name === "plan") {
+            if (call.id === planAt && plan?.steps?.length) {
+              items.push({ kind: "plan", id: call.id, active: this.engine.busy && !this.awayBusy(),
+                steps: plan.steps.map((/** @type {any} */ step) => ({ goal: step.goal, state: step.state, notes: step.notes || "" })) });
+            }
+            continue;
+          }
           const args = parseArguments(call.function.name, call.function.arguments, false).args;
           const step = { kind: "step", id: call.id, name: call.function.name, label: labelOf(call.function.name, args),
             pending: true, path: args.path || "" };

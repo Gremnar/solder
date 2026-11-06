@@ -261,6 +261,22 @@ svg circle { fill: currentColor; stroke: none; }
 .step.running .label { color: var(--fg); }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 0; padding: 3px 4px; font-size: 0.92em; }
 .status .spinner { margin: 0 2px; }
+
+/* the plan: a checklist of the task's steps */
+.plan { margin: 10px 0; padding: 9px 12px 7px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
+.plan-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; font-weight: 600; }
+.plan-head .count { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
+.plan ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.plan li { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; align-items: start; }
+.plan .mark { display: flex; align-items: center; justify-content: center; height: 1.45em; color: var(--muted); }
+.plan .mark svg { width: 13px; height: 13px; }
+.plan .mark .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.plan li.done .mark { color: var(--ok); }
+.plan li.done .goal { color: var(--muted); }
+.plan li.doing .goal { color: var(--fg); font-weight: 600; }
+.plan li.todo .goal { color: var(--muted); }
+.plan .notes { grid-column: 2; color: var(--muted); font-size: 0.88em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+body.vscode-high-contrast .plan { border-color: var(--vscode-contrastBorder, var(--line)); }
 /* after streamed words: hidden while they're still coming, shown once the reply goes quiet */
 .status.after-live { margin-top: 2px; transition: opacity var(--t) var(--ease); }
 .status.after-live.waiting { opacity: 0; }

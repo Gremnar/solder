@@ -589,6 +589,8 @@
       } else if (item.kind === "answer") {
         // no entrance: an answer arrives word by word, through the fade-in
         parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`);
+      } else if (item.kind === "plan") {
+        parts.push(planCard(item));
       } else if (item.kind === "note") {
         parts.push(`<div class="note" data-enter="i:n${index}">${escape(item.text)}</div>`);
       }
@@ -654,6 +656,20 @@
       if (renderedAnswers.size > 500) renderedAnswers.delete(/** @type {string} */ (renderedAnswers.keys().next().value));
     }
     return html;
+  }
+
+  /** The plan: each step's goal, done (with its notes), now (a spinner while it works) or to do. @param {any} item */
+  function planCard(item) {
+    const done = item.steps.filter((/** @type {any} */ step) => step.state === "done").length;
+    const rows = item.steps.map((/** @type {any} */ step, /** @type {number} */ index) => {
+      const mark = step.state === "done" ? ICONS.check : step.state === "doing" && item.active ? `<span class="spinner"></span>` : `<span class="dot"></span>`;
+      const state = step.state === "done" ? "Done" : step.state === "doing" ? "Now" : "To do";
+      return `<li class="${step.state}"><span class="mark" aria-hidden="true">${mark}</span><span class="sr-only">${state}: </span>` +
+        `<span class="goal">${index + 1}. ${escape(step.goal)}</span>` +
+        (step.state === "done" && step.notes ? `<span class="notes" title="${escape(step.notes)}">${escape(step.notes)}</span>` : "") + `</li>`;
+    }).join("");
+    return `<section class="plan" aria-label="Plan" data-enter="i:plan${escape(item.id)}"><div class="plan-head"><span>Plan</span>` +
+      `<span class="count">${done} of ${item.steps.length} done</span></div><ol>${rows}</ol></section>`;
   }
 
   /** A step's label: the tool's name in code type while it waits; after it, the summary with its detail quieter. @param {any} item @param {string} label */
