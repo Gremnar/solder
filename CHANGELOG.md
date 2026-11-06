@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-11-06)
 
 - **Scroll to bottom.** Scroll up in a chat and a round ↓ button appears just above the box; it takes you back to the end.
 - **problems checks files that aren’t open.** Some language support (TypeScript’s among it) only checks files in an editor tab, so a file Solder had changed but you didn’t have open came back “not checked”. It’s now opened in a background tab for the check, which leaves the editor you’re looking at and the cursor where they are, doesn’t replace a preview tab, and is closed again afterwards. A clean file no longer reads as unchecked where that kind of file does get checked, and when a file really can’t be checked, the model now tells you.
