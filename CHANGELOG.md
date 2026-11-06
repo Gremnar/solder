@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Scroll to bottom.** Scroll up in a chat and a round ↓ button appears just above the box; it takes you back to the end.
+- **Fix: Done in Settings (or leaving the guided setup) opened the chat at its start.** It now opens at the end, where you left it.
+
 ## 0.2.0 (2026-11-06)
 
 - **The plan stays in view while it works.** A compact copy of the checklist sits just above the message box while a task with unfinished steps runs, so it no longer scrolls away as the steps pile up. The card in the chat stays where it was.

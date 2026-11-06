@@ -263,6 +263,7 @@
   };
 
   let focusInput = false; // leaving settings or setup: the cursor goes back to the box
+  let awayFromChat = false; // settings or setup is showing in the chat's place
 
   function render() {
     if (!state) return;
@@ -272,8 +273,10 @@
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
-    if (state.setup) { shownParts = []; renderSetup(); return; }
-    if (state.settings) { shownParts = []; renderSettings(); return; }
+    if (state.setup) { shownParts = []; awayFromChat = true; renderSetup(); updateToBottom(); return; }
+    if (state.settings) { shownParts = []; awayFromChat = true; renderSettings(); updateToBottom(); return; }
+    // Back from settings or setup: the chat was redrawn from nothing, so it opens at its end, not its start.
+    if (awayFromChat) { awayFromChat = false; stickToBottom = true; }
     settingsShape = "";
     setupDraft = null;
     setupShown = "";
@@ -620,7 +623,23 @@
     entrances(transcript, bornInTranscript, quiet);
     if (atBottom || stickToBottom) transcript.scrollTop = transcript.scrollHeight;
     stickToBottom = false;
+    updateToBottom();
   }
+
+  /** "Scroll to bottom": shown once the chat's end is more than about a screen's third away. */
+  function updateToBottom() {
+    const away = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    const show = !!state && !state.setup && !state.settings && away > Math.max(160, transcript.clientHeight / 3);
+    const button = $("to-bottom");
+    if (button.classList.contains("hidden") === show) button.classList.toggle("hidden", !show);
+  }
+  transcript.addEventListener("scroll", updateToBottom, { passive: true });
+  window.addEventListener("resize", updateToBottom);
+  $("to-bottom").addEventListener("click", () => {
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    input.focus();
+  });
 
   /** @type {string[]} what each of the transcript's top-level elements was drawn from */
   let shownParts = [];

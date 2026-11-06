@@ -262,6 +262,16 @@ svg circle { fill: currentColor; stroke: none; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 0; padding: 3px 4px; font-size: 0.92em; }
 .status .spinner { margin: 0 2px; }
 
+/* "Scroll to bottom": floats over the chat's end, just above the composer */
+.to-bottom { position: absolute; z-index: 10; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+  display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--vscode-editorWidget-background, var(--raised)); color: var(--fg); cursor: pointer;
+  box-shadow: 0 4px 12px -4px var(--shadow); animation: appear var(--t) ease; }
+.to-bottom:hover { background: color-mix(in srgb, var(--link) 10%, var(--vscode-editorWidget-background, var(--raised))); }
+.to-bottom:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.to-bottom svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+body.vscode-high-contrast .to-bottom { box-shadow: none; border-color: var(--vscode-contrastBorder, var(--line)); }
+
 /* the plan, docked above the box while it works: compact, the current step in view */
 .plan-dock { margin-bottom: 8px; padding: 7px 10px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised);
   max-height: 9.5em; overflow-y: auto; font-size: 0.92em; animation: menuUp var(--t) var(--ease); }
