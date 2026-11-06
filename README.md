@@ -2,7 +2,7 @@
 
 **A lean coding agent beside your editor.** Solder sits in VS Code's side bar and reads, searches and edits the code in your workspace. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling, such as your company's gateway or a server on your own PC, and to nothing else.
 
-![A finished chat, with Review and Undo on the edit](media/screenshots/finished-chat.png)
+<p><img src="media/screenshots/plan.png" width="380" alt="A longer task in Solder: its plan as a checklist (one step done with its notes, the next in progress), and the steps it has run"> <img src="media/screenshots/finished-chat.png" width="380" alt="A finished chat: the steps Solder ran, Review and Undo on its edit, and its answer"></p>
 
 ## Getting started
 
@@ -19,7 +19,7 @@
    - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`".
 3. **Ask.** Type in the box at the bottom and press **Enter**; **Shift+Enter** adds a new line. Or pick one of the cards on a new chat: summarise the codebase, explain or fix a script, clean up, learn something, review your changes, or ask what Solder can do.
 
-![Guided setup: choosing the default model](media/screenshots/guided-setup.png)
+<p><img src="media/screenshots/new-chat.png" width="380" alt="A new chat: starter cards for common tasks"> <img src="media/screenshots/guided-setup.png" width="380" alt="Guided setup: choosing the default model"></p>
 
 ## Using Solder
 
@@ -48,7 +48,7 @@
 - **While Solder works,** you can open other chats from the title menu to read them. A banner says where it's working, or that it needs your approval or has finished, with a button back to it. New messages wait until it's done.
 - **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
 
-![A reply streaming in](media/screenshots/streaming-reply.png) ![A step running while a message waits for the next step](media/screenshots/running-step.png)
+<p><img src="media/screenshots/slash-commands.png" width="380" alt="Typing / in the box: the list of slash commands"> <img src="media/screenshots/chats-menu.png" width="380" alt="The chats list, grouped by age with pinned chats first, and the right-click menu on a chat"></p>
 
 ## What it can do
 
@@ -82,6 +82,8 @@ Point Solder at folders of reference documentation that only exist on your PC: i
   - anything beyond 20,000 files in one folder. `.git` and `node_modules` are skipped.
 - **Privacy:** the index is built and kept on your PC, and refreshed in the background. Only the passages the model reads are sent to your endpoint.
 - **Search by meaning (optional):** in **Settings → Your docs**, choose **Keywords + meaning** and your gateway's embeddings model (**Test** checks it). Searches then also find passages that say the same thing in other words, merged with the keyword results. It sends every passage of your docs folders to the gateway once, to be turned into numbers, then only changed files, plus each search's words. The log (**⋯ → Copy diagnostics**) shows the tokens each run used.
+
+<img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
 
 ## Instructions it follows
 

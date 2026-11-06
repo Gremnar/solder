@@ -29,7 +29,8 @@ function marketplaceReadme(text) {
   return text.replace(/(!?)\[([^\]]*)\]\(([^)\s]+)\)/g, (whole, bang, label, target) => {
     if (/^([a-z]+:|#)/i.test(target)) return whole;
     return `${bang}[${label}](${(bang ? rawBase : blobBase) + target.replace(/^\.?\//, "")})`;
-  });
+  }).replace(/(<img\s[^>]*src=")([^"]+)"/g, (whole, head, target) =>
+    /^([a-z]+:|#)/i.test(target) ? whole : `${head}${rawBase + target.replace(/^\.?\//, "")}"`);
 }
 
 /** @returns {{name: string, data: Buffer}[]} */
