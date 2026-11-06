@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "33646b5051395f6c";
+const PINNED = "c22b92f0cd394cb9";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {

@@ -738,7 +738,34 @@
   let shownBanner = "";
   let shownChips = "";
 
+  /** @type {string} */
+  let shownDock = "";
+
+  /** While a task with unfinished steps runs: its checklist, compact, above the box (the card in the chat scrolls away). */
+  function renderPlanDock() {
+    const dock = $("plan-dock");
+    const plan = state.busy ? [...state.chat.items].reverse().find((/** @type {any} */ item) => item.kind === "plan") : null;
+    const open = plan && plan.steps.some((/** @type {any} */ step) => step.state !== "done");
+    let html = "";
+    if (open) {
+      const done = plan.steps.filter((/** @type {any} */ step) => step.state === "done").length;
+      html = `<div class="plan-head"><span>Plan</span><span class="count">${done} of ${plan.steps.length} done</span></div><ol>` +
+        plan.steps.map((/** @type {any} */ step, /** @type {number} */ index) => {
+          const mark = step.state === "done" ? ICONS.check : step.state === "doing" ? `<span class="spinner"></span>` : `<span class="dot"></span>`;
+          return `<li class="${step.state}"><span class="mark" aria-hidden="true">${mark}</span><span class="goal">${index + 1}. ${escape(step.goal)}</span></li>`;
+        }).join("") + "</ol>";
+    }
+    if (html === shownDock) return;
+    shownDock = html;
+    dock.classList.toggle("hidden", !html);
+    dock.innerHTML = html;
+    // The current step in view, if the list scrolls.
+    const now = /** @type {HTMLElement | null} */ (dock.querySelector("li.doing"));
+    if (now) dock.scrollTop = Math.max(0, now.offsetTop - dock.clientHeight / 2);
+  }
+
   function renderComposer() {
+    renderPlanDock();
     // approvals (announced through the status region, not as alerts)
     const approvals = state.approvals.map((/** @type {any} */ a) => `<div class="approval" data-id="${escape(a.id)}" data-enter="a:${escape(a.id)}" role="region" aria-label="Approval needed">` +
       `<div class="what" id="ap-what-${escape(a.id)}">${ICONS.shield}<span>${escape(a.label)}</span></div><div class="why" id="ap-why-${escape(a.id)}">${escape(a.reason)}</div>` +

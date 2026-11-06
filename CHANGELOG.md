@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-06)
 
+- **The plan stays in view while it works.** A compact copy of the checklist sits just above the message box while a task with unfinished steps runs, so it no longer scrolls away as the steps pile up. The card in the chat stays where it was.
+- **Plans from two steps up.** The model now sets out a plan for any task of two or more steps, not three.
 - **Nothing already embedded is sent again by accident.** A docs folder that drops off the list (removed, or a settings file lost for a while) keeps its index and vectors for 14 days, out of searches, so putting it back costs nothing. Vectors made with another embeddings model are no longer deleted when you switch. A file that looks changed keeps the vectors of its unchanged passages, so a copy with new dates sends nothing and an edit to one function sends one passage. And an embedding run of 300 passages or more now asks first, with its estimated tokens (Embed them, or Not now).
 
 ## 0.1.8 (2026-11-06)

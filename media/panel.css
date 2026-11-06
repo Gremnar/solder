@@ -262,6 +262,23 @@ svg circle { fill: currentColor; stroke: none; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 8px 0; padding: 3px 4px; font-size: 0.92em; }
 .status .spinner { margin: 0 2px; }
 
+/* the plan, docked above the box while it works: compact, the current step in view */
+.plan-dock { margin-bottom: 8px; padding: 7px 10px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised);
+  max-height: 9.5em; overflow-y: auto; font-size: 0.92em; animation: menuUp var(--t) var(--ease); }
+.plan-dock .plan-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; font-weight: 600; }
+.plan-dock .plan-head .count { margin-left: auto; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.plan-dock ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.plan-dock li { display: grid; grid-template-columns: 16px 1fr; column-gap: 6px; align-items: center; }
+.plan-dock .goal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-dock .mark { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.plan-dock .mark svg { width: 12px; height: 12px; }
+.plan-dock .mark .dot { width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.plan-dock .mark .spinner { width: 11px; height: 11px; }
+.plan-dock li.done .mark { color: var(--ok); }
+.plan-dock li.done .goal, .plan-dock li.todo .goal { color: var(--muted); }
+.plan-dock li.doing .goal { color: var(--fg); font-weight: 600; }
+body.vscode-high-contrast .plan-dock { border-color: var(--vscode-contrastBorder, var(--line)); }
+
 /* the plan: a checklist of the task's steps */
 .plan { margin: 10px 0; padding: 9px 12px 7px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
 .plan-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; font-weight: 600; }

@@ -65,7 +65,7 @@ Solder has eleven tools, and no shell. It never runs commands: when something ne
 | `move_item` | Moves, renames or copies a file or folder, creating any folders it needs. It never overwrites, and lists the lines that still use the old path so they get fixed. It can be undone. |
 | `remove_item` | Deletes a file or folder, after asking. It can be undone. |
 | `problems` | Lists the errors and warnings VS Code shows. |
-| `plan` | For a task of several steps: a checklist you see in the chat (each step's goal, ticked off as it's done). When a step is done, its notes replace its tool output in the chat, so long tasks stay small. |
+| `plan` | For a task of two or more steps: a checklist you see in the chat, and above the box while it works (each step's goal, ticked off as it's done). When a step is done, its notes replace its tool output in the chat, so long tasks stay small. |
 
 ## Your docs
 

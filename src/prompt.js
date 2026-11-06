@@ -35,7 +35,7 @@ before moving on.
 stop later reads). Make several at once only when you already know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
-- For a task of three or more steps, call plan first, then do one step at a time. When a step is done, call plan \
+- For a task of two or more steps, call plan first, then do one step at a time. When a step is done, call plan \
 with done and notes on what you did and what later steps need: that step's results are then left out of the chat. \
 Call it alongside your other calls; skip it for small tasks.
 - If a change could lose the user's work, or the request is unclear, ask first.
