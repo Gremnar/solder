@@ -1,5 +1,6 @@
 # Runs Solder's tests on every push and pull request: node --test, and node --check on every source file.
-# Nothing but the runner's own Node (the version VS Code ships is close to it): no actions from anyone else, no npm.
+# On Windows, as Solder's users are (the tests use Windows paths on purpose). Nothing but the runner's own Node
+# (the version VS Code ships is close to it) and Git Bash: no actions from anyone else, no npm.
 name: Tests
 
 on:
@@ -11,8 +12,11 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Get the code
         env:
