@@ -1,0 +1,43 @@
+# Runs Solder's tests on every push and pull request: node --test, and node --check on every source file.
+# Nothing but the runner's own Node (the version VS Code ships is close to it): no actions from anyone else, no npm.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get the code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The commit being tested, without actions/checkout: a plain git fetch of this one commit.
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 origin "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+
+      - name: Node
+        run: node --version
+
+      - name: Syntax
+        run: |
+          set -euo pipefail
+          for file in src/*.js media/panel.js build/vsix.js; do node --check "$file"; done
+
+      - name: Tests
+        run: node --test --test-timeout=60000
+
+      - name: The package builds
+        run: |
+          set -euo pipefail
+          node build/vsix.js
+          ls -l solder-*.vsix
