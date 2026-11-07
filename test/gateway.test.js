@@ -281,13 +281,61 @@ test("a 429 asking to wait hours is the allowance used up, even with no bucket a
   const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
   await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
     assert.ok(error.exhausted && !error.transient);
-    assert.equal(error.message, "The allowance is used up. It resets in about 5 hours. " +
-      "(The gateway said: daily limit exceeded: 100/100 used. Request an increase at [endpoint])");
+    assert.match(error.message, /^The allowance is used up\. It resets in about 5 hours, at \d{1,2}:\d\d [AP]M\. /);
+    assert.ok(error.message.endsWith("(The gateway said: daily limit exceeded: 100/100 used. Request an increase at [endpoint])"));
     return true;
   });
   assert.equal(gw.seen.length, 1);
   gw.server.closeAllConnections();
   gw.server.close();
+});
+
+test("a 429 whose words say the credit limit or quota is reached is used up, with the limit and reset from the words", async () => {
+  const words = "daily credit limit exceeded: 500/500 credits used. Quota reset is in 3h 12m.";
+  const gw = await fakeGateway([
+    // the wording with a long Retry-After: that wait wins
+    (res) => { res.writeHead(429, { "Retry-After": "7200", "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: words } })); },
+    // the wording alone: the reset and the limit come from it
+    (res) => { res.writeHead(429, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: words } })); },
+    // headers at 0, any wording
+    (res) => { res.writeHead(429, { ...CREDITS, "x-ratelimit-remaining-tokens": "0", "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: "slow down" } })); },
+  ]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.ok(error.exhausted && !error.transient);
+    assert.match(error.message, /^The allowance is used up \(500 credits\)\. It resets in about 2 hours, at /);
+    return true;
+  });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => {
+    assert.ok(error.exhausted && !error.transient);
+    assert.match(error.message, /^The allowance is used up \(500 credits\)\. It resets in about 3 hours, at \d{1,2}:\d\d [AP]M\. \(The gateway said: daily credit limit/);
+    assert.deepEqual(error.credits, { bucket: "credits", limit: 500, remaining: 0, resetSeconds: 11520 });
+    return true;
+  });
+  await assert.rejects(client.reply({ model: "m", messages: ask }), (error) => error.exhausted && error.credits.remaining === 0);
+  assert.equal(gw.seen.length, 3);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("a busy 429 is still retried, even when it says quota, if it asks for a short wait", async () => {
+  const gw = await fakeGateway([
+    (res) => { res.writeHead(429, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: "too many requests" } })); },
+    (res) => { res.writeHead(429, { "Retry-After": "1", "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: "quota exceeded for requests per minute" } })); },
+    (res) => sse(res, [{ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  ]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  assert.equal((await client.reply({ model: "m", messages: ask })).content, "ok");
+  assert.equal(gw.seen.length, 3);
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
+test("the used-up wording alone, with no reset in it: used up, no time given", () => {
+  const client = new GatewayClient({ endpoint: "https://gw.example.com/v1/chat/completions", apiKey: "" });
+  const error = client._httpFailure(429, {}, JSON.stringify({ error: { message: "Monthly quota reached." } }));
+  assert.ok(error.exhausted && !error.transient);
+  assert.equal(error.message, "The allowance is used up. (The gateway said: Monthly quota reached.)");
 });
 
 test("embeddings: one vector per text, in the order asked (whatever order they come back), and the gateway's token count", async () => {

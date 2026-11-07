@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A used-up allowance is recognised from the gateway’s words too.** A 429 that says its credit limit or quota is reached now counts as used up even without an allowance header or a long Retry-After: it isn’t retried, it shows as used up (with Resume for after the reset), and the status bar’s allowance goes to 0. The limit and the reset time are read from the message when no header gives them (“500/500 credits used … reset is in 3h 12m”), and the message says when it resets: “The allowance is used up (500 credits). It resets in about 3 hours, at 4:12 PM.” A 429 that asks for a short wait is still retried, even if it says quota.
+
 ## 0.2.1 (2026-11-06)
 
 - **Scroll to bottom.** Scroll up in a chat and a round ↓ button appears just above the box; it takes you back to the end.

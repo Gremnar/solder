@@ -358,15 +358,21 @@ class GatewayClient {
     } catch { /* never show a proxy's HTML page */ }
     // A 429 is "used up", not "busy", when the tightest allowance is at 0 and doesn't come back within a
     // minute, or when the gateway asks to wait more than 10 minutes (seen: a daily limit, with a
-    // Retry-After of hours and no usable bucket header). Waiting a few seconds won't help: not retried.
+    // Retry-After of hours and no usable bucket header), or when its words say so ("credit limit", "quota")
+    // and it doesn't ask for a short wait (a per-minute quota is busy). Waiting a few seconds won't help: not retried.
     const asked = retryAfterMs(headers["retry-after"]);
     const zero = !!found && found.remaining === 0
       && !(found.resetSeconds !== undefined && found.resetSeconds * 1000 <= MAX_RETRY_AFTER_MS);
-    if (status === 429 && (zero || (asked !== null && asked > EXHAUSTED_WAIT_MS))) {
-      const seconds = zero && found?.resetSeconds ? found.resetSeconds : asked !== null ? asked / 1000 : 0;
-      const when = seconds ? ` It resets in about ${spoken(seconds)}.` : "";
-      return new GatewayError("The allowance is used up." + when + (detail ? ` (The gateway said: ${detail})` : ""),
-        { status, exhausted: true, credits: found });
+    const said = USED_UP_WORDS.test(detail) && !(asked !== null && asked <= MAX_RETRY_AFTER_MS);
+    if (status === 429 && (zero || (asked !== null && asked > EXHAUSTED_WAIT_MS) || said)) {
+      const told = toldAllowance(detail);
+      const seconds = zero && found?.resetSeconds ? found.resetSeconds
+        : asked !== null && asked > MAX_RETRY_AFTER_MS ? asked / 1000 : told.resetSeconds ?? 0;
+      const left = found ?? (told.limit ? { bucket: "credits", limit: told.limit, remaining: 0, resetSeconds: seconds || undefined } : null);
+      const size = left?.limit ? ` (${left.limit.toLocaleString("en-US")} ${left.bucket})` : "";
+      const when = seconds ? ` It resets in about ${spoken(seconds)}, at ${clock(seconds)}.` : "";
+      return new GatewayError(`The allowance is used up${size}.` + when + (detail ? ` (The gateway said: ${detail})` : ""),
+        { status, exhausted: true, credits: left });
     }
     if (TRANSIENT_HTTP.has(status)) {
       let retryAfter = asked;
@@ -614,6 +620,28 @@ function collect(res, limit) {
     res.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
     res.on("error", reject);
   });
+}
+
+/** A 429's words that mean the allowance is gone, not a moment's rush. */
+const USED_UP_WORDS = /\b(credit limit|quota)\b/i;
+
+/**
+ * What a used-up message says about the allowance: "N/N credits used" and "reset … in 3h 12m".
+ * @param {string} text @returns {{ limit?: number, resetSeconds?: number }}
+ */
+function toldAllowance(text) {
+  /** @type {{ limit?: number, resetSeconds?: number }} */
+  const told = {};
+  const used = /(\d[\d,]*)\s*\/\s*(\d[\d,]*)\s*credits?\b/i.exec(text);
+  if (used) { const limit = Number(used[2].replace(/,/g, "")); if (limit > 0) told.limit = limit; }
+  const reset = /\breset[^.]*?\bin\s+(?:(\d+)\s*h(?:ours?|rs?)?\b)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?\b)?/i.exec(text);
+  if (reset && (reset[1] || reset[2])) told.resetSeconds = (Number(reset[1] || 0) * 60 + Number(reset[2] || 0)) * 60;
+  return told;
+}
+
+/** The time of day `seconds` from now, as "4:12 PM". @param {number} seconds */
+function clock(seconds) {
+  return new Date(Date.now() + seconds * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 /** @param {number} seconds */

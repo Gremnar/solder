@@ -215,7 +215,9 @@ class SolderPanel {
           if (this.chat.id !== this.runId) this.awayDone = this.runId; // finished while you were reading another chat
         }
         break;
-      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; this.errorChat = event.chat; break;
+      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; this.errorChat = event.chat;
+        if (event.credits) { this.credits = event.credits; this.updateStatusBar(); } // a used-up allowance shows as 0 left
+        break;
       case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; this.errorChat = event.chat; break;
       case "done": if (event.limit) { this.error = { message: `Stopped at the limit of ${event.limit} steps for one message.`, resumable: true }; this.errorChat = event.chat; } break;
       case "steer-unsent":

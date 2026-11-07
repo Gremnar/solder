@@ -231,7 +231,7 @@ class Engine {
         // Resumable even when the allowance is used up: after the reset (or on another model) it carries on.
         const exhausted = !!(error && /** @type {any} */ (error).exhausted);
         this.emit({ type: "error", chat: chat.id, message: error instanceof Error ? error.message : String(error),
-          resumable: chat.messages.length > 0, exhausted });
+          resumable: chat.messages.length > 0, exhausted, credits: /** @type {any} */ (error)?.credits || null });
       }
     } finally {
       this.busy = false;
