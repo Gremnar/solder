@@ -160,6 +160,11 @@ function toolDefinitions() {
   }));
 }
 
+/** "a", "a and b", "a, b and c". @param {string[]} items */
+function listed(items) {
+  return items.length <= 1 ? items.join("") : items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+}
+
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
@@ -171,15 +176,18 @@ again whatever was stopped or not run, then go on.",
   stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",
   notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
-  notRunBatch: (/** @type {number} */ limit) =>
-    `Not run: Solder runs up to ${limit} calls from one reply. Send it again if you still need it.`,
+  notRunBatch: (/** @type {number} */ calls, /** @type {number} */ changes) =>
+    `Not run: Solder runs up to ${calls} calls from one reply, ${changes} of them changes (plan calls aside). Send it again if you still need it.`,
   repeat: "Not run again: it's the same call as an earlier one in this reply (see that result).",
   declined: "The user declined this.",
   userNote: (/** @type {string} */ note) => `The user's note: ${note}`,
   unknownTool: (/** @type {string} */ name, /** @type {string[]} */ offered) =>
     `There's no tool called ${name}. The tools are: ${offered.join(", ")}.`,
   badArguments: "The call's arguments weren't valid JSON, so it wasn't run.",
-  missing: (/** @type {string} */ name, /** @type {string} */ arg) => `${name} needs ${arg}; it wasn't run.`,
+  missing: (/** @type {string} */ name, /** @type {string[]} */ args, /** @type {string[]} */ ignored = []) =>
+    `${name} needs ${listed(args)}; it wasn't run.` + (ignored.length ? ` It doesn't take ${listed(ignored)}.` : ""),
+  ignored: (/** @type {string} */ name, /** @type {string[]} */ args) =>
+    `(${name} doesn't take ${listed(args)}, so ${args.length === 1 ? "it was" : "they were"} left out.)`,
   wrongType: (/** @type {string} */ name, /** @type {string} */ arg, /** @type {string} */ type) =>
     `${name}'s ${arg} must be ${type === "integer" ? "a whole number" : type === "boolean" ? "true or false" : type === "array" ? "a list" : "text"}; it wasn't run.`,
   cutOff: "The call was cut off at the length limit before its arguments ended, so it wasn't run. Send it again \
@@ -220,6 +228,8 @@ const PLAN = {
   },
   none: "There's no plan yet: call plan with steps first.",
   badStep: (/** @type {number} */ count) => `done needs a step number from 1 to ${count}.`,
+  /** An older plan result, all of it in the newest one. */
+  superseded: "(An earlier state of the plan, left out: the newest plan result, further on, holds all of it.)",
   /** A finished step's result, left out. */
   stub: (/** @type {number} */ step, /** @type {string} */ summary) =>
     `(Step ${step} is done; this result (${summary}) is left out to save space. The step's notes in the plan say what came of it.)`,
@@ -233,7 +243,7 @@ const RESULTS = {
   noWorkspace: "No workspace folder is open.",
   missing: (/** @type {string} */ file) => `${file} doesn't exist.`,
   isFolder: (/** @type {string} */ file) => `${file} is a folder.`,
-  readFolder: (/** @type {string} */ file) => `${file} is a folder; use find_files to list it.`,
+  readFolder: (/** @type {string} */ file) => `${file} is a folder, not a file.`,
   tooLarge: (/** @type {string} */ file, /** @type {number} */ mb) => `${file} is too large to read (${mb} MB).`,
   notText: (/** @type {string} */ file) => `${file} couldn't be opened as text (it may be a binary file).`,
   signatureLeftOut: (/** @type {number} */ first, /** @type {number} */ last) =>
@@ -324,9 +334,21 @@ searching again with other words.`,
   emptyOldText: "old_text is empty; use write_file to replace a whole file.",
   manyMatches: (/** @type {number} */ count, /** @type {string} */ file, /** @type {number[]} */ lines) =>
     `old_text appears ${count} times in ${file} (at lines ${lines.join(", ")}); include more surrounding lines to make it unique.`,
-  notFound: (/** @type {string} */ file, /** @type {number} */ firstLineAt, /** @type {number} */ shownTo) => `old_text wasn't found in ${file}.` + (firstLineAt > 0
-    ? ` Its first line appears at line ${firstLineAt}, but the lines after it differ. Lines ${Math.max(1, firstLineAt - 2)}-${shownTo} as they are now, to copy old_text from exactly:`
+  notFound: (/** @type {string} */ file, /** @type {number} */ from, /** @type {number} */ to, /** @type {number} */ matched, /** @type {number} */ of) =>
+    `old_text wasn't found in ${file}.` + (from > 0
+    ? ` The closest place is around lines ${from}-${to} (${matched} of its ${of} line${of === 1 ? "" : "s"} match there). Those lines as they are now, to copy old_text from exactly:`
     : " Read the file again and copy the text exactly."),
+  numbersLeftOut: "old_text had read_file's line numbers in it; they were left out to match it.",
+  numberedNewText: "old_text has read_file's line numbers in it, and new_text has them on some lines only. Send both without the numbers.",
+  nearby: (/** @type {string[]} */ paths, /** @type {boolean} */ sameName) =>
+    `${sameName ? "Files with that name" : "Files with that name and another extension"}: ${paths.join(", ")}.`,
+  folderHas: (/** @type {string[]} */ names, /** @type {number} */ total) =>
+    `It holds: ${names.join(", ")}` + (total > names.length ? `, and ${(total - names.length).toLocaleString("en-US")} more.` : "."),
+  folderEmpty: "It's empty.",
+  searchTimedOut: (/** @type {number} */ seconds) => `The search stopped after ${seconds} seconds with nothing found yet, so this \
+isn't an answer either way: narrow it with a glob or a more specific query.`,
+  searchIncomplete: (/** @type {number} */ seconds) => `(The search stopped after ${seconds} seconds, so there may be more \
+matches than these: narrow it with a glob to be sure.)`,
   reindented: (/** @type {string} */ amount, /** @type {boolean} */ less) => `old_text was indented ${amount} ${less ? "less" : "more"} than the file there, so it was matched with that difference and new_text was shifted the same way.`,
   notApplied: (/** @type {string} */ file) => `VS Code didn't apply the change to ${file}.`,
   edited: (/** @type {string} */ file, /** @type {number} */ removed, /** @type {number} */ added, /** @type {number} */ from) =>

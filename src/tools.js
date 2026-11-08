@@ -77,6 +77,13 @@ class ToolError extends Error {
 const MISS_LINES = 40;
 /** ... and old_text found in several places, this many of them, with a line either side. */
 const MISS_PLACES = 3;
+/** A missing path: at most this many files suggested in its place, found within this long. */
+const NEARBY_MAX = 6;
+const NEARBY_MS = 3_000;
+/** A folder given as a file: at most this many of its entries listed. */
+const FOLDER_ENTRIES_MAX = 100;
+/** A content search stops after this long. */
+const SEARCH_MS = 30_000;
 
 class WorkspaceTools {
   /** @param {vscode.ExtensionContext} context */
@@ -562,9 +569,11 @@ class WorkspaceTools {
     const base = this.base();
     /** @type {string[]} */
     let lines = [];
+    let incomplete = false;
     for (const root of roots) {
       const found = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal)
         : await this.searchInJs(root, query, !!args.regex, args.glob);
+      if (/** @type {any} */ (found).incomplete) incomplete = true;
       // ripgrep's paths are relative to where it ran: as the model sees paths, for the other folders.
       lines.push(...(root === base || !rg ? found : found.map((line) => {
         const cut = line.indexOf(":");
@@ -576,10 +585,10 @@ class WorkspaceTools {
     if (!count) {
       return { output: RESULTS.noMatches(query, args.glob || ""), summary: `Searched "${short(query)}" · no matches` };
     }
-    let note = "";
+    let note = incomplete ? "\n\n" + RESULTS.searchIncomplete(SEARCH_MS / 1000) : "";
     if (count > MAX_SEARCH_LINES) {
       lines = lines.slice(0, MAX_SEARCH_LINES);
-      note = "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES);
+      note += "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES);
     }
     return { output: lines.join("\n") + note, summary: `Searched "${short(query)}" · ${count > MAX_SEARCH_LINES ? MAX_SEARCH_LINES + "+" : count} lines` };
   }
@@ -750,15 +759,17 @@ class WorkspaceTools {
     const args = ["--line-number", "--no-heading", "--color", "never", caseSensitive ? "--case-sensitive" : "--smart-case", "--max-columns", "300",
       "--max-columns-preview", "--max-filesize", "5M", "--max-count", "50", "--no-messages"];
     if (!regex) args.push("--fixed-strings");
-    if (glob) args.push("--glob", String(glob));
+    // As find_files reads a glob: any case, backslashes as slashes, and a folder (or "folder/") as everything in it.
+    if (glob) args.push("--glob-case-insensitive", "--glob", rgGlob(root, String(glob)));
     args.push("--regexp", query, "--", ".");
     return new Promise((resolve, reject) => {
       const child = spawn(rg, args, { cwd: root, windowsHide: true, signal });
       let out = "";
       let errors = "";
+      let timedOut = false;
       child.stdout.on("data", (chunk) => { if (out.length < 2_000_000) out += chunk; });
       child.stderr.on("data", (chunk) => { errors += chunk; });
-      const timer = setTimeout(() => child.kill(), 30_000);
+      const timer = setTimeout(() => { timedOut = true; child.kill(); }, SEARCH_MS);
       child.on("error", (error) => {
         clearTimeout(timer);
         if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
@@ -774,8 +785,12 @@ class WorkspaceTools {
           reject(new ToolError(lines[0] || RESULTS.searchFailed));
           return;
         }
+        // Stopped at the time limit: what it found so far isn't the whole answer, and nothing found isn't "none".
+        if (timedOut && !out.trim()) { reject(new ToolError(RESULTS.searchTimedOut(SEARCH_MS / 1000))); return; }
         const lines = out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/"));
-        resolve(lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines);
+        const shown = lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines;
+        if (timedOut) /** @type {any} */ (shown).incomplete = true;
+        resolve(shown);
       });
     });
   }
@@ -864,28 +879,19 @@ class WorkspaceTools {
     const replacement = toEol(String(args.new_text), eol);
     if (!old) throw new ToolError(RESULTS.emptyOldText);
     if (old === replacement) throw new ToolError(RESULTS.sameText);
-    let start = -1;
-    let length = old.length;
-    let replaced = replacement;
-    let shiftNote = "";
-    const count = occurrences(text, old);
-    if (count === 1) start = text.indexOf(old);
-    else if (count > 1) {
-      const lines = positions(text, old).map((index) => lineOf(text, index));
-      throw new ToolError(RESULTS.manyMatches(count, file.shown, lines.slice(0, 10)), aroundPlaces(text, lines, eol));
-    } else {
-      const loose = looseMatch(text, old, eol);
-      if (loose) [start, length] = loose;
-      else {
-        // The same lines, all indented by the same amount more or less (a deep block copied a level off):
-        // that shift, and new_text shifted the same way. Anything uneven is refused, with the lines to copy from.
-        const moved = shiftedMatch(text, old, eol);
-        const shifted = moved && shiftLines(replacement, moved.shift, eol);
-        if (!moved || shifted === null) throw notFound(file.shown, text, old, eol);
-        [start, length, replaced] = [moved.start, moved.length, shifted];
-        shiftNote = " " + RESULTS.reindented(...describeShift(moved.shift));
-      }
+    // Exactly, then forgiving trailing spaces, then a uniform indentation shift. Failing those, old_text copied
+    // with read_file's line numbers ("12\t…") is tried without them.
+    let found = locate(file.shown, text, old, replacement, eol);
+    if (!found) {
+      const plain = withoutLineNumbers(old, eol);
+      const plainNew = plain === null ? null : numberedLines(replacement, eol);
+      if (plain !== null && plainNew === false) throw new ToolError(RESULTS.numberedNewText);
+      const again = plain === null ? null : locate(file.shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);
+      if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
     }
+    if (!found) throw notFound(file.shown, text, old, eol);
+    const { start, length, replaced } = found;
+    const shiftNote = found.note;
     const key = file.full.toLowerCase();
     const waiting = hint && this._pendingProblems.get(key);
     const before = waiting && waiting.group === hint.group ? waiting.before : problemKeys(file.uri);
@@ -1050,7 +1056,7 @@ class WorkspaceTools {
     const source = this.resolve(args.from);
     const root = this.root();
     let stat;
-    try { stat = fs.statSync(source.full); } catch { throw new ToolError(RESULTS.missing(source.shown)); }
+    try { stat = fs.statSync(source.full); } catch { throw new ToolError(RESULTS.missing(source.shown), await this.nearby(source)); }
     if (this.roots().some((folder) => path.resolve(source.full).toLowerCase() === path.resolve(folder).toLowerCase()) || path.parse(source.full).root === source.full) {
       throw new ToolError(RESULTS.moveRoot);
     }
@@ -1097,7 +1103,7 @@ class WorkspaceTools {
     const target = this.resolve(args.path);
     const root = this.root();
     let stat;
-    try { stat = fs.statSync(target.full); } catch { throw new ToolError(RESULTS.missing(target.shown)); }
+    try { stat = fs.statSync(target.full); } catch { throw new ToolError(RESULTS.missing(target.shown), await this.nearby(target)); }
     if (this.roots().some((folder) => path.resolve(target.full).toLowerCase() === path.resolve(folder).toLowerCase()) || path.parse(target.full).root === target.full) {
       throw new ToolError(RESULTS.removeRoot);
     }
@@ -1236,9 +1242,36 @@ class WorkspaceTools {
 
   async mustBeFile(/** @type {any} */ file) {
     let stat;
-    try { stat = await vscode.workspace.fs.stat(file.uri); } catch { throw new ToolError(RESULTS.missing(file.shown)); }
-    if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.readFolder(file.shown));
+    try { stat = await vscode.workspace.fs.stat(file.uri); } catch { throw new ToolError(RESULTS.missing(file.shown), await this.nearby(file)); }
+    if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.readFolder(file.shown), folderEntries(file.full));
     if (stat.size > 20 * 1024 * 1024) throw new ToolError(RESULTS.tooLarge(file.shown, Math.round(stat.size / 1048576)));
+  }
+
+  /**
+   * A path that doesn't exist: files in the workspace with the same name (any case), or else the same name with
+   * another extension, most alike first. Only suggested: nothing is read or changed in their place.
+   * @param {any} file @returns {Promise<string>} the suggestion, or ""
+   */
+  async nearby(file) {
+    const name = path.basename(file.full);
+    if (!name || /[*?[\]{}]/.test(name)) return "";
+    const look = async (/** @type {string} */ glob) => {
+      const out = [];
+      for (const root of this.roots()) {
+        try {
+          const found = await deadline(vscode.workspace.findFiles(new vscode.RelativePattern(root, caseless(glob)), "**/node_modules/**", NEARBY_MAX + 1), NEARBY_MS);
+          out.push(...(found || []).map((/** @type {any} */ uri) => uri.fsPath));
+        } catch { /* nothing to suggest */ }
+        if (out.length > NEARBY_MAX) break;
+      }
+      return out.filter((p) => p.toLowerCase() !== file.full.toLowerCase());
+    };
+    let found = await look("**/" + name);
+    let same = true;
+    const stem = name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : "";
+    if (!found.length && stem) { found = await look("**/" + stem + ".*"); same = false; }
+    if (!found.length) return "";
+    return RESULTS.nearby(rankNearby(file.full, found).slice(0, NEARBY_MAX).map((p) => this.shown(p)), same);
   }
 }
 
@@ -1475,6 +1508,30 @@ async function closeTab(file) {
     return !!uri && uri.scheme === "file" && uri.fsPath.toLowerCase() === key && !tab.isDirty;
   });
   if (tabs.length) await Promise.resolve(vscode.window.tabGroups.close(tabs, true)).catch(() => {});
+}
+
+/**
+ * A search glob for ripgrep, read as find_files reads one: backslashes as slashes, no leading "./", and a folder
+ * ("src", "src/") as everything in it. @param {string} root @param {string} glob
+ */
+function rgGlob(root, glob) {
+  let clean = glob.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  if (clean.endsWith("/")) return clean + "**";
+  if (!/[*?[\]{}]/.test(clean)) {
+    try { if (fs.statSync(path.join(root, clean)).isDirectory()) return clean.replace(/\/+$/, "") + "/**"; } catch { /* a file name or pattern */ }
+  }
+  return clean;
+}
+
+/** A folder's own entries for the model, folders marked with "/", capped. @param {string} full @returns {string} */
+function folderEntries(full) {
+  let entries;
+  try { entries = fs.readdirSync(full, { withFileTypes: true }); } catch { return ""; }
+  const names = entries.filter((entry) => entry.name !== ".git")
+    .map((entry) => entry.name + (entry.isDirectory() ? "/" : ""))
+    .sort((a, b) => (b.endsWith("/") ? 1 : 0) - (a.endsWith("/") ? 1 : 0) || a.localeCompare(b));
+  if (!names.length) return RESULTS.folderEmpty;
+  return RESULTS.folderHas(names.slice(0, FOLDER_ENTRIES_MAX), names.length);
 }
 
 function shownInEditor(full) {
@@ -1745,17 +1802,114 @@ function looseMatch(/** @type {string} */ text, /** @type {string} */ old, /** @
 }
 
 /**
- * old_text wasn't there: where its first line is, with the file's lines around it (so the next try can copy them,
- * with no read in between). @returns {ToolError}
+ * old_text wasn't there: the place in the file most of its lines point to, with the file's lines around it (so the
+ * next try can copy them, with no read in between). Each old_text line found in the file (spacing aside) votes for
+ * where old_text would start; the place with the most votes wins, if it has at least two (or old_text is one line)
+ * and no other place ties with it. Otherwise nothing is shown rather than a guess. @returns {ToolError}
  */
 function notFound(/** @type {string} */ shown, /** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
-  const first = old.split(eol).find((line) => line.trim());
+  const squash = (/** @type {string} */ line) => line.trim().replace(/\s+/g, " ");
   const lines = text.split(eol);
-  const at = first ? lines.findIndex((line) => line.trim() === first.trim()) : -1;
-  if (at < 0) return new ToolError(RESULTS.notFound(shown, 0, 0));
-  const from = Math.max(0, at - 2);
-  const to = Math.min(lines.length, at + old.split(eol).length + 3, from + MISS_LINES);
-  return new ToolError(RESULTS.notFound(shown, at + 1, to), numbered(lines, from, to));
+  const want = old.split(eol).map(squash);
+  const counted = want.filter(Boolean).length;
+  /** @type {Map<string, number[]>} */
+  const where = new Map();
+  lines.forEach((line, index) => {
+    const key = squash(line);
+    if (!key) return;
+    const list = where.get(key);
+    if (list) list.push(index); else where.set(key, [index]);
+  });
+  /** @type {Map<number, number>} */
+  const votes = new Map();
+  want.forEach((line, k) => {
+    if (!line) return;
+    for (const index of where.get(line) || []) votes.set(index - k, (votes.get(index - k) || 0) + 1);
+  });
+  let best = -1;
+  let most = 0;
+  let tied = false;
+  for (const [at, count] of votes) {
+    if (at < 0 || at >= lines.length) continue;
+    if (count > most) { best = at; most = count; tied = false; } else if (count === most) tied = true;
+  }
+  // One vote is enough when it comes from a line found just once in the file and long enough to mean something.
+  const telling = most === 1 && want.some((line, k) => line.length >= 6 && where.get(line)?.length === 1 && where.get(line)?.[0] === best + k);
+  if (best < 0 || tied || (most < Math.min(2, counted) && !telling)) return new ToolError(RESULTS.notFound(shown, 0, 0, 0, 0));
+  const from = Math.max(0, best - 2);
+  const to = Math.min(lines.length, best + want.length + 3, from + MISS_LINES);
+  return new ToolError(RESULTS.notFound(shown, from + 1, to, most, counted), numbered(lines, from, to));
+}
+
+/**
+ * Where old_text goes: exactly (once), then forgiving trailing spaces, then a uniform indentation shift (new_text
+ * shifted the same way). A trailing line break on old_text doesn't stop the forgiving matches. Null when none fits.
+ * @returns {{start: number, length: number, replaced: string, note: string} | null}
+ */
+function locate(/** @type {string} */ shown, /** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ replacement, /** @type {string} */ eol) {
+  const count = occurrences(text, old);
+  if (count === 1) return { start: text.indexOf(old), length: old.length, replaced: replacement, note: "" };
+  if (count > 1) {
+    const lines = positions(text, old).map((index) => lineOf(text, index));
+    throw new ToolError(RESULTS.manyMatches(count, shown, lines.slice(0, 10)), aroundPlaces(text, lines, eol));
+  }
+  // old_text ending in a line break: match its lines, then take the break after them too.
+  let lines = old;
+  let swap = replacement;
+  let breakAfter = false;
+  if (old.endsWith(eol) && old.length > eol.length) {
+    lines = old.slice(0, -eol.length);
+    if (replacement.endsWith(eol)) swap = replacement.slice(0, -eol.length); else breakAfter = true;
+  }
+  const grow = (/** @type {number} */ start, /** @type {number} */ length) =>
+    breakAfter && text.startsWith(eol, start + length) ? length + eol.length : length;
+  const loose = looseMatch(text, lines, eol);
+  if (loose) return { start: loose[0], length: grow(loose[0], loose[1]), replaced: swap, note: "" };
+  // The same lines, all indented by the same amount more or less (a deep block copied a level off):
+  // that shift, and new_text shifted the same way. Anything uneven is refused, with the lines to copy from.
+  const moved = shiftedMatch(text, lines, eol);
+  const shifted = moved && shiftLines(swap, moved.shift, eol);
+  if (!moved || shifted === null) return null;
+  return { start: moved.start, length: grow(moved.start, moved.length), replaced: shifted, note: " " + RESULTS.reindented(...describeShift(moved.shift)) };
+}
+
+/** Text copied from read_file with its line numbers ("12\t…" on every line, counting up): without them, else null. */
+function withoutLineNumbers(/** @type {string} */ text, /** @type {string} */ eol) {
+  const lines = text.split(eol);
+  const last = lines.length > 1 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+  let expect = -1;
+  for (let k = 0; k < last; k++) {
+    const match = /^(\d+)\t/.exec(lines[k]);
+    if (!match) return null;
+    const number = Number(match[1]);
+    if (expect !== -1 && number !== expect) return null;
+    expect = number + 1;
+  }
+  if (expect === -1) return null;
+  return lines.map((line, k) => k < last ? line.replace(/^\d+\t/, "") : line).join(eol);
+}
+
+/** new_text alongside a numbered old_text: true when it's numbered throughout, null when not at all, false when mixed. */
+function numberedLines(/** @type {string} */ text, /** @type {string} */ eol) {
+  if (withoutLineNumbers(text, eol) !== null) return true;
+  return text.split(eol).some((line) => /^\d+\t/.test(line)) ? false : null;
+}
+
+/**
+ * Paths most like a missing one, best first: the same parent folders count most (from the file's own folder up).
+ * @param {string} wanted the path asked for @param {string[]} found the candidates' paths @returns {string[]}
+ */
+function rankNearby(wanted, found) {
+  const parts = (/** @type {string} */ p) => p.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
+  const want = parts(wanted).slice(0, -1).reverse();
+  const score = (/** @type {string} */ candidate) => {
+    const have = parts(candidate).slice(0, -1).reverse();
+    let same = 0;
+    for (const folder of want) if (have.includes(folder)) same++;
+    return same;
+  };
+  return [...new Set(found)].map((p, order) => ({ p, s: score(p), order }))
+    .sort((a, b) => b.s - a.s || a.p.length - b.p.length || a.order - b.order).map((x) => x.p);
 }
 
 /** Lines from..to (0-based, end excluded) as read_file shows them: number, tab, text (a long one cut). */
@@ -1843,4 +1997,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

@@ -9,11 +9,12 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "d91e9aa59262429a";
+const PINNED = "dd1b8e50f55e8138";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
-  notRunBatch: [[5]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]], missing: [["edit_file", "path"]],
+  notRunBatch: [[8, 5]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
+  missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
   wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]], argumentLeftOut: [[412]],
 };
@@ -25,7 +26,8 @@ const RESULT_SAMPLES = {
   newFiles: [[["a.js", "b.js"]]], unsaved: [[["a.js"]]], docsHits: [["pump", 1], ["pump", 10]], docsLoose: [[1, 6]],
   docsNoMatches: [["pump"]], docsBuilding: [[1234]], longLine: [[1, 250000, false], [14, 3400, true]], alsoDefined: [["parse", ["src/b.js 4", "lib/c.js 10"]]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
-  notFound: [["a.js", 0, 0], ["a.js", 7, 14]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
+  notFound: [["a.js", 0, 0, 0, 0], ["a.js", 28, 34, 2, 3], ["a.js", 5, 9, 1, 1]], nearby: [[["src/a.js", "lib/a.js"], true], [["src/a.ts"], false]],
+  folderHas: [[["lib/", "a.js"], 2], [["a.js"], 150]], searchTimedOut: [[30]], searchIncomplete: [[30]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
   noProblems: [[""], ["a.js"]], alsoText: [["total"]], pastEnd: [["a.js", 18], ["b.js", 1]], changedOnDisk: [["a.js"]], notChecked: [["src/x.ts"]], notReported: [["src/x.ps1"]], notSaved: [["a.js"]], notWritable: [["a.js"]], sameContent: [["a.js"]], moveExists: [["b.js"]], moveUnsaved: [["a.js"]], moveMentions: [["old-helpers", ["src/app.js:1: require('./old-helpers')"]]], moved: [[false, "a.js", "lib/a.js", null], [true, "src", "backup/src", 12]], moreProblems: [[4]], removeNoTrash: [["big"]], removed: [["a.js", null], ["src", 1], ["src", 1200]],
 };

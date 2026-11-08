@@ -304,7 +304,18 @@ class Engine {
    */
   async _batch(chat, assistant, cutOff, roundsLeft, signal) {
     const calls = assistant.tool_calls || [];
-    const limit = calls.slice(0, MAX_READ_BATCH).every((call) => READ_ONLY.has(call.function.name)) ? MAX_READ_BATCH : MAX_BATCH;
+    // Up to MAX_READ_BATCH calls run, at most MAX_BATCH of them changes; plan updates don't count.
+    let counted = 0;
+    let changes = 0;
+    const within = calls.map((call) => {
+      const name = call.function.name;
+      if (name === "plan") return true;
+      const change = !READ_ONLY.has(name);
+      if (counted >= MAX_READ_BATCH || (change && changes >= MAX_BATCH)) return false;
+      counted++;
+      if (change) changes++;
+      return true;
+    });
     const seen = new Set();
     /** @type {string | null} why the rest won't run */
     let skip = null;
@@ -325,9 +336,9 @@ class Engine {
       if (signal.aborted) skip = TEXTS.notRunStopped;
       if (skip) {
         result = { output: skip, summary: "Not run: " + label, failed: true };
-      } else if (index >= limit) {
-        result = { output: TEXTS.notRunBatch(limit), summary: "Not run: " + label, failed: true };
-      } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
+      } else if (!within[index]) {
+        result = { output: TEXTS.notRunBatch(MAX_READ_BATCH, MAX_BATCH), summary: "Not run: " + label, failed: true };
+      } else if (READ_ONLY.has(name) && name !== "plan" && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
@@ -335,8 +346,10 @@ class Engine {
         result = { output: TEXTS.repeat, summary: "Not run again: " + label, failed: true };
       } else {
         seen.add(fingerprint(name, parsed.args));
-        const more = !!editsTo[index] && editsTo.slice(index + 1, limit).includes(editsTo[index]);
+        const more = !!editsTo[index] && editsTo.some((other, later) => later > index && within[later] && other === editsTo[index]);
         result = await this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);
+        // Arguments the tool doesn't take were left out: said once, so the next call can drop or rename them.
+        if (parsed.ignored?.length) result = { ...result, output: result.output + "\n\n" + TEXTS.ignored(name, parsed.ignored) };
         if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;
         if (signal.aborted) skip = TEXTS.notRunStopped;
       }
@@ -347,7 +360,8 @@ class Engine {
       const message = { role: "tool", tool_call_id: call.id, content: result.keep ? output + "\n\n" + result.keep : output,
         meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.keep ? { keep: result.keep } : {}),
           ...(result.ms !== undefined ? { ms: result.ms } : {}),
-          ...(result.change ? { change: result.change } : {}) } };
+          ...(result.change ? { change: result.change } : {}),
+          ...(result.plan ? { plan: result.plan } : {}) } };
       chat.messages.push(message);
       added.push(message);
       await this._save(chat);
@@ -504,6 +518,10 @@ class Engine {
     // Summarising a sliver (a warm-up turn before a huge one) costs a request and saves nothing.
     const summarisable = chat.messages.slice(start, cut).reduce((sum, m) => sum + sizeOf(m), 0) * ratio;
     if (!force && summarisable < settings.compactAt * MIN_COMPACT_SHARE) return "skipped";
+    // A summary that failed isn't asked for again before every step of the same task: once per task and model.
+    const attempt = `${start}:${cut}:${limit}:${chat.model || settings.model}`;
+    const failed = (this._compactFailed ??= new Map());
+    if (!force && failed.get(chat.id) === attempt) return "skipped";
     const focus = String(options.focus || "").trim().slice(0, MAX_FOCUS_CHARS);
     this.emit({ type: "compacting", chat: chat.id });
     let reply;
@@ -516,10 +534,11 @@ class Engine {
     } catch (error) {
       if (error instanceof Cancelled || signal.aborted) throw new Cancelled();
       this.emit({ type: "compaction-failed", chat: chat.id, message: error instanceof Error ? error.message : String(error) });
+      if (!force) failed.set(chat.id, attempt);
       return "failed";
     }
     this._spend(chat, reply.usage, reply.credits);
-    if (!reply.content.trim()) return force ? "failed" : "skipped";
+    if (!reply.content.trim()) { if (!force) failed.set(chat.id, attempt); return force ? "failed" : "skipped"; }
     chat.compaction = { through: cut, summary: reply.content.trim() };
     await this._save(chat);
     this.emit({ type: "compacted", chat: chat.id, through: cut });
@@ -691,7 +710,10 @@ function planStep(chat, id, args) {
   }
   if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
   const done = current.steps.filter((/** @type {any} */ step) => step.state === "done").length;
-  return { output: PLAN.now(current.steps), summary: `Plan · ${done} of ${current.steps.length} done` };
+  // What this result holds, so a later one that holds all of it can stand in for it (supersedePlans).
+  const snapshot = { goals: current.steps.map((/** @type {any} */ step) => step.goal.toLowerCase()),
+    done: current.steps.filter((/** @type {any} */ step) => step.state === "done").map((/** @type {any} */ step) => [step.goal.toLowerCase(), step.notes]) };
+  return { output: PLAN.now(current.steps), summary: `Plan · ${done} of ${current.steps.length} done`, plan: snapshot };
 }
 
 /**
@@ -721,8 +743,32 @@ function trimFinishedSteps(chat, fresh) {
   return cut;
 }
 
+/**
+ * Older plan results that the newest one holds all of (each of their goals, and each done step with the same notes):
+ * a short stand-in, as every plan call returns the whole plan. One the newest doesn't cover (a re-plan that dropped
+ * a step) stays whole. @param {Chat} chat @param {number} start
+ */
+function supersedePlans(chat, start) {
+  const plans = chat.messages.slice(start).filter((m) => m.role === "tool" && m.meta?.name === "plan" && !m.meta.failed && m.meta.plan);
+  const newest = plans[plans.length - 1];
+  if (!newest) return false;
+  const goals = new Set(newest.meta.plan.goals);
+  const notes = new Map(newest.meta.plan.done);
+  let cut = false;
+  for (const older of plans.slice(0, -1)) {
+    if (older.meta.planOld) continue;
+    const held = older.meta.plan.goals.every((/** @type {string} */ goal) => goals.has(goal))
+      && older.meta.plan.done.every((/** @type {[string, string]} */ [goal, note]) => notes.get(goal) === note);
+    if (!held) continue;
+    older.meta = { ...older.meta, stub: true, planOld: true };
+    cut = true;
+  }
+  return cut;
+}
+
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
 function resultText(message) {
+  if (message.meta?.planOld) return PLAN.superseded + (message.meta.keep ? "\n\n" + message.meta.keep : "");
   if (message.meta?.stub && message.meta.stepDone) return PLAN.stub(message.meta.stepDone, message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
   if (!message.meta?.stub) return message.content;
   return TEXTS.stub(message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
@@ -744,7 +790,9 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
     if (chat.messages[index].role === "assistant" && chat.messages[index].tool_calls?.length) { latest = index; break; }
   }
   const fresh = new Set(chat.messages.slice(latest + 1));
-  const stepped = trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
+  const finished = trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
+  const superseded = supersedePlans(chat, start);
+  const stepped = finished || superseded;
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const ratio = chat.tokenRatio || 1;
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
@@ -793,11 +841,11 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) return { args: {}, problem: TEXTS.badArguments };
   const [, properties, required] = definition;
-  for (const arg of required) {
-    if (args[arg] === undefined || args[arg] === null || (arg !== "new_text" && arg !== "content" && args[arg] === "")) {
-      return { args, problem: TEXTS.missing(name, arg) };
-    }
-  }
+  // Every missing argument at once, and any the tool doesn't take (old_string for old_text): one retry, not several.
+  const ignored = Object.keys(args).filter((arg) => !Object.hasOwn(/** @type {any} */ (properties), arg));
+  const absent = required.filter((arg) => args[arg] === undefined || args[arg] === null
+    || (arg !== "new_text" && arg !== "content" && args[arg] === ""));
+  if (absent.length) return { args, ignored, problem: TEXTS.missing(name, absent, ignored) };
   for (const [arg, value] of Object.entries(args)) {
     const schema = /** @type {any} */ (properties)[arg];
     if (!schema || value === null || value === undefined) continue;
@@ -816,7 +864,7 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
     }
     if (type === "string" && typeof value === "number") args[arg] = String(value);
   }
-  return { args, problem: "" };
+  return { args, ignored, problem: "" };
 }
 
 /** An id not used yet in this chat (some servers number calls call_0, call_1… every turn). @param {string} id @param {Set<string>} used */
@@ -890,7 +938,7 @@ function estimateMessages(/** @type {any[]} */ messages) {
 /** One stored message's size as it's sent (a cut result as its stand-in). @param {Stored} message */
 function sizeOf(message) {
   return estimate(message.role === "tool" ? resultText(message) : message.content)
-    + estimate(JSON.stringify(message.tool_calls || "")) + 4;
+    + estimate(JSON.stringify(message.tool_calls?.map(shortCall) || "")) + 4; // as earlier turns' calls are sent
 }
 
 /**

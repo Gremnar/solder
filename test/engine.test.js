@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Engine, outbound, trim, parseArguments, transcriptOf } = require("../src/engine.js");
 const { GatewayError, Cancelled } = require("../src/gateway.js");
-const { TEXTS } = require("../src/prompt.js");
+const { TEXTS, PLAN } = require("../src/prompt.js");
 
 /** A fake gateway: each reply() takes the next scripted answer (an object, or a function of the request). */
 function fakeClient(script) {
@@ -720,4 +720,69 @@ test("several edits to one file in a reply: the problems check waits for the las
   const e2 = chat.messages.find((m) => m.tool_call_id === "e2");
   assert.match(e2.content, /New problems in src\/a\.js$/);
   assert.equal(e2.meta.summary, "Edited · 1 new problem");
+});
+
+test("the batch limit: up to 8 calls, 5 of them changes, and plan calls aside", async () => {
+  const reads = (n, from = 0) => Array.from({ length: n }, (_, i) => call(`r${from + i}`, "read_file", { path: `f${from + i}.js` }));
+  const edits = (n) => Array.from({ length: n }, (_, i) => call(`e${i}`, "edit_file", { path: `g${i}.js`, old_text: "a", new_text: "b" }));
+  const plan = call("p1", "plan", { steps: [{ goal: "Look" }, { goal: "Fix" }] });
+  const run = async (calls) => {
+    const host = fakeHost();
+    await engine(fakeClient([{ calls }, { content: "ok" }]), host).ask(Engine.newChat(), "go");
+    return host.ran.length;
+  };
+  assert.equal(await run([plan, ...reads(8)]), 8, "plan with 8 reads: all of them run");
+  assert.equal(await run(reads(9)), 8);
+  assert.equal(await run(edits(6)), 5);
+  assert.equal(await run([...reads(3), ...edits(5)]), 8, "a mixed batch runs 8 when 5 or fewer are changes");
+  assert.equal(await run([...reads(3), ...edits(5), ...reads(1, 10)]), 8);
+  const chat = Engine.newChat();
+  await engine(fakeClient([{ calls: edits(6) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
+  assert.match(chat.messages.find((m) => m.tool_call_id === "e5").content, /up to 8 calls from one reply, 5 of them changes/);
+});
+
+test("an older plan result the newest holds all of is left out; one the newest doesn't hold stays", async () => {
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C" }] }, "p1")] },
+    { calls: [plan({ done: 1, notes: "A done." }, "p2")] },
+    { calls: [plan({ done: 2, notes: "B done." }, "p3")] },
+    // a re-plan without step C: the result before it (which had C) stays whole
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix D" }] }, "p4")] },
+    (req) => {
+      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
+      assert.equal(results.p1, PLAN.superseded);
+      assert.equal(results.p2, PLAN.superseded);
+      assert.match(results.p3, /Fix C/, "it had step C, which the newest plan doesn't");
+      assert.match(results.p4, /\[done\] Fix B\n   Notes: B done\./);
+      return { content: "ok" };
+    },
+  ]);
+  await engine(client, fakeHost()).ask(Engine.newChat(), "fix them");
+});
+
+test("argument problems: every missing one at once, and ones a tool doesn't take are named", async () => {
+  const chat = Engine.newChat();
+  const host = fakeHost();
+  const client = fakeClient([
+    { calls: [call("x1", "edit_file", { file_path: "a.js", old_string: "a", new_string: "b" }), call("x2", "read_file", { path: "a.js", offset: 3 })] },
+    { calls: [call("x3", "read_file", { path: "a.js", offset: 3, limit: 9 })] },
+    { content: "ok" },
+  ]);
+  await engine(client, host).ask(chat, "go");
+  const text = (id) => chat.messages.find((m) => m.tool_call_id === id).content;
+  assert.equal(text("x1"), "edit_file needs path, old_text and new_text; it wasn't run. It doesn't take file_path, old_string and new_string.");
+  assert.match(text("x3"), /read_file ok\n\n\(read_file doesn't take offset and limit, so they were left out\.\)$/);
+  assert.match(text("x2"), /\(read_file doesn't take offset, so it was left out\.\)$/);
+  assert.deepEqual(host.ran.map(([name]) => name), ["read_file", "read_file"], "the edit didn't run");
+});
+
+test("a failed summary isn't asked for again before every step of the same task", async () => {
+  const chat = Engine.newChat();
+  for (let i = 0; i < 6; i++) chat.messages.push({ role: "user", content: "q".repeat(4000), meta: { typed: "q" } }, { role: "assistant", content: "a" });
+  const client = fakeClient([new GatewayError("bad", { status: 400 }), { calls: [call("r1", "read_file", { path: "a.js" })] },
+    { calls: [call("r2", "read_file", { path: "b.js" })] }, { content: "answer" }]);
+  await engine(client, fakeHost(), [], { compactAt: 5000 }).ask(chat, "my new question");
+  assert.equal(client.sent.filter((messages) => messages[0].content === TEXTS.compactionSystem).length, 1);
+  assert.equal(chat.messages.at(-1).content, "answer");
 });

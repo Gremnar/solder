@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **A missed edit finds the closest lines by voting.** Each line of old_text found in the file points to where old_text would start; the place most of them point to is shown (“2 of its 3 lines match there”), so a generic first line (a closing brace) no longer shows the wrong function, and a wrong first line no longer shows nothing. When it’s a tie, nothing is shown rather than a guess. In a live test with the first line changed under the model, both models fixed the edit straight from those lines, 4 times in 4.
+- **old_text copied with read_file’s line numbers** (“12	…”) is matched without them, as a last try, and the model is told. A trailing line break on old_text no longer stops the forgiving matches.
+- **A wrong path names the files that exist.** A path that isn’t there gets the files of that name in the workspace (any case, node_modules aside, most alike first), or the same name with another extension; a folder given as a file lists what’s in it. Only suggested: nothing is read or changed in their place.
+- **Plan calls don’t count toward the calls one reply can run,** and a reply can now run up to 8 calls with at most 5 of them changes (it was 5 for any reply with a change in it). A plan update alongside 8 reads no longer drops the last read.
+- **An older plan result is left out once the newest holds all of it** (every plan call returns the whole plan, so a long task carried many copies). One a re-plan dropped something from stays whole.
+- **Every argument problem in one message.** A call missing several arguments says so at once, and arguments a tool doesn’t take are named (old_string for old_text), instead of being dropped silently.
+- **Search globs read as find_files reads them:** any case, backslashes, and a folder name as everything in it. A search stopped at its time limit is no longer reported as “no matches”.
+- **A failed automatic summary isn’t asked for again before every step of the same task,** and compaction sizes earlier turns as they’re actually sent.
+
 ## 0.2.2 (2026-11-07)
 
 - **No text alongside tool calls.** The model now goes straight to its calls (you see each step), writing only to ask you something or flag a surprise. Less visible text in a chat also gives a model less to copy when it starts thinking out loud.

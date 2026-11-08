@@ -369,7 +369,7 @@ test("a missed edit shows the file's lines around where it was meant to go; seve
   const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
   lines[29] = "    target();";
   const error = notFound("a.js", lines.join("\n"), "target();\nnot there", "\n");
-  assert.match(error.message, /first line appears at line 30, .*Lines 28-34 as they are now/);
+  assert.match(error.message, /closest place is around lines 28-34 \(1 of its 2 lines match there\)/);
   assert.equal(error.detail.split("\n")[0], "28\tline 28");
   assert.equal(error.detail.split("\n")[2], "30\t    target();");
   assert.equal(error.detail.split("\n").length, 7);
@@ -377,4 +377,57 @@ test("a missed edit shows the file's lines around where it was meant to go; seve
   assert.equal(none.detail, "");
   assert.match(none.message, /Read the file again/);
   assert.equal(aroundPlaces("a\nx\nb\nx\nc", [2, 4], "\n"), "1\ta\n2\tx\n3\tb\n…\n3\tb\n4\tx\n5\tc");
+});
+
+test("a missed edit: the place most of old_text's lines point to, not just its first line; a tie shows nothing", () => {
+  const { notFound } = require("../src/tools.js");
+  const file = ["function a() {", "  const out = [];", "  for (const x of xs) {", "  }", "  return out;", "}",
+    "function b() {", "  const list = [];", "  for (const y of ys) {", "  }", "  return list.filter(Boolean);", "}"].join("\n");
+  // a generic first line ("}" is in both functions): the rest says b
+  const generic = notFound("a.js", file, "  }\n  return list.filter(Boolean);\n}\nnot in the file", "\n");
+  assert.match(generic.message, /closest place is around lines 8-12 \(3 of its 4 lines match there\)/);
+  assert.match(generic.detail, /^8\t  const list = \[\];/);
+  // the first line is the wrong one: the next two still find b
+  const wrongFirst = notFound("a.js", file, "  for (const y of zs) {\n  }\n  return list.filter(Boolean);", "\n");
+  assert.match(wrongFirst.message, /closest place is around lines 7-12 \(2 of its 3 lines match there\)/);
+  // only generic lines, as likely in a as in b: no guess
+  const tie = notFound("a.js", file, "  }\nnothing like this", "\n");
+  assert.equal(tie.detail, "");
+  assert.match(tie.message, /Read the file again/);
+});
+
+test("edit_file's matching: read_file's line numbers left in old_text are taken out; a trailing line break doesn't stop a shift", () => {
+  const { withoutLineNumbers, locate } = require("../src/tools.js");
+  assert.equal(withoutLineNumbers("12\tfoo();\n13\t\n14\tbar();", "\n"), "foo();\n\nbar();");
+  assert.equal(withoutLineNumbers("12\tfoo();\n13\tbar();\n", "\n"), "foo();\nbar();\n");
+  assert.equal(withoutLineNumbers("12\tfoo();\n14\tbar();", "\n"), null, "not counting up");
+  assert.equal(withoutLineNumbers("foo();\n13\tbar();", "\n"), null);
+  assert.equal(withoutLineNumbers("plain", "\n"), null);
+  // old_text with a trailing line break, two spaces short: the shift still applies, and the break goes with it
+  const text = "x {\n    do();\n    then();\n}\n";
+  const kept = locate("a.js", text, "  do();\n  then();\n", "  do();\n", "\n");
+  assert.ok(kept);
+  assert.equal(text.slice(0, kept.start) + kept.replaced + text.slice(kept.start + kept.length), "x {\n    do();\n}\n");
+  // (indented deeper than the file, so it isn't also an exact piece of the line)
+  const removed = locate("a.js", text, "      then();\n", "", "\n");
+  assert.ok(removed);
+  assert.equal(text.slice(0, removed.start) + removed.replaced + text.slice(removed.start + removed.length), "x {\n    do();\n}\n");
+});
+
+test("a missing path suggests the files most like it; a folder read lists it; a search glob reads as find_files does", () => {
+  const { rankNearby, rgGlob, folderEntries } = require("../src/tools.js");
+  assert.deepEqual(rankNearby("U:/w/src/lib/dates.js", ["U:/w/old/dates.js", "U:/w/src/lib/x/dates.js", "U:/w/lib/dates.js"]),
+    ["U:/w/src/lib/x/dates.js", "U:/w/lib/dates.js", "U:/w/old/dates.js"]);
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-near-"));
+  try {
+    fs.mkdirSync(path.join(top, "Scripts"));
+    fs.writeFileSync(path.join(top, "a.txt"), "x");
+    assert.equal(rgGlob(top, "Scripts"), "Scripts/**");
+    assert.equal(rgGlob(top, "scripts\\"), "scripts/**");
+    assert.equal(rgGlob(top, ".\\Scripts\\*.ps1"), "Scripts/*.ps1");
+    assert.equal(rgGlob(top, "*.ps1"), "*.ps1");
+    assert.equal(folderEntries(top), "It holds: Scripts/, a.txt.");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
 });
