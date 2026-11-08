@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 (2026-11-07)
 
 - **A task that stops with plan steps left is asked to carry on, once.** A weak model sometimes ends a planned task partway, with steps still to do and nothing asked. Solder now sends one short message listing the steps left (“please carry on, or if you stopped on purpose, say so”), shown in the chat as “Carry on (the plan had N steps left)”. Not when the reply asks you something, not twice for one message, and not for a plan from an earlier message. In the live suite it caught one such stop in a 12-module task, which then finished correctly.
 - **A live test suite** (`live/`, for contributors): 14 scenarios on throwaway workspaces, run against any OpenAI-compatible endpoint and checked by running the result, with a table of passes, tokens and requests beside a baseline run. See live/README.md.
