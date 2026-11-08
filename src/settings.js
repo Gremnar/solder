@@ -5,6 +5,7 @@
  * API key (secret storage) and the docs index's state, so the everyday ones are a click away.
  */
 const vscode = require("vscode");
+const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
 
 class SettingsScreen {
@@ -26,6 +27,7 @@ class SettingsScreen {
   }
 
   async open() {
+    await policy.refresh().catch(() => {});
     this.view = { open: true, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
     // While it's open, the docs index's progress keeps the screen current.
     clearInterval(this.timer);
@@ -44,8 +46,9 @@ class SettingsScreen {
   }
 
   async values() {
-    const config = vscode.workspace.getConfiguration("solder");
-    const raw = config.get("docsFolders", []);
+    const config = solderSettings();
+    // The user's own folders (the organisation's are shown apart, and can't be changed here).
+    const raw = config.own("docsFolders", []);
     return {
       endpoint: String(config.get("endpoint", "")),
       hasKey: !!((await this.context.secrets.get(this.keyName)) ?? ""),
@@ -62,6 +65,11 @@ class SettingsScreen {
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
+      // What the organisation enforces: those fields are shown locked.
+      locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"]]
+        .map(([field, name]) => [field, policy.locked(name)])),
+      orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
     };
   }
 
@@ -77,7 +85,7 @@ class SettingsScreen {
   async handle(message) {
     if (!this.view) return;
     const action = String(message.action || "");
-    const config = vscode.workspace.getConfiguration("solder");
+    const config = solderSettings();
     const save = async (/** @type {string} */ name, /** @type {any} */ value, /** @type {string} */ field) => {
       await config.update(name, value, vscode.ConfigurationTarget.Global);
       Object.assign(this.view, await this.values(), { saved: field, notice: "", noticeKind: "" });
@@ -89,6 +97,7 @@ class SettingsScreen {
       case "set": {
         const field = String(message.field || "");
         const value = message.value;
+        if (this.view.locked?.[field]) { this.notice("Your organization sets this.", "bad"); return; }
         if (field === "endpoint") {
           const endpoint = String(value || "").trim();
           if (endpoint) { try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { this.notice(messageOf(error), "bad"); return; } }
@@ -146,6 +155,7 @@ class SettingsScreen {
         return;
       }
       case "addDocs": {
+        if (this.view.docsLocked) { this.notice("Your organization sets the docs folders.", "bad"); return; }
         const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true,
           openLabel: "Use as docs", title: "Solder: folders of your own reference docs" });
         if (!picked?.length) return;
@@ -170,7 +180,7 @@ class SettingsScreen {
       }
       case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
       case "testEmbedding": {
-        const model = String(vscode.workspace.getConfiguration("solder").get("embeddingModel", "")).trim();
+        const model = String(solderSettings().get("embeddingModel", "")).trim();
         if (!model) { this.notice("Type the embeddings model's id first.", "bad"); return; }
         this.notice("Testing the embeddings model…");
         try {

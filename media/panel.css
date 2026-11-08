@@ -621,3 +621,10 @@ body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: no
   .status .what { background: none; color: var(--muted); }
   .send.stop::after { border-right-color: var(--link); border-bottom-color: var(--link); border-left-color: var(--link); opacity: 0.6; }
 }
+
+/* what the organisation sets (policy): marked, and shown but not changeable */
+.settings .org { margin-left: 8px; font-size: 0.85em; font-weight: 400; color: var(--muted); }
+.settings .org-doc .doc-path { opacity: 0.85; margin-bottom: 0; }
+.settings .doc-path .org { flex: none; }
+.settings .org-rules { white-space: pre-wrap; padding: 6px 8px; border: 1px dashed var(--line); border-radius: var(--r); color: var(--muted); font-size: 0.95em; }
+.settings .field:disabled, .settings .seg:disabled, .model-button:disabled, .effort button:disabled { opacity: 0.6; cursor: not-allowed; }

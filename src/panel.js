@@ -5,6 +5,7 @@
  * no truth: it renders the state posted here (rebuilt from the saved chat) plus streamed text.
  */
 const vscode = require("vscode");
+const { config: solderSettings, policy } = require("./config.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
@@ -19,6 +20,9 @@ const { Log } = require("./log.js");
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
 const SHOWN_OUTPUT_CHARS = 6_000;
+
+/** How often the organisation's policy is read again. */
+const POLICY_MS = 30 * 60_000;
 
 class SolderPanel {
   /** @param {vscode.ExtensionContext} context */
@@ -83,6 +87,9 @@ class SolderPanel {
           || event.affectsConfiguration("solder.embeddingModel")) this.tools.refreshDocs();
       }),
     );
+    // The organisation's policy, read again every so often (Group Policy refreshes about every 90 minutes).
+    const reread = setInterval(() => policy.refresh().then((changed) => { if (changed) this.policyChanged(); }, () => {}), POLICY_MS);
+    context.subscriptions.push({ dispose: () => clearInterval(reread) });
     // Old backups are pruned to the storage limit a little after start, and after new ones.
     const prune = setTimeout(() => { try { this.tools.pruneBackups(); } catch { /* best effort */ } }, 30_000);
     context.subscriptions.push({ dispose: () => clearTimeout(prune) });
@@ -109,7 +116,8 @@ class SolderPanel {
   host() {
     return {
       systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
-        rules: vscode.workspace.getConfiguration("solder").get("rules", ""), docs: this.tools.docsFolders() }),
+        // The organisation's rules go after the user's, so they read as the more recent instruction.
+        rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders() }),
       runTool: (/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) => this.tools.run(name, args, ctx),
       settleEdits: (/** @type {string} */ group) => this.tools.settleEdits(group),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
@@ -120,7 +128,7 @@ class SolderPanel {
   /** The instruction files (AGENTS.md by default) at the top of each workspace folder. */
   instructions() {
     const roots = this.tools.roots();
-    const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
+    const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
     const found = [];
     for (const root of roots) {
       for (const name of names) {
@@ -135,16 +143,26 @@ class SolderPanel {
   }
 
   settings() {
-    const config = vscode.workspace.getConfiguration("solder");
-    return { model: config.get("model", ""), effort: config.get("effort", "default"),
+    const config = solderSettings();
+    return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
       compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)) };
+  }
+
+  /** The organisation's policy changed: the client, the models, the docs folders and what's shown follow it. */
+  async policyChanged() {
+    this._client = null;
+    this.tools.refreshDocs();
+    await this.refreshModels();
+    this.post();
   }
 
   /** @type {GatewayClient | null} */
   _client = null;
   client() {
     if (!this._client) {
-      const config = vscode.workspace.getConfiguration("solder");
+      // Fail closed: while the organisation's policy can't be read, nothing is sent.
+      if (policy.error) throw new Error(policy.error);
+      const config = solderSettings();
       this._client = new GatewayClient({ endpoint: config.get("endpoint", ""), apiKey: this._key ?? "" });
     }
     return this._client;
@@ -161,7 +179,7 @@ class SolderPanel {
     this.modelsProblem = "";
     try {
       await this.loadKey();
-      const config = vscode.workspace.getConfiguration("solder");
+      const config = solderSettings();
       if (!config.get("endpoint", "")) { this.models = []; this.modelsProblem = "setup"; this.post(); return; }
       let ids = await this.client().models();
       const filter = config.get("modelFilter", "");
@@ -295,8 +313,12 @@ class SolderPanel {
         this.post();
         return;
       }
-      case "model": this.chat.model = message.id; await this.store.save(this.chat); this.post(); return;
-      case "effort": this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
+      case "model":
+        if (policy.locked("model")) { vscode.window.showInformationMessage("Your organization sets the model Solder uses."); return; }
+        this.chat.model = message.id; await this.store.save(this.chat); this.post(); return;
+      case "effort":
+        if (policy.locked("effort")) { vscode.window.showInformationMessage("Your organization sets the effort Solder uses."); return; }
+        this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
       case "undo": return this.undo(message.id);
       case "review": {
         const change = this.change(message.id);
@@ -583,12 +605,14 @@ class SolderPanel {
 
   /** What support needs to know, with nothing private: versions, the shape of the settings, the recent log. */
   diagnostics() {
-    const config = vscode.workspace.getConfiguration("solder");
+    const config = solderSettings();
     const docs = this.tools.docsState();
     let backups = 0;
     try { backups = this.tools.pruneBackups(Infinity).bytes; } catch { /* none */ }
     return [
       `Solder ${this.context.extension?.packageJSON?.version ?? ""} · VS Code ${vscode.version} · ${process.platform} ${process.arch} · node ${process.versions.node}`,
+      `Organization policy: ${policy.error ? "couldn't be read" : policy.names.length ? policy.names.join(", ") : "none"}` +
+        (policy.problems.length ? ` · not used: ${policy.problems.join("; ")}` : ""),
       `Endpoint set: ${config.get("endpoint", "") ? "yes" : "no"} · key saved: ${this._key ? "yes" : "no"} · models listed: ${this.models.length}` +
         (this.modelsProblem ? ` · models problem: ${this.modelsProblem === "setup" ? "not set up" : this.modelsProblem}` : ""),
       `Model: ${this.chat.model || config.get("model", "") || "(none)"} · effort: ${this.chat.effort || config.get("effort", "default")} · compact at: ${config.get("compactAtTokens", 100000)} · max rounds: ${config.get("maxRounds", 30)}`,
@@ -654,7 +678,8 @@ class SolderPanel {
   post() {
     if (!this.view) return;
     const chat = this.chat;
-    const current = chat.model || this.settings().model || "";
+    const settings = this.settings();
+    const current = (settings.modelLocked ? settings.model : chat.model || settings.model) || "";
     this.view.webview.postMessage({
       type: "state",
       chat: { id: chat.id, title: chat.title, items: this.items(), tokens: chat.usage.tokens },
@@ -662,7 +687,8 @@ class SolderPanel {
       models: this.models.length || !current ? this.models : [{ id: current, name: current }],
       modelsProblem: this.modelsProblem,
       model: current,
-      effort: chat.effort || this.settings().effort,
+      effort: settings.effortLocked ? settings.effort : chat.effort || settings.effort,
+      locks: { model: settings.modelLocked, effort: settings.effortLocked },
       busy: this.engine.busy && !this.awayBusy(),
       elsewhere: this.elsewhere(),
       folder: this.chat.folder || "",

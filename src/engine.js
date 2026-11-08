@@ -261,15 +261,15 @@ class Engine {
       const system = await this.host.systemPrompt(chat);
       const messages = outbound(chat, system);
       this.emit({ type: "thinking", chat: chat.id });
-      const reply = await this._patient(chat, { model: chat.model || settings.model, messages, tools,
-        effort: effortOf(chat.effort || settings.effort), signal });
+      const reply = await this._patient(chat, { model: modelOf(chat, settings), messages, tools,
+        effort: effortOf(settings.effortLocked ? settings.effort : chat.effort || settings.effort), signal });
       // The server's count over our estimate, so compaction triggers on real tokens (code runs about 30% over).
       const sentEstimate = estimateMessages(messages) + estimate(JSON.stringify(tools));
       if (reply.usage?.prompt_tokens > 0 && sentEstimate > 0) {
         chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
       }
       this._spend(chat, reply.usage, reply.credits);
-      this.emit({ type: "reply", chat: chat.id, model: chat.model || settings.model, ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
+      this.emit({ type: "reply", chat: chat.id, model: modelOf(chat, settings), ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
         completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: reply.calls.length });
       /** @type {Stored} */
       const assistant = { role: "assistant", content: reply.content };
@@ -531,7 +531,7 @@ class Engine {
     const summarisable = chat.messages.slice(start, cut).reduce((sum, m) => sum + sizeOf(m), 0) * ratio;
     if (!force && summarisable < settings.compactAt * MIN_COMPACT_SHARE) return "skipped";
     // A summary that failed isn't asked for again before every step of the same task: once per task and model.
-    const attempt = `${start}:${cut}:${limit}:${chat.model || settings.model}`;
+    const attempt = `${start}:${cut}:${limit}:${modelOf(chat, settings)}`;
     const failed = (this._compactFailed ??= new Map());
     if (!force && failed.get(chat.id) === attempt) return "skipped";
     const focus = String(options.focus || "").trim().slice(0, MAX_FOCUS_CHARS);
@@ -539,7 +539,7 @@ class Engine {
     let reply;
     try {
       const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
-      reply = await this._patient(chat, { model: chat.model || settings.model, signal, effort: undefined, messages: [
+      reply = await this._patient(chat, { model: modelOf(chat, settings), signal, effort: undefined, messages: [
         { role: "system", content: TEXTS.compactionSystem },
         { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` +
           (focus ? `\n\n${TEXTS.compactionFocus(focus)}` : "") }] }, true);
@@ -573,7 +573,7 @@ class Engine {
     const settings = this.settings();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
-    Promise.resolve().then(() => this.client.reply({ model: chat.model || settings.model, signal: controller.signal,
+    Promise.resolve().then(() => this.client.reply({ model: modelOf(chat, settings), signal: controller.signal,
       messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
       .then(async (/** @type {any} */ reply) => {
         if (reply.usage) { this._spend(chat, reply.usage, reply.credits); await this._save(chat); }
@@ -677,6 +677,11 @@ function unfinishedSteps(chat) {
 /** A reply that ends on a question for the user (its last lines ask something). @param {string} text */
 function asksSomething(text) {
   return /\?/.test(String(text || "").trim().slice(-400));
+}
+
+/** The model a chat uses: its own choice, unless the organisation enforces one. @param {Chat} chat @param {any} settings */
+function modelOf(chat, settings) {
+  return settings.modelLocked ? settings.model : chat.model || settings.model;
 }
 
 /** Where the current turn starts: the latest message you typed (or Resume's "carry on"). @param {Chat} chat */

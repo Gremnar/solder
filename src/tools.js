@@ -6,6 +6,7 @@
  * Every change keeps a backup, so each step can be reviewed (VS Code's diff) and undone.
  */
 const vscode = require("vscode");
+const { config: solderSettings } = require("./config.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
@@ -310,7 +311,7 @@ class WorkspaceTools {
   nestedAgents(/** @type {any} */ file, /** @type {any} */ chat) {
     const root = this.rootOf(file.full);
     if (!file.inside || !root) return "";
-    const names = plainNames(vscode.workspace.getConfiguration("solder").get("instructionFiles", ["AGENTS.md"]));
+    const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
     chat.agentsSeen = chat.agentsSeen || [];
     let folder = path.dirname(file.full);
     const notes = [];
@@ -601,7 +602,7 @@ class WorkspaceTools {
 
   /** The docs folders from the user's settings that exist: [{path, about}]. */
   docsFolders() {
-    const raw = vscode.workspace.getConfiguration("solder").get("docsFolders", []);
+    const raw = solderSettings().get("docsFolders", []);
     /** @type {{path: string, about: string}[]} */
     const out = [];
     for (const item of Array.isArray(raw) ? raw : []) {
@@ -695,7 +696,7 @@ class WorkspaceTools {
 
   /** The embeddings model when docs search by meaning is on (Settings → Your docs), else "". */
   semantic() {
-    const config = vscode.workspace.getConfiguration("solder");
+    const config = solderSettings();
     return config.get("docsSearch", "keyword") === "hybrid" ? String(config.get("embeddingModel", "")).trim() : "";
   }
 
@@ -1210,7 +1211,7 @@ class WorkspaceTools {
    * @param {number} [limitBytes] the limit (from the setting when left out) @returns {{bytes: number, removed: number}}
    */
   pruneBackups(limitBytes) {
-    const limit = limitBytes ?? Math.max(0.1, Number(vscode.workspace.getConfiguration("solder").get("storageLimitGB", 5)) || 5) * 1024 ** 3;
+    const limit = limitBytes ?? Math.max(0.1, Number(solderSettings().get("storageLimitGB", 5)) || 5) * 1024 ** 3;
     const root = this.backupsRoot();
     /** @type {{full: string, bytes: number, time: number}[]} */
     const items = [];

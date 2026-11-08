@@ -114,6 +114,8 @@ The panel shows what the chat has used, and the status bar shows the allowance l
 
 The API key is set with **Solder: Set API key**, or in the guided setup. It's never stored in settings.
 
+**For organizations:** every setting can be enforced with Group Policy or Intune, and locked for users. Most organizations enforce the gateway address, and some add rules of their own for every user. The templates and guide are in [docs/POLICY.md](docs/POLICY.md).
+
 ## Privacy
 
 - **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet. **⋯ → Send feedback…** opens your own email app, addressed to support, with only the Solder and VS Code versions filled in.

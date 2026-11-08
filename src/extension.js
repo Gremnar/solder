@@ -6,6 +6,7 @@
  * extension host: what matters behind a corporate proxy).
  */
 const vscode = require("vscode");
+const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { SolderPanel, KEY } = require("./panel.js");
 const os = require("node:os");
@@ -14,7 +15,9 @@ const FEEDBACK_TO = "support@gremnar.com";
 const FEEDBACK_SUBJECT = "VS Code Solder extension feedback or support";
 
 /** @param {vscode.ExtensionContext} context */
-function activate(context) {
+async function activate(context) {
+  // The organisation's policy first: nothing connects before it's known (see policy.js).
+  await policy.refresh();
   const output = vscode.window.createOutputChannel("Solder");
   const panel = new SolderPanel(context, output);
   // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
@@ -73,8 +76,9 @@ function activate(context) {
         prompt: "A few words that tell the model when to look here (optional), for example: PX-40 schematics and the FooBus API",
         value: "" });
       if (about === undefined) return; // cancelled
-      const config = vscode.workspace.getConfiguration("solder");
-      const list = (config.get("docsFolders", []) || []).filter((/** @type {any} */ item) =>
+      if (policy.locked("docsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's docs folders."); return; }
+      const config = solderSettings();
+      const list = (config.own("docsFolders", []) || []).filter((/** @type {any} */ item) =>
         String(typeof item === "string" ? item : item?.path ?? "").toLowerCase() !== folder.toLowerCase());
       list.push(about.trim() ? { path: folder, about: about.trim() } : folder);
       await config.update("docsFolders", list, vscode.ConfigurationTarget.Global);
@@ -89,7 +93,7 @@ function activate(context) {
 
 /** @param {vscode.ExtensionContext} context @param {vscode.OutputChannel} output */
 async function checkConnection(context, output) {
-  const config = vscode.workspace.getConfiguration("solder");
+  const config = solderSettings();
   output.show(true);
   const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
   let client;

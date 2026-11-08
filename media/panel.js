@@ -297,6 +297,7 @@
     const s = state.settings;
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
     const shape = JSON.stringify({ models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
+      locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
     const values = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
     const savedNow = s.saved && (s.saved !== settingsSaved || values !== settingsValues) ? s.saved : "";
@@ -349,6 +350,7 @@
     const html = `<div class="setup settings${fresh ? " enter" : ""}">` +
       `<div class="settings-head"><h2 id="settings-title" tabindex="-1">Settings</h2><button class="link-button primary" data-sact="close">Done</button></div>` +
       `<div id="settings-notice" class="settings-notice ${s.noticeKind || ""}" role="status">${escape(s.notice || "")}</div>` +
+      (s.policyError ? `<div class="settings-notice bad">${escape(s.policyError)}</div>` : "") +
       section("Connection",
         label("Gateway address", "endpoint", saved("endpoint")) + `<input class="field" id="sf-endpoint" data-field="endpoint" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/chat/completions" value="${escape(s.endpoint)}">` +
         label("API key", "key", saved("key"), "settings-key") + `<div class="row-field"><input class="field" id="settings-key" type="password" placeholder="${s.hasKey ? "A key is saved: type a new one to replace it" : "Paste your key"}">` +
@@ -357,13 +359,15 @@
         `<div class="actions-row"><button class="link-button" data-sact="check">Check connection</button></div>`) +
       section("Model",
         label("Default model", "model", saved("model")) + modelField +
-        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`) +
+        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${orgMark("effort")}${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`) +
       section("Your docs",
         `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
         (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
-        `<div class="docs">${docs}</div><button class="link-button" data-sact="addDocs">Add a folder…</button>` +
+        orgDocsHtml(s) +
+        (s.docsLocked ? `<div class="hint">Your organization sets the docs folders.</div>`
+          : `<div class="docs">${docs}</div><button class="link-button" data-sact="addDocs">Add a folder…</button>`) +
         `<div class="hint">Plain text of any kind, and Word, Excel and PowerPoint files; not PDFs or scans. Up to 20,000 files a folder, indexed on this PC.</div>` +
-        `<div class="field-label" id="sf-docsSearch-label"><span>Search by</span>${saved("docsSearch")}</div><div class="segs" role="group" aria-labelledby="sf-docsSearch-label">` +
+        `<div class="field-label" id="sf-docsSearch-label"><span>Search by</span>${orgMark("docsSearch")}${saved("docsSearch")}</div><div class="segs" role="group" aria-labelledby="sf-docsSearch-label">` +
         [["keyword", "Keywords"], ["hybrid", "Keywords + meaning"]].map(([value, text]) => `<button class="seg${s.docsSearch === value ? " on" : ""}" data-sfield="docsSearch" data-value="${value}" aria-pressed="${s.docsSearch === value}">${text}</button>`).join("") + `</div>` +
         (s.docsSearch === "hybrid"
           ? label("Embeddings model", "embeddingModel", saved("embeddingModel")) + `<div class="row-field"><input class="field" id="sf-embeddingModel" data-field="embeddingModel" spellcheck="false" placeholder="The gateway's embeddings model id" value="${escape(s.embeddingModel)}">` +
@@ -372,6 +376,7 @@
           : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)) +
       section("Rules and instructions",
         label("Your rules", "rules", saved("rules")) + `<textarea class="field area" id="sf-rules" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
+        (s.orgRules ? `<div class="field-label"><span>Added by your organization</span></div><div class="org-rules">${escape(s.orgRules)}</div>` : "") +
         label("Instruction files", "instructionFiles", saved("instructionFiles")) + `<input class="field" id="sf-instructionFiles" data-field="instructionFiles" spellcheck="false" value="${escape(s.instructionFiles)}">` +
         `<div class="hint">Files in the workspace the model follows, separated by commas, such as AGENTS.md, CLAUDE.md.</div>`) +
       section("Cost",
@@ -383,6 +388,9 @@
         `<div class="hint">Only models whose id matches are offered. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div>`) +
       `</div>`;
     keepFocus(transcript, () => { transcript.innerHTML = html; });
+    for (const el of /** @type {NodeListOf<HTMLInputElement>} */ (transcript.querySelectorAll("[data-field], [data-sfield]"))) {
+      if (s.locked?.[String(el.dataset.field || el.dataset.sfield)]) { el.disabled = true; el.title = "Set by your organization"; }
+    }
     if (fresh) /** @type {HTMLElement | null} */ (document.getElementById("settings-title"))?.focus();
   }
 
@@ -393,7 +401,20 @@
 
   /** A field's label, tied to its field (id sf-<field> unless given). @param {string} text @param {string} field @param {string} [extra] @param {string} [id] */
   function label(text, field, extra = "", id = "sf-" + field) {
-    return `<label class="field-label" for="${id}"><span>${escape(text)}</span>${extra}</label>`;
+    return `<label class="field-label" for="${id}"><span>${escape(text)}</span>${orgMark(field)}${extra}</label>`;
+  }
+
+  /** "Set by your organization", for a field the policy enforces. @param {string} field */
+  function orgMark(field) {
+    return state?.settings?.locked?.[field] ? `<span class="org">Set by your organization</span>` : "";
+  }
+
+  /** The docs folders the organisation sets, shown but not changeable. @param {any} s */
+  function orgDocsHtml(s) {
+    const list = (s.orgDocs || []).map((/** @type {any} */ d) => `<div class="doc org-doc"><div class="doc-path" title="${escape(d.path)}">` +
+      `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span><span class="org">From your organization</span></div>` +
+      (d.about ? `<div class="hint">${escape(d.about)}</div>` : "") + `</div>`).join("");
+    return list ? `<div class="docs">${list}</div>` : "";
   }
 
   /** @param {any} d */
@@ -844,6 +865,9 @@
     // model
     const model = state.models.find((/** @type {any} */ m) => m.id === state.model);
     $("model-name").textContent = model ? model.name : state.model || "Choose a model";
+    const locks = state.locks || {};
+    /** @type {HTMLButtonElement} */ ($("model-button")).disabled = !!locks.model;
+    $("model-button").title = locks.model ? "Set by your organization" : "Model";
     const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button role="menuitemradio" aria-checked="${m.id === state.model}" tabindex="-1" data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
         `<span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
@@ -853,6 +877,7 @@
     const level = state.effort === "default" ? "low" : state.effort;
     for (const button of $("effort").querySelectorAll("button")) {
       button.classList.toggle("active", button.dataset.level === level);
+      /** @type {HTMLButtonElement} */ (button).disabled = !!locks.effort;
       button.setAttribute("aria-pressed", String(button.dataset.level === level));
     }
     // send / stop
@@ -1225,7 +1250,7 @@
   /** @param {string} name @param {string} arg */
   function runCommand(name, arg) {
     if (name === "help") { vscode.postMessage({ type: "guide" }); return; }
-    if (name === "model" && !arg) { toggle("model-menu"); return; }
+    if (name === "model" && !arg) { if (!state?.locks?.model) toggle("model-menu"); return; }
     if (name === "new" || name === "fork" || name === "review") stickToBottom = true;
     vscode.postMessage({ type: "command", name, arg });
   }

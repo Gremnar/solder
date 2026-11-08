@@ -6,6 +6,7 @@
  * "Set API key" would put it: user settings, and VS Code's secret storage for the key.
  */
 const vscode = require("vscode");
+const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 
 const STEPS = ["endpoint", "key", "model", "docs", "rules", "done"];
@@ -27,7 +28,7 @@ class SetupWizard {
 
   /** Whether Solder still needs setting up: no endpoint, or a remote one with no key. */
   async needed() {
-    const endpoint = String(vscode.workspace.getConfiguration("solder").get("endpoint", "")).trim();
+    const endpoint = String(solderSettings().get("endpoint", "")).trim();
     if (!endpoint) return true;
     const key = (await this.context.secrets.get(this.keyName)) ?? "";
     return !key && !isLocal(endpoint);
@@ -35,13 +36,14 @@ class SetupWizard {
 
   /** Start (or restart) at the first step, with what's already set filled in. */
   async start() {
-    const config = vscode.workspace.getConfiguration("solder");
+    const config = solderSettings();
     const key = (await this.context.secrets.get(this.keyName)) ?? "";
     this.view = {
-      step: "endpoint", steps: STEPS, busy: false, error: "",
+      step: "", steps: stepsNow(), busy: false, error: "",
       endpoint: String(config.get("endpoint", "")), hasKey: !!key, models: [], model: String(config.get("model", "")),
-      docs: docsFrom(config.get("docsFolders", [])), rules: String(config.get("rules", "")),
+      docs: docsFrom(config.own("docsFolders", [])), rules: String(config.get("rules", "")),
     };
+    this.view.step = this.view.steps[0];
     this.changed();
   }
 
@@ -59,8 +61,9 @@ class SetupWizard {
     if (!view) return;
     const action = String(message.action || "");
     if (action === "cancel" || action === "finish") { this.view = null; this.changed(); return; }
-    if (action === "back") { this.go(STEPS[Math.max(0, STEPS.indexOf(view.step) - 1)]); return; }
-    const config = vscode.workspace.getConfiguration("solder");
+    if (action === "back") { this.go(view.steps[Math.max(0, view.steps.indexOf(view.step) - 1)]); return; }
+    const after = (/** @type {string} */ step) => view.steps[view.steps.indexOf(step) + 1] || "done";
+    const config = solderSettings();
     const save = (/** @type {string} */ name, /** @type {any} */ value) => config.update(name, value, vscode.ConfigurationTarget.Global);
     switch (view.step) {
       case "endpoint": {
@@ -68,12 +71,12 @@ class SetupWizard {
         try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { view.error = messageOf(error); this.changed(); return; }
         view.endpoint = endpoint;
         await save("endpoint", endpoint);
-        this.go("key");
+        this.go(after("endpoint"));
         return;
       }
       case "key": {
         const typed = String(message.key || "").trim();
-        if (action === "skipCheck") { view.models = []; this.go("model"); return; }
+        if (action === "skipCheck") { view.models = []; this.go(after("key")); return; }
         if (typed) await this.context.secrets.store(this.keyName, typed);
         const key = typed || ((await this.context.secrets.get(this.keyName)) ?? "");
         view.hasKey = !!key;
@@ -92,7 +95,7 @@ class SetupWizard {
           const names = config.get("modelNames", {}) || {};
           view.models = ids.map((id) => ({ id, name: names[id] || id }));
           if (!view.model || !ids.includes(view.model)) view.model = ids[0] || view.model;
-          this.go("model");
+          this.go(after("key"));
         } catch (error) {
           view.busy = false;
           view.error = error instanceof GatewayError && error.name === "Cancelled" ? "The gateway didn't answer within 30 seconds."
@@ -106,7 +109,7 @@ class SetupWizard {
         if (!model) { view.error = "Choose a model, or type its id."; this.changed(); return; }
         view.model = model;
         await save("model", model);
-        this.go("docs");
+        this.go(after("model"));
         return;
       }
       case "docs": {
@@ -123,17 +126,23 @@ class SetupWizard {
         const abouts = Array.isArray(message.abouts) ? message.abouts : [];
         view.docs = view.docs.map((/** @type {any} */ d, /** @type {number} */ i) => ({ path: d.path, about: String(abouts[i] ?? d.about ?? "").trim() }));
         await save("docsFolders", view.docs.map((/** @type {any} */ d) => d.about ? { path: d.path, about: d.about } : d.path));
-        this.go("rules");
+        this.go(after("docs"));
         return;
       }
       case "rules": {
         view.rules = String(message.rules ?? "").trim();
         await save("rules", view.rules);
-        this.go("done");
+        this.go(after("rules"));
         return;
       }
     }
   }
+}
+
+/** The setup steps, less those the organisation sets (a gateway it enforces needs no asking). */
+function stepsNow() {
+  return STEPS.filter((step) => !(step === "endpoint" && policy.locked("endpoint")) && !(step === "model" && policy.locked("model"))
+    && !(step === "docs" && policy.locked("docsFolders")) && !(step === "rules" && policy.locked("rules")));
 }
 
 /** @param {string} endpoint */

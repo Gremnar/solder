@@ -128,6 +128,17 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.
 
+**Organization policy (Group Policy, Intune).** Every setting above can be enforced. The guide for admins is [POLICY.md](POLICY.md).
+- **Why Solder reads its own keys:** VS Code only applies policies to extension settings listed in its own product.json, which leaves out third-party extensions.
+- **The keys:** values under `HKLM` and then `HKCU`, each `\SOFTWARE\Policies\Gremnar\Solder`. Computer policy wins over user policy. A value that's there locks its setting.
+- **Reading them:** `src/policy.js` runs `reg.exe export` (directly, with no shell) and parses the UTF-16 `.reg` file. `src/config.js` wraps VS Code's settings, so every read sees the policy.
+- **Failing closed:** if the policy can't be read, nothing is sent.
+- **Two policies that aren't settings:**
+  - `AllowUserDocsFolders` adds the user's own docs folders to the enforced ones.
+  - `OrgRules` is added after the user's rules, so it reads as the more recent instruction.
+- **The API key is never set by policy:** every local user can read the Policies keys.
+- **A possible later addition, only if an organization asks:** limiting what Solder can do (for example, no edits, or no writes outside the workspace) by policy.
+
 ## Packaging and the Marketplace
 
 - **Build.** `node build/vsix.js` writes `solder-<version>.vsix`. A `.vsix` is a zip that holds:

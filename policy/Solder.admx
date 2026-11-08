@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solder's policies: settings an organisation enforces, under Software\Policies\Gremnar\Solder (computer or user).
+     A policy that's set (Enabled) is enforced and locks the setting; Not configured leaves it to the user. -->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="solder" namespace="Gremnar.Policies.Solder" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Solder" displayName="$(string.SUPPORTED_Solder)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Solder" displayName="$(string.Cat_Solder)" />
+    <category name="Connection" displayName="$(string.Cat_Connection)"><parentCategory ref="Solder" /></category>
+    <category name="Model" displayName="$(string.Cat_Model)"><parentCategory ref="Solder" /></category>
+    <category name="Docs" displayName="$(string.Cat_Docs)"><parentCategory ref="Solder" /></category>
+    <category name="Rules" displayName="$(string.Cat_Rules)"><parentCategory ref="Solder" /></category>
+    <category name="Limits" displayName="$(string.Cat_Limits)"><parentCategory ref="Solder" /></category>
+  </categories>
+  <policies>
+    <policy name="Endpoint" class="Both" displayName="$(string.Endpoint)" explainText="$(string.Endpoint_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Endpoint)">
+      <parentCategory ref="Connection" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="Endpoint" valueName="Endpoint" maxLength="2048" required="true" /></elements>
+    </policy>
+    <policy name="Model" class="Both" displayName="$(string.Model)" explainText="$(string.Model_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Model)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="Model" valueName="Model" maxLength="256" required="true" /></elements>
+    </policy>
+    <policy name="ModelFilter" class="Both" displayName="$(string.ModelFilter)" explainText="$(string.ModelFilter_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.ModelFilter)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="ModelFilter" valueName="ModelFilter" maxLength="512" required="true" /></elements>
+    </policy>
+    <policy name="ModelNames" class="Both" displayName="$(string.ModelNames)" explainText="$(string.ModelNames_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.ModelNames)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="ModelNames" valueName="ModelNames" maxLength="4096" required="true" /></elements>
+    </policy>
+    <policy name="Effort" class="Both" displayName="$(string.Effort)" explainText="$(string.Effort_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Effort)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements>
+        <enum id="Effort" valueName="Effort" required="true">
+          <item displayName="$(string.Effort_Default)"><value><string>default</string></value></item>
+          <item displayName="$(string.Effort_Low)"><value><string>low</string></value></item>
+          <item displayName="$(string.Effort_Medium)"><value><string>medium</string></value></item>
+          <item displayName="$(string.Effort_High)"><value><string>high</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="DocsFolders" class="Both" displayName="$(string.DocsFolders)" explainText="$(string.DocsFolders_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.DocsFolders)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><multiText id="DocsFolders" valueName="DocsFolders" maxLength="4096" required="true" /></elements>
+    </policy>
+    <policy name="AllowUserDocsFolders" class="Both" displayName="$(string.AllowUserDocsFolders)" explainText="$(string.AllowUserDocsFolders_Help)" key="Software\Policies\Gremnar\Solder" valueName="AllowUserDocsFolders">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DocsSearch" class="Both" displayName="$(string.DocsSearch)" explainText="$(string.DocsSearch_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.DocsSearch)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements>
+        <enum id="DocsSearch" valueName="DocsSearch" required="true">
+          <item displayName="$(string.DocsSearch_Keyword)"><value><string>keyword</string></value></item>
+          <item displayName="$(string.DocsSearch_Hybrid)"><value><string>hybrid</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="EmbeddingModel" class="Both" displayName="$(string.EmbeddingModel)" explainText="$(string.EmbeddingModel_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbeddingModel)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="EmbeddingModel" valueName="EmbeddingModel" maxLength="256" required="true" /></elements>
+    </policy>
+    <policy name="Rules" class="Both" displayName="$(string.Rules)" explainText="$(string.Rules_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Rules)">
+      <parentCategory ref="Rules" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><multiText id="Rules" valueName="Rules" maxLength="8192" required="true" /></elements>
+    </policy>
+    <policy name="OrgRules" class="Both" displayName="$(string.OrgRules)" explainText="$(string.OrgRules_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.OrgRules)">
+      <parentCategory ref="Rules" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><multiText id="OrgRules" valueName="OrgRules" maxLength="8192" required="true" /></elements>
+    </policy>
+    <policy name="InstructionFiles" class="Both" displayName="$(string.InstructionFiles)" explainText="$(string.InstructionFiles_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.InstructionFiles)">
+      <parentCategory ref="Rules" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><multiText id="InstructionFiles" valueName="InstructionFiles" maxLength="1024" required="true" /></elements>
+    </policy>
+    <policy name="CompactAtTokens" class="Both" displayName="$(string.CompactAtTokens)" explainText="$(string.CompactAtTokens_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.CompactAtTokens)">
+      <parentCategory ref="Limits" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><decimal id="CompactAtTokens" valueName="CompactAtTokens" minValue="30000" maxValue="2000000" required="true" /></elements>
+    </policy>
+    <policy name="MaxRounds" class="Both" displayName="$(string.MaxRounds)" explainText="$(string.MaxRounds_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.MaxRounds)">
+      <parentCategory ref="Limits" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><decimal id="MaxRounds" valueName="MaxRounds" minValue="1" maxValue="100" required="true" /></elements>
+    </policy>
+    <policy name="StorageLimitGB" class="Both" displayName="$(string.StorageLimitGB)" explainText="$(string.StorageLimitGB_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.StorageLimitGB)">
+      <parentCategory ref="Limits" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><decimal id="StorageLimitGB" valueName="StorageLimitGB" minValue="1" maxValue="1000" required="true" /></elements>
+    </policy>
+  </policies>
+</policyDefinitions>
