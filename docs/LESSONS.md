@@ -180,7 +180,7 @@ The rules behind it:
 ## 6. Prompting a tool-calling model
 
 - **Short wins.** Every reference harness looked at uses under about 1,000 tokens of prompt: OpenCode's default prompt, Pi, mini-SWE-agent and DeepSeek's minimal preset. Use second person ("You are…"), one rule per habit, and say "dedicated tools before shell".
-- **No reasoning in the reply.** Some thinking models start "thinking out loud" in the visible reply several turns into a long chat ("WAIT", "HOLD ON", pages of drafts), probably by copying their own earlier style from the history. The rule *"The user reads your reply as it is: don't put your reasoning, drafts or second thoughts in it"* plus "before a tool call, write one short sentence at most" keeps that down.
+- **No reasoning in the reply.** Some thinking models start "thinking out loud" in the visible reply several turns into a long chat ("WAIT", "HOLD ON", pages of drafts), probably by copying their own earlier style from the history. The rule *"The user reads your reply as it is: don't put your reasoning, drafts or second thoughts in it"* plus "write no text alongside tool calls, except to ask something or flag a surprise" keeps that down: the less visible text a chat holds, the less there is to copy.
 - **Avoid unstructured text before tool calls** (from Google's guidance for Gemini models). Prefer sequential tool turns.
 - **Each user message starts with the local date and time**, for example `(Tuesday 4 November 2026, 14:05)`. This keeps the time out of the system prompt.
 - **Don't fake turns.** Never invent assistant messages. Some gateways ignore them silently, and some models treat them as an attack. A summary is requested from the model, never written for it.

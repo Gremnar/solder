@@ -20,6 +20,8 @@ const MAX_OUTPUT_CHARS = 30_000;
 const LONG_LINE_CHARS = 2_000;
 /** ...this much of it. */
 const LONG_LINE_SHOWN = 1_000;
+/** A read of at most this many lines shows long lines whole. */
+const NARROW_READ_LINES = 3;
 /** In a search, the text either side of a match in a long line, and how many matches a line shows. */
 const AROUND_MATCH = 120;
 const MATCHES_A_LINE = 3;
@@ -257,6 +259,8 @@ class WorkspaceTools {
     if (args.start_line > total) return { output: RESULTS.pastEnd(file.shown, total), summary: `Read ${file.shown} · past the end` };
     const start = Math.max(1, Math.min(args.start_line || 1, total));
     let end = Math.min(total, args.end_line || start + MAX_READ_LINES - 1, start + MAX_READ_LINES - 1);
+    /** One to three lines asked for: long ones shown whole (up to the output cap). */
+    const narrow = !!args.start_line && !!args.end_line && end - start <= NARROW_READ_LINES - 1;
     if (end < start) end = start;
     const lines = [];
     let size = 0;
@@ -273,12 +277,13 @@ class WorkspaceTools {
         continue;
       }
       const raw = document.lineAt(line - 1).text;
-      const text = raw.length > LONG_LINE_CHARS
-        ? `${line}\t${raw.slice(0, LONG_LINE_SHOWN)}…\n${RESULTS.longLine(line, raw.length)}` : `${line}\t${raw}`;
+      // A long line is shown by its start (minified code would swamp the chat), unless just a few lines were asked for.
+      const text = raw.length > LONG_LINE_CHARS && !narrow
+        ? `${line}\t${raw.slice(0, LONG_LINE_SHOWN)}…\n${RESULTS.longLine(line, raw.length, raw.length < MAX_OUTPUT_CHARS - 100)}` : `${line}\t${raw}`;
       if (size + text.length > MAX_OUTPUT_CHARS) {
         if (lines.length) { end = line - 1; break; }
         // One line longer than the whole cap (minified code, a data file): its start only.
-        lines.push(text.slice(0, MAX_OUTPUT_CHARS) + "\n" + RESULTS.longLine(line, text.length - String(line).length - 1));
+        lines.push(text.slice(0, MAX_OUTPUT_CHARS) + "\n" + RESULTS.longLine(line, text.length - String(line).length - 1, false));
         end = line;
         break;
       }
@@ -329,11 +334,20 @@ class WorkspaceTools {
     const find = args.find ?? "definition";
     if (find !== "definition" && find !== "references") throw new ToolError(RESULTS.badFind);
     const name = String(args.name).trim();
+    /** @type {string[]} other places the name is declared, when none was given */
+    let others = [];
     if (!args.path) {
       // No file given: VS Code's workspace symbols find where the name is declared.
       const found = await deadline(vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", name), LOOKUP_MS);
-      const exact = (Array.isArray(found) ? found : []).filter((s) => s?.name === name && s.location?.uri?.scheme === "file");
+      // TypeScript's workspace symbols name functions with their parentheses ("parseRow()").
+      const all = (Array.isArray(found) ? found : []).filter((s) => typeof s?.name === "string"
+        && s.name.replace(/\s*\(.*\)$/, "") === name && s.location?.uri?.scheme === "file");
+      const exact = all.filter((s, i) => all.findIndex((o) => o.location.uri.toString() === s.location.uri.toString()
+        && o.location.range.start.line === s.location.range.start.line) === i);
       if (!exact.length) return this.textMatches(name, signal);
+      // Declared in several places: every definition (up to the cap), or the first's uses with the others named.
+      if (exact.length > 1 && find === "definition") return this.definitions(name, exact.map((s) => s.location));
+      if (exact.length > 1) others = exact.slice(1, 1 + MAX_DEFINITIONS).map((s) => `${this.shown(s.location.uri.fsPath)} ${s.location.range.start.line + 1}`);
       args = { ...args, path: exact[0].location.uri.fsPath, line: exact[0].location.range.start.line + 1 };
     }
     const file = this.resolve(args.path);
@@ -346,7 +360,9 @@ class WorkspaceTools {
     const command = find === "definition" ? "vscode.executeDefinitionProvider" : "vscode.executeReferenceProvider";
     const found = locations(await deadline(vscode.commands.executeCommand(command, document.uri, position), LOOKUP_MS));
     if (!found.length) return this.textMatches(name, signal);
-    return find === "definition" ? this.definitions(name, found) : this.references(name, found, signal);
+    if (find === "definition") return this.definitions(name, found);
+    const uses = await this.references(name, found, signal);
+    return others.length ? { ...uses, output: uses.output + "\n\n" + RESULTS.alsoDefined(name, others) } : uses;
   }
 
   /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */

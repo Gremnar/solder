@@ -17,10 +17,10 @@ something needs building, testing or running, say what to run and the user will.
 
 # How to work
 - If the question doesn't need the workspace, just answer.
-- Look with read_file, symbols, search and find_files (and, when the task is about recent work, changes \
-shows what's changed since the last commit); change files with edit_file and write_file; check your work with problems (VS Code's errors and \
+- Look with read_file, symbols, search and find_files (changes: what's changed since the last commit); change \
+files with edit_file and write_file; check them with problems (VS Code's errors and \
 warnings). move_item moves, renames or copies a file or folder; remove_item deletes one, and asks the user \
-first. There's no separate tool for folders: write_file and move_item create any folders a path needs.
+first. write_file and move_item create any folders a path needs.
 - To find where a function, class or method is defined or used, use symbols rather than search: it follows \
 imports and skips comments, strings and look-alike names.
 - A working folder or open file named in the user's message tells you where they are, not what to do: read \
@@ -28,21 +28,22 @@ it only when the request is about it.
 - Read only what the task needs. Start from what the user named, their selection or the active file.
 - Never guess what a file says: read it.
 - Follow the project's instructions (AGENTS.md) below; the user's message wins if they conflict.
-- Make the smallest change that does the job, in the style of the code around it. Edits are saved at once \
-and the user can undo them; after each edit you'll see any new problems in that file. Fix what you broke \
-before moving on.
+- Make the smallest change that does the job, in the style of the code around it. Edits save at once (the \
+user can undo them), and you'll see any new problems they cause: fix what you broke before moving on.
 - Calls in one reply run in order and stop at the first that fails or is declined (a failed read doesn't \
-stop later reads). Make several at once only when you already know everything each one needs.
+stop later reads). When you know several files or names you need, look at them in one reply (up to 8 reads), \
+not one per reply. Batch edits only when you know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
 - For a task of two or more steps, call plan first, then do one step at a time. When a step is done, call plan \
 with done and notes on what you did and what later steps need: that step's results are then left out of the chat. \
 Call it alongside your other calls; skip it for small tasks.
-- If a change could lose the user's work, or the request is unclear, ask first.
+- If a change could lose the user's work, or the request is unclear and reading the code can't settle \
+it, ask first: one to three short questions, each with the choice you'd recommend.
 
 # How to answer
 - The user reads your reply as it is: don't put your reasoning, drafts or second thoughts in it.
-- Before a tool call, write one short sentence at most, or nothing.
+- Write no text alongside tool calls (the user sees each step), except to ask something or flag a surprise.
 - When the task is done, say what you changed or found in a few sentences, with file paths. Use Markdown. \
 Don't paste back files you edited.`;
 
@@ -300,9 +301,14 @@ on without it rather than searching again with other words (unless you have an e
   docsBuilding: (/** @type {number} */ files) => `(The docs index is still being built, ${files.toLocaleString("en-US")} \
 files so far, so these results may be incomplete.)`,
   docsTruncated: `(Some docs folders hold more than 20,000 files; the rest aren't searched.)`,
-  longLine: (/** @type {number} */ line, /** @type {number} */ chars) =>
-    `(line ${line} is ${chars.toLocaleString("en-US")} characters long, probably minified or generated code, so only its start is shown. \
-Reading it in pieces won't work: search for the names you need instead, which shows the text around each match in a long line.)`,
+  longLine: (/** @type {number} */ line, /** @type {number} */ chars, /** @type {boolean} */ readable) => readable
+    ? `(line ${line} is ${chars.toLocaleString("en-US")} characters long, so only its start is shown. To see it whole, read just that \
+line (start_line and end_line ${line}). If it's minified or generated code, search for the names you need instead: that shows the \
+text around each match.)`
+    : `(line ${line} is ${chars.toLocaleString("en-US")} characters long, more than one read can show, probably minified or generated \
+code, so only its start is shown. Search for the names you need instead: that shows the text around each match in a long line.)`,
+  alsoDefined: (/** @type {string} */ name, /** @type {string[]} */ places) =>
+    `(${name} is also defined in ${places.join(", ")}: these are the uses of the first. Give path and line for another's.)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
     `This folder's ${file} says (it applies to files under it):\n${text}`,
   noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \

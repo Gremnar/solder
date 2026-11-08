@@ -323,8 +323,18 @@ test("minified code: a search shows the text around each match in a long line; r
     tools.roots = () => [top];
     const { output } = await tools.readFile({ path: "extension.js" }, {});
     assert.ok(output.length < 1600, `${output.length} characters`);
-    assert.match(output, /line 1 is [\d,]+ characters long, probably minified/);
+    assert.match(output, /line 1 is [\d,]+ characters long, more than one read can show/);
     assert.match(output, /\n2\tconsole\.log\(1\)/, "the lines after it are still read");
+    // A long line that isn't huge (a long string, a Markdown paragraph): shown by its start in a wide read, with
+    // how to see it whole; whole in a read of just that line.
+    const long = "Write-Host '" + "word ".repeat(700) + "end of the line'";
+    fs.writeFileSync(path.join(top, "long.ps1"), "# a script\n" + long + "\n# after\n");
+    const wide = await tools.readFile({ path: "long.ps1" }, {});
+    assert.match(wide.output, /line 2 is [\d,]+ characters long, so only its start is shown\. To see it whole, read just that line \(start_line and end_line 2\)/);
+    assert.ok(!wide.output.includes("end of the line"));
+    const one = await tools.readFile({ path: "long.ps1", start_line: 2, end_line: 2 }, {});
+    assert.ok(one.output.includes("end of the line'"), "the whole line");
+    assert.ok(!/characters long/.test(one.output));
   } finally {
     fs.rmSync(top, { recursive: true, force: true });
   }

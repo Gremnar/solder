@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-11-07)
 
+- **No text alongside tool calls.** The model now goes straight to its calls (you see each step), writing only to ask you something or flag a surprise. Less visible text in a chat also gives a model less to copy when it starts thinking out loud.
+- **Reads it already knows it needs go out together,** up to 8 in one reply, instead of one per reply: each extra reply sends the whole chat again. In a live test on a 12-module task, one model used 55% fewer tokens (1.23M to 0.54M on average) and the other about the same.
+- **Questions come with a recommendation.** When a request is unclear and reading the code can’t settle it, the model asks one to three short questions, each with the choice it would make (“createdAt (recommended), updatedAt or shippedAt?”), so you can just say yes.
+- **A long line can be read whole.** A line over 2,000 characters (a long string, a Markdown paragraph, a SQL query) is still shown by its start in a wide read, but a read of one to three lines now shows it whole, up to 30,000 characters, and the note says how.
+- **Fix: symbols with no path, for a name defined in several files, used only the first.** It now shows every definition (up to 5), or for references, names the other files where it’s defined. And for TypeScript and JavaScript functions it now finds the definition at all: VS Code names them with their parentheses there, so they never matched and fell back to text matches.
 - **edit_file forgives indentation that’s off by one even amount.** When old_text matches in one place with every line indented by the same amount more or less than the file (a deep block copied a level off), it’s applied at the file’s own depth, new_text shifted the same way, and the model is told. Uneven indentation, or tabs for spaces, is still refused rather than guessed at.
 - **A missed edit shows the file’s lines.** When old_text isn’t found but its first line is, the error includes the lines around there as they are now (up to 40), so the next try copies from them with no read in between. old_text found in several places shows each of the first three with a line either side. In a live test, both models fixed the edit straight from those lines, 4 times in 4.
 - **Several edits to one file in a reply are checked once.** The problems check waits for the last of them (up to 2.5 s saved for each of the others) and compares with the file as it was before the first, so a break that a later edit fixes is never reported. If the later edit fails, the check still runs.
