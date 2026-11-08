@@ -786,3 +786,47 @@ test("a failed summary isn't asked for again before every step of the same task"
   assert.equal(client.sent.filter((messages) => messages[0].content === TEXTS.compactionSystem).length, 1);
   assert.equal(chat.messages.at(-1).content, "answer");
 });
+
+test("a task that stops with plan steps left is asked once to carry on; a question or a second stop ends it", async () => {
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  // Stops after step 1 with nothing asked: one nudge, then it finishes.
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
+    { calls: [plan({ done: 1, notes: "A fixed." }, "p2")] },
+    { content: "I fixed A." },
+    (req) => {
+      const last = req.messages.at(-1);
+      assert.equal(last.role, "user");
+      assert.match(last.content, /The plan still has a step to do: 2\. Fix B\. Please carry on with it\./);
+      return { calls: [plan({ done: 2, notes: "B fixed." }, "p3")] };
+    },
+    { content: "Both fixed." },
+  ]);
+  const chat = Engine.newChat();
+  await engine(client, fakeHost()).ask(chat, "fix a and b");
+  assert.equal(chat.messages.at(-1).content, "Both fixed.");
+  const nudges = chat.messages.filter((m) => m.meta?.nudge);
+  assert.equal(nudges.length, 1);
+  assert.equal(nudges[0].meta.typed, "Carry on (the plan had 1 step left)");
+  // A reply that asks something isn't nudged; nor is a second stop.
+  const asking = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "q1")] },
+    { content: "Before B: should it keep the old name too?" },
+  ]);
+  const other = Engine.newChat();
+  await engine(asking, fakeHost()).ask(other, "fix a and b");
+  assert.ok(!other.messages.some((m) => m.meta?.nudge));
+  const stubborn = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "s1")] },
+    { content: "Stopping here." },
+    { content: "Still stopping." },
+  ]);
+  const third = Engine.newChat();
+  await engine(stubborn, fakeHost()).ask(third, "fix a and b");
+  assert.equal(third.messages.filter((m) => m.meta?.nudge).length, 1);
+  assert.equal(third.messages.at(-1).content, "Still stopping.");
+  // A plan from an earlier message, not touched in this one, isn't nudged about.
+  const later = fakeClient([{ content: "Hello." }]);
+  await engine(later, fakeHost()).ask(third, "something else");
+  assert.equal(third.messages.filter((m) => m.meta?.nudge).length, 1);
+});

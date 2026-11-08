@@ -9,11 +9,11 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
 
-const PINNED = "c4d6c69035804d6f";
+const PINNED = "f14a889f554bb172";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
-  notRunBatch: [[8, 5]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
+  notRunBatch: [[8, 5]], planLeft: [[[{ number: 3, goal: "Update the README" }]], [[{ number: 2, goal: "A" }, { number: 3, goal: "B" }]]], planLeftShown: [[1], [3]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
   missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
   wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]], argumentLeftOut: [[412]],

@@ -171,6 +171,10 @@ const TEXTS = {
   notRunFull: "Not run yet, only because this reply's results reached the size limit for one step. Call it again \
 in your next step, before you answer: nothing is wrong with it.",
   resume: "Please carry on from where you stopped.",
+  planLeft: (/** @type {{number: number, goal: string}[]} */ steps) => `The plan still has ${steps.length === 1 ? "a step" : steps.length + " steps"} \
+to do: ${steps.map((step) => `${step.number}. ${step.goal}`).join("; ")}. Please carry on with ${steps.length === 1 ? "it" : "them"}. If you \
+stopped on purpose (it's done another way, or you need something from me), say so instead.`,
+  planLeftShown: (/** @type {number} */ count) => `Carry on (the plan had ${count} step${count === 1 ? "" : "s"} left)`,
   resumeStopped: "Please carry on from where you stopped. I stopped it, but I didn't mean to cancel anything: run \
 again whatever was stopped or not run, then go on.",
   stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",

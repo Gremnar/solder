@@ -252,6 +252,7 @@ class Engine {
     const settings = this.settings();
     const tools = toolDefinitions();
     let rounds = 0;
+    let nudged = false;
     for (;;) {
       // Before every step, not just a new message, so a long task can't run far past the limit. Only
       // earlier turns are summarised: this one's calls carry thought signatures some models check.
@@ -281,6 +282,17 @@ class Engine {
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
       if (!reply.calls.length) {
+        // A weak model sometimes ends a planned task partway, with steps still to do and nothing asked: once per
+        // message, it's asked to carry on (or say why it stopped). Not when it asks something: that's a real stop.
+        const left = unfinishedSteps(chat);
+        if (left.length && !nudged && !asksSomething(reply.content)) {
+          nudged = true;
+          chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${TEXTS.planLeft(left)}`,
+            meta: { typed: TEXTS.planLeftShown(left.length), resume: true, nudge: true } });
+          await this._save(chat);
+          this.emit({ type: "message", chat: chat.id });
+          continue;
+        }
         this.emit({ type: "done", chat: chat.id });
         this._title(chat);
         return;
@@ -647,6 +659,24 @@ function argumentsOf(call) {
 /** A path as given, for comparing two calls' (slashes and case aside). @param {unknown} given */
 function pathKey(given) {
   return typeof given === "string" ? given.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase() : "";
+}
+
+/**
+ * The steps still to do of a plan this task has worked on (a plan call since the latest message), else [].
+ * @param {Chat} chat @returns {{number: number, goal: string}[]}
+ */
+function unfinishedSteps(chat) {
+  const plan = /** @type {any} */ (chat).plan;
+  if (!plan?.steps?.length) return [];
+  const since = chat.messages.slice(lastUser(chat));
+  if (!since.some((m) => m.role === "tool" && m.meta?.name === "plan" && !m.meta.failed)) return [];
+  return plan.steps.map((/** @type {any} */ step, /** @type {number} */ index) => ({ number: index + 1, goal: step.goal, state: step.state }))
+    .filter((/** @type {any} */ step) => step.state !== "done").map(({ number, goal }) => ({ number, goal }));
+}
+
+/** A reply that ends on a question for the user (its last lines ask something). @param {string} text */
+function asksSomething(text) {
+  return /\?/.test(String(text || "").trim().slice(-400));
 }
 
 /** Where the current turn starts: the latest message you typed (or Resume's "carry on"). @param {Chat} chat */

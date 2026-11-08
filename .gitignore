@@ -5,3 +5,4 @@ private/
 .env*
 node_modules/
 .vscode-test/
+live/results/
