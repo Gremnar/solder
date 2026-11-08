@@ -340,7 +340,7 @@ class WorkspaceTools {
     }
     const find = args.find ?? "definition";
     if (find !== "definition" && find !== "references") throw new ToolError(RESULTS.badFind);
-    const name = String(args.name).trim();
+    const name = plainName(String(args.name));
     /** @type {string[]} other places the name is declared, when none was given */
     let others = [];
     if (!args.path) {
@@ -363,7 +363,11 @@ class WorkspaceTools {
     try { document = await vscode.workspace.openTextDocument(file.uri); } catch { throw new ToolError(RESULTS.notText(file.shown)); }
     const symbols = await this.symbolsOf(document); // also gives a cold language server its moment
     const position = positionOf(document, symbols, name, args.line);
-    if (!position) throw new ToolError(RESULTS.notInFile(name, file.shown));
+    // Not in the file given: the whole workspace, as with no path (saves a search and a second call).
+    if (!position) {
+      const elsewhere = await this.symbols({ name, find }, signal);
+      return { ...elsewhere, output: RESULTS.notInFile(name, file.shown) + "\n\n" + elsewhere.output };
+    }
     const command = find === "definition" ? "vscode.executeDefinitionProvider" : "vscode.executeReferenceProvider";
     const found = locations(await deadline(vscode.commands.executeCommand(command, document.uri, position), LOOKUP_MS));
     if (!found.length) return this.textMatches(name, signal);
@@ -1329,7 +1333,7 @@ function positionOf(document, symbols, name, line) {
   const visit = (/** @type {any[]} */ list) => {
     for (const symbol of list) {
       if (declared) return;
-      if (symbol?.name === name) declared = symbol;
+      if (typeof symbol?.name === "string" && symbol.name.replace(/\s*\(.*\)$/, "") === name) declared = symbol;
       else if (Array.isArray(symbol?.children)) visit(symbol.children);
     }
   };
@@ -1912,6 +1916,16 @@ function rankNearby(wanted, found) {
     .sort((a, b) => b.s - a.s || a.p.length - b.p.length || a.order - b.order).map((x) => x.p);
 }
 
+/**
+ * The name a lookup means: "parseRow()" is parseRow, and "Parser.parse" (or Parser::parse, Parser#parse) is the
+ * member, parse. @param {string} given
+ */
+function plainName(given) {
+  const name = given.trim().replace(/\s*\(.*\)$/, "");
+  const member = /^[\w$]+(?:\.|::|#)([\w$]+)$/.exec(name);
+  return member ? member[1] : name;
+}
+
 /** Lines from..to (0-based, end excluded) as read_file shows them: number, tab, text (a long one cut). */
 function numbered(/** @type {string[]} */ lines, /** @type {number} */ from, /** @type {number} */ to) {
   return lines.slice(from, to).map((line, k) => `${from + k + 1}\t${line.length > 300 ? line.slice(0, 300) + "…" : line}`).join("\n");
@@ -1997,4 +2011,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainName, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

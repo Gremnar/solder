@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 (2026-11-07)
 
+- **symbols looks across the workspace when the name isn’t in the file given,** and says so, instead of an error asking for another try; and it reads “parseRow()” and “Parser.parse” as the names they mean. In a live test, both models answered from that one call, 4 times in 4.
 - **A missed edit finds the closest lines by voting.** Each line of old_text found in the file points to where old_text would start; the place most of them point to is shown (“2 of its 3 lines match there”), so a generic first line (a closing brace) no longer shows the wrong function, and a wrong first line no longer shows nothing. When it’s a tie, nothing is shown rather than a guess. In a live test with the first line changed under the model, both models fixed the edit straight from those lines, 4 times in 4.
 - **old_text copied with read_file’s line numbers** (“12	…”) is matched without them, as a last try, and the model is told. A trailing line break on old_text no longer stops the forgiving matches.
 - **A wrong path names the files that exist.** A path that isn’t there gets the files of that name in the workspace (any case, node_modules aside, most alike first), or the same name with another extension; a folder given as a file lists what’s in it. Only suggested: nothing is read or changed in their place.

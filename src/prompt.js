@@ -275,7 +275,7 @@ change was undone in the editor too. Read it again before trying anything else.`
   notWritable: (/** @type {string} */ file) => `${file} couldn't be written: it may be read-only, or locked by another program.`,
   sameContent: (/** @type {string} */ file) => `${file} already has exactly that content, so nothing changed.`,
   notInFile: (/** @type {string} */ name, /** @type {string} */ file) =>
-    `${name} doesn't appear in ${file} as a whole word. Give a file it appears in (search finds one).`,
+    `${name} doesn't appear in ${file} as a whole word, so the whole workspace was looked in instead:`,
   definitions: (/** @type {string} */ name, /** @type {number} */ count) =>
     `${name} is defined in ${count === 1 ? "one place" : `${count} places`}:`,
   references: (/** @type {string} */ name, /** @type {number} */ count, /** @type {number} */ files) =>

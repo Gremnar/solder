@@ -69,6 +69,19 @@ test("a symbol's position: the given line, else where the outline declares it, e
   assert.deepEqual(positionOf(document, declared, "total"), new Position(3, 2));
   assert.deepEqual(positionOf(document, [], "total"), new Position(0, 6), "not inside subtotal or total2");
   assert.equal(positionOf(document, [], "missing"), null);
+  // An outline that names it with its parentheses (as TypeScript's workspace symbols do) still counts.
+  assert.deepEqual(positionOf(document, [{ ...declared[0], name: "total()" }], "total"), new Position(3, 2));
+});
+
+test("a symbols name as meant: parentheses and a container are left off", () => {
+  const { plainName } = require("../src/tools.js");
+  assert.equal(plainName("parseRow()"), "parseRow");
+  assert.equal(plainName(" parseRow(line: string) "), "parseRow");
+  assert.equal(plainName("Parser.parse"), "parse");
+  assert.equal(plainName("Parser::parse"), "parse");
+  assert.equal(plainName("Parser#parse"), "parse");
+  assert.equal(plainName("Get-Report"), "Get-Report");
+  assert.equal(plainName("a.b.c"), "a.b.c", "a longer dotted name is left as it is");
 });
 
 test("Location and LocationLink results come out the same, without repeats", () => {
