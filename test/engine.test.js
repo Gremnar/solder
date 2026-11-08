@@ -677,3 +677,47 @@ test("plan: done before any plan says so; a plan alone isn't a step to approve",
   assert.match(chat.messages.find((m) => m.tool_call_id === "p1").content, /no plan yet/);
   assert.ok(!events.some((e) => e.type === "approval"));
 });
+
+test("plan: a step marked done after the next step's first read leaves that read alone", async () => {
+  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
+  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
+    // the next step's read first, then step 1 marked done, in one reply
+    { calls: [call("r2", "read_file", { path: "b.js" }), plan({ done: 1, notes: "a.js fixed." }, "p2")] },
+    { calls: [call("r3", "read_file", { path: "c.js" })] },
+    (req) => {
+      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
+      assert.match(results.r1, /^\(Step 1 is done/);
+      assert.match(results.r2, /^b\.js x/, "the read in the reply that finished step 1 isn't step 1's");
+      return { content: "done" };
+    },
+  ]);
+  await engine(client, host).ask(Engine.newChat(), "fix a and b");
+});
+
+test("several edits to one file in a reply: the problems check waits for the last; one that's left waiting is settled", async () => {
+  const seen = [];
+  const host = fakeHost();
+  host.runTool = async (name, args, ctx) => {
+    seen.push([name, args.path, ctx.edit]);
+    if (args.old_text === "bad") return { output: "Error: old_text wasn't found", summary: "x", failed: true };
+    return { output: `${name} ok`, summary: "Edited" };
+  };
+  host.settleEdits = async (group) => group === "e1" ? [{ path: "src/a.js", text: "\nNew problems in src/a.js", summary: " · 1 new problem" }] : [];
+  const edit = (id, p, old) => call(id, "edit_file", { path: p, old_text: old, new_text: "y" });
+  const client = fakeClient([
+    { calls: [edit("e1", "src/a.js", "1"), edit("e2", "src\\A.js", "2"), edit("e3", "src/b.js", "3"), edit("e4", "./src/a.js", "bad")] },
+    { content: "ok" },
+  ]);
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "edit");
+  assert.deepEqual(seen.map(([, p, hint]) => [p, hint]), [
+    ["src/a.js", { group: "e1", more: true }], ["src\\A.js", { group: "e1", more: true }],
+    ["src/b.js", { group: "e1", more: false }], ["./src/a.js", { group: "e1", more: false }]]);
+  // e4 failed: a.js's waiting check goes with its last edit that ran (e2)
+  const e2 = chat.messages.find((m) => m.tool_call_id === "e2");
+  assert.match(e2.content, /New problems in src\/a\.js$/);
+  assert.equal(e2.meta.summary, "Edited · 1 new problem");
+});

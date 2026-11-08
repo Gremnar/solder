@@ -65,7 +65,8 @@ function estimate(text) {
  *   keep: text that rides with the output but isn't output (a folder's AGENTS.md): never cut away
  * @typedef {{
  *   systemPrompt(chat: Chat): Promise<string>,
- *   runTool(name: string, args: any, ctx: {chat: Chat, signal: AbortSignal}): Promise<ToolResult>,
+ *   runTool(name: string, args: any, ctx: {chat: Chat, signal: AbortSignal, edit?: {group: string, more: boolean}}): Promise<ToolResult>,
+ *   settleEdits?(group: string): Promise<{path: string, text: string, summary: string}[]>,
  *   needsApproval(name: string, args: any): string | null,
  *   save(chat: Chat): Promise<void>,
  * }} Host
@@ -311,6 +312,9 @@ class Engine {
     const added = [];
     let batchChars = 0;
     const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
+    // Several edits to one file in a reply: its problems are checked once, after the last of them.
+    const group = calls[0]?.id || "";
+    const editsTo = calls.map((other) => other.function.name === "edit_file" ? pathKey(argumentsOf(other).path) : "");
     for (let index = 0; index < calls.length; index++) {
       const call = calls[index];
       const name = call.function.name;
@@ -331,7 +335,8 @@ class Engine {
         result = { output: TEXTS.repeat, summary: "Not run again: " + label, failed: true };
       } else {
         seen.add(fingerprint(name, parsed.args));
-        result = await this._runOne(chat, call.id, name, parsed.args, label, signal);
+        const more = !!editsTo[index] && editsTo.slice(index + 1, limit).includes(editsTo[index]);
+        result = await this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);
         if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;
         if (signal.aborted) skip = TEXTS.notRunStopped;
       }
@@ -347,6 +352,14 @@ class Engine {
       added.push(message);
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
+    }
+    // A file's problems still waiting (its later edit failed or didn't run) go with its last edit that ran.
+    for (const left of this.host.settleEdits ? await this.host.settleEdits(group) : []) {
+      const message = [...added].reverse().find((m) => m.meta?.name === "edit_file" && !m.meta.failed
+        && editsTo[calls.findIndex((c) => c.id === m.tool_call_id)] === pathKey(left.path));
+      if (!message) continue;
+      message.content += left.text;
+      message.meta.summary += left.summary;
     }
     // Notes ride on the last result: the step limit near, and anything you typed meanwhile.
     const last = added[added.length - 1];
@@ -371,7 +384,7 @@ class Engine {
 
   /** One call: asked about first when it must be, then run. @returns {Promise<ToolResult>} */
   async _runOne(/** @type {Chat} */ chat, /** @type {string} */ id, /** @type {string} */ name, /** @type {any} */ args,
-    /** @type {string} */ label, /** @type {AbortSignal} */ signal) {
+    /** @type {string} */ label, /** @type {AbortSignal} */ signal, /** @type {{group: string, more: boolean} | undefined} */ edit) {
     if (name === "plan") return planStep(chat, id, args); // the engine's own: nothing on disk, nothing to approve
     const reason = this.host.needsApproval(name, args);
     let note = "";
@@ -393,7 +406,7 @@ class Engine {
     const began = Date.now();
     let result;
     try {
-      const work = this.host.runTool(name, args, { chat, signal });
+      const work = this.host.runTool(name, args, edit ? { chat, signal, edit } : { chat, signal });
       // Stop ends the wait for a tool that only looks (a slow search, a cold language server) at once. One that
       // changes files is let finish, so Undo knows what it did.
       result = READ_ONLY.has(name) ? await untilStopped(work, signal) : await work;
@@ -607,6 +620,16 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   return out.filter((m) => m.role !== "tool" || offered.has(m.tool_call_id));
 }
 
+/** A call's arguments, or {} when they aren't JSON. @param {any} call */
+function argumentsOf(call) {
+  try { const args = JSON.parse(call.function?.arguments || "{}"); return args && typeof args === "object" ? args : {}; } catch { return {}; }
+}
+
+/** A path as given, for comparing two calls' (slashes and case aside). @param {unknown} given */
+function pathKey(given) {
+  return typeof given === "string" ? given.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase() : "";
+}
+
 /** Where the current turn starts: the latest message you typed (or Resume's "carry on"). @param {Chat} chat */
 function lastUser(chat) {
   for (let index = chat.messages.length - 1; index >= 0; index--) if (chat.messages[index].role === "user") return index;
@@ -659,7 +682,9 @@ function planStep(chat, id, args) {
     if (!step) return { output: PLAN.badStep(current.steps.length), summary: "Plan · no such step", failed: true };
     step.state = "done";
     step.notes = String(args.notes ?? "").trim().slice(0, 1500);
-    step.endCall = id;
+    // The step ends where the reply that finishes it begins: its other calls may already be the next step's.
+    const reply = [...chat.messages].reverse().find((m) => m.role === "assistant" && m.tool_calls?.some((c) => c.id === id));
+    step.endCall = reply?.tool_calls?.[0]?.id || id;
     step.startCall ??= id;
     const next = current.steps.find((/** @type {any} */ other) => other.state === "todo");
     if (next && !current.steps.some((/** @type {any} */ other) => other.state === "doing")) { next.state = "doing"; next.startCall = id; }

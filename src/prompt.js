@@ -318,9 +318,10 @@ searching again with other words.`,
   emptyOldText: "old_text is empty; use write_file to replace a whole file.",
   manyMatches: (/** @type {number} */ count, /** @type {string} */ file, /** @type {number[]} */ lines) =>
     `old_text appears ${count} times in ${file} (at lines ${lines.join(", ")}); include more surrounding lines to make it unique.`,
-  notFound: (/** @type {string} */ file, /** @type {number} */ firstLineAt) => `old_text wasn't found in ${file}.` + (firstLineAt > 0
-    ? ` Its first line appears at line ${firstLineAt}, but the lines after it differ: read the file again around there and copy the text exactly.`
+  notFound: (/** @type {string} */ file, /** @type {number} */ firstLineAt, /** @type {number} */ shownTo) => `old_text wasn't found in ${file}.` + (firstLineAt > 0
+    ? ` Its first line appears at line ${firstLineAt}, but the lines after it differ. Lines ${Math.max(1, firstLineAt - 2)}-${shownTo} as they are now, to copy old_text from exactly:`
     : " Read the file again and copy the text exactly."),
+  reindented: (/** @type {string} */ amount, /** @type {boolean} */ less) => `old_text was indented ${amount} ${less ? "less" : "more"} than the file there, so it was matched with that difference and new_text was shifted the same way.`,
   notApplied: (/** @type {string} */ file) => `VS Code didn't apply the change to ${file}.`,
   edited: (/** @type {string} */ file, /** @type {number} */ removed, /** @type {number} */ added, /** @type {number} */ from) =>
     `Edited ${file}: replaced ${removed} line${removed === 1 ? "" : "s"} with ${added}, from line ${from}.`,

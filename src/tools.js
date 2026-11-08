@@ -66,7 +66,15 @@ const MAX_REMOVE_BACKUP_BYTES = 200 * 1024 * 1024;
 const BACKUP_GONE = "That step's backup was cleared to keep Solder's storage under its limit (Storage limit in the settings), so it can't be undone.";
 const MAX_REMOVE_BACKUP_FILES = 20_000;
 
-class ToolError extends Error {}
+class ToolError extends Error {
+  /** @param {string} message @param {string} [detail] more for the model (such as the file's lines), not for the step's line */
+  constructor(message, detail = "") { super(message); this.detail = detail; }
+}
+
+/** A missed edit shows at most this many of the file's lines around where it was meant to go. */
+const MISS_LINES = 40;
+/** ... and old_text found in several places, this many of them, with a line either side. */
+const MISS_PLACES = 3;
 
 class WorkspaceTools {
   /** @param {vscode.ExtensionContext} context */
@@ -88,6 +96,8 @@ class WorkspaceTools {
     }));
     /** The chat's working folder, relative to the workspace folder ("" for the workspace folder itself). */
     this.folder = "";
+    /** Edits whose problems check waits for a later edit to the same file in the same reply. @type {Map<string, any>} */
+    this._pendingProblems = new Map();
   }
 
   /** The first workspace folder ("" when none is open). */
@@ -210,7 +220,7 @@ class WorkspaceTools {
         case "changes": return await this.changes(args, ctx.signal);
         case "search": return await this.search(args, ctx.signal);
         case "find_files": return await this.findFiles(args);
-        case "edit_file": return await this.editFile(args, ctx.chat);
+        case "edit_file": return await this.editFile(args, ctx.chat, ctx.edit);
         case "write_file": return await this.writeFile(args, ctx.chat);
         case "remove_item": return await this.removeItem(args, ctx.chat);
         case "move_item": return await this.moveItem(args);
@@ -218,7 +228,7 @@ class WorkspaceTools {
         default: throw new ToolError(RESULTS.noTool(name));
       }
     } catch (error) {
-      if (error instanceof ToolError) return { output: RESULTS.error(error.message), summary: `${name}: ${error.message}`, failed: true };
+      if (error instanceof ToolError) return { output: RESULTS.error(error.message) + (error.detail ? "\n" + error.detail : ""), summary: `${name}: ${error.message}`, failed: true };
       throw error;
     }
   }
@@ -822,7 +832,12 @@ class WorkspaceTools {
 
   // ------------------------------------------------------------------ edit_file --
 
-  async editFile(/** @type {any} */ args, /** @type {any} */ chat) {
+  /**
+   * @param {any} args @param {any} chat
+   * @param {{group: string, more: boolean}} [hint] the reply this edit is in, and whether it edits this file again later
+   * (then the problems check waits for that last edit, against the file as it was before the first)
+   */
+  async editFile(args, chat, hint) {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
     const document = await vscode.workspace.openTextDocument(file.uri);
@@ -835,26 +850,43 @@ class WorkspaceTools {
     if (old === replacement) throw new ToolError(RESULTS.sameText);
     let start = -1;
     let length = old.length;
+    let replaced = replacement;
+    let shiftNote = "";
     const count = occurrences(text, old);
     if (count === 1) start = text.indexOf(old);
     else if (count > 1) {
       const lines = positions(text, old).map((index) => lineOf(text, index));
-      throw new ToolError(RESULTS.manyMatches(count, file.shown, lines.slice(0, 10)));
+      throw new ToolError(RESULTS.manyMatches(count, file.shown, lines.slice(0, 10)), aroundPlaces(text, lines, eol));
     } else {
       const loose = looseMatch(text, old, eol);
-      if (!loose) throw new ToolError(notFound(file.shown, text, old, eol));
-      [start, length] = loose;
+      if (loose) [start, length] = loose;
+      else {
+        // The same lines, all indented by the same amount more or less (a deep block copied a level off):
+        // that shift, and new_text shifted the same way. Anything uneven is refused, with the lines to copy from.
+        const moved = shiftedMatch(text, old, eol);
+        const shifted = moved && shiftLines(replacement, moved.shift, eol);
+        if (!moved || shifted === null) throw notFound(file.shown, text, old, eol);
+        [start, length, replaced] = [moved.start, moved.length, shifted];
+        shiftNote = " " + RESULTS.reindented(...describeShift(moved.shift));
+      }
     }
-    const before = problemKeys(file.uri);
+    const key = file.full.toLowerCase();
+    const waiting = hint && this._pendingProblems.get(key);
+    const before = waiting && waiting.group === hint.group ? waiting.before : problemKeys(file.uri);
     const backup = await this.backup(chat, file, text);
     const edit = new vscode.WorkspaceEdit();
-    edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replacement);
+    edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replaced);
     if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
     await saveOrRevert(document, file, text);
     const removed = lineCount(old);
-    const added = lineCount(replacement);
-    const problems = await this.newProblems(file, before);
-    return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : ""),
+    const added = lineCount(replaced);
+    let problems = { text: "", summary: "" };
+    if (hint?.more) this._pendingProblems.set(key, { group: hint.group, before, file, given: String(args.path) });
+    else {
+      this._pendingProblems.delete(key);
+      problems = await this.newProblems(file, before);
+    }
+    return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + shiftNote + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: false, after: hash(document.getText()) } };
   }
@@ -952,6 +984,21 @@ class WorkspaceTools {
       });
       function done() { clearTimeout(timer); listener.dispose(); resolve(heard); }
     });
+  }
+
+  /**
+   * The problems checks still waiting from this reply (its later edit to the file failed or didn't run).
+   * @param {string} group @returns {Promise<{path: string, text: string, summary: string}[]>}
+   */
+  async settleEdits(group) {
+    const out = [];
+    for (const [key, waiting] of [...this._pendingProblems]) {
+      if (waiting.group !== group) continue;
+      this._pendingProblems.delete(key);
+      const problems = await this.newProblems(waiting.file, waiting.before);
+      if (problems.text) out.push({ path: waiting.given, ...problems });
+    }
+    return out;
   }
 
   /** The file's errors that weren't there before the change (VS Code's language servers need a moment). */
@@ -1681,10 +1728,90 @@ function looseMatch(/** @type {string} */ text, /** @type {string} */ old, /** @
   return [start, length];
 }
 
+/**
+ * old_text wasn't there: where its first line is, with the file's lines around it (so the next try can copy them,
+ * with no read in between). @returns {ToolError}
+ */
 function notFound(/** @type {string} */ shown, /** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
   const first = old.split(eol).find((line) => line.trim());
-  const at = first ? text.split(eol).findIndex((line) => line.trim() === first.trim()) : -1;
-  return RESULTS.notFound(shown, at + 1);
+  const lines = text.split(eol);
+  const at = first ? lines.findIndex((line) => line.trim() === first.trim()) : -1;
+  if (at < 0) return new ToolError(RESULTS.notFound(shown, 0, 0));
+  const from = Math.max(0, at - 2);
+  const to = Math.min(lines.length, at + old.split(eol).length + 3, from + MISS_LINES);
+  return new ToolError(RESULTS.notFound(shown, at + 1, to), numbered(lines, from, to));
+}
+
+/** Lines from..to (0-based, end excluded) as read_file shows them: number, tab, text (a long one cut). */
+function numbered(/** @type {string[]} */ lines, /** @type {number} */ from, /** @type {number} */ to) {
+  return lines.slice(from, to).map((line, k) => `${from + k + 1}\t${line.length > 300 ? line.slice(0, 300) + "…" : line}`).join("\n");
+}
+
+/** old_text found in several places: the first few, a line either side, so the next try can add what's unique. */
+function aroundPlaces(/** @type {string} */ text, /** @type {number[]} */ at, /** @type {string} */ eol) {
+  const lines = text.split(eol);
+  return at.slice(0, MISS_PLACES).map((line) => numbered(lines, Math.max(0, line - 2), Math.min(lines.length, line + 1))).join("\n…\n");
+}
+
+/**
+ * old_text with every line indented by the same amount more or less than the file's, matching in one place only.
+ * @returns {{start: number, length: number, shift: {add?: string, remove?: string}} | null}
+ */
+function shiftedMatch(/** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
+  const lines = text.split(eol);
+  const want = old.split(eol).map((line) => line.trimEnd());
+  const first = want.findIndex((line) => line);
+  if (first < 0) return null;
+  /** @type {{at: number, shift: any} | null} */
+  let hit = null;
+  for (let i = 0; i + want.length <= lines.length; i++) {
+    const have = lines[i + first].trimEnd();
+    if (have.trimStart() !== want[first].trimStart()) continue;
+    const shift = shiftBetween(indentOf(want[first]), indentOf(have));
+    if (!shift) continue;
+    if (!want.every((line, k) => { const there = lines[i + k].trimEnd(); return line ? shiftLine(line, shift) === there : there === ""; })) continue;
+    if (hit) return null; // more than one place: not a guess to make
+    hit = { at: i, shift };
+  }
+  if (!hit) return null;
+  const start = lines.slice(0, hit.at).reduce((sum, line) => sum + line.length + eol.length, 0);
+  return { start, length: lines.slice(hit.at, hit.at + want.length).join(eol).length, shift: hit.shift };
+}
+
+function indentOf(/** @type {string} */ line) { return /^[ \t]*/.exec(line)?.[0] ?? ""; }
+
+/** From old_text's indentation to the file's: a prefix to add, or one to take off. Tabs for spaces isn't a shift. */
+function shiftBetween(/** @type {string} */ from, /** @type {string} */ to) {
+  if (from === to) return null;
+  if (to.endsWith(from)) return { add: to.slice(0, to.length - from.length) };
+  if (from.endsWith(to)) return { remove: from.slice(0, from.length - to.length) };
+  return null;
+}
+
+/** @param {string} line @param {{add?: string, remove?: string}} shift @returns {string | null} */
+function shiftLine(line, shift) {
+  if (shift.add !== undefined) return shift.add + line;
+  return line.startsWith(/** @type {string} */ (shift.remove)) ? line.slice(/** @type {string} */ (shift.remove).length) : null;
+}
+
+/** new_text shifted as old_text was (blank lines left alone); null when a line can't be. @returns {string | null} */
+function shiftLines(/** @type {string} */ text, /** @type {{add?: string, remove?: string}} */ shift, /** @type {string} */ eol) {
+  const out = [];
+  for (const line of text.split(eol)) {
+    if (!line.trim()) { out.push(line); continue; }
+    const moved = shiftLine(line, shift);
+    if (moved === null) return null;
+    out.push(moved);
+  }
+  return out.join(eol);
+}
+
+/** @param {{add?: string, remove?: string}} shift @returns {[string, boolean]} the amount, in words, and whether old_text had less */
+function describeShift(shift) {
+  const chars = shift.add ?? shift.remove ?? "";
+  const kind = /^ +$/.test(chars) ? "space" : /^\t+$/.test(chars) ? "tab" : "";
+  const amount = kind ? `${chars.length} ${kind}${chars.length === 1 ? "" : "s"}` : "a mix of tabs and spaces";
+  return [amount, shift.add !== undefined];
 }
 
 function keyOf(/** @type {vscode.Diagnostic} */ d) {
@@ -1700,4 +1827,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

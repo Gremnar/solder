@@ -329,3 +329,42 @@ test("minified code: a search shows the text around each match in a long line; r
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("edit_file's matching: one uniform indentation shift is forgiven, and new_text shifted with it; anything else isn't", () => {
+  const { shiftedMatch, shiftLines, looseMatch } = require("../src/tools.js");
+  const file = "function a() {\n    if (x) {\n        call(1);\n        call(2);\n    }\n}\n";
+  // old_text two spaces short on every line
+  const old = "  if (x) {\n      call(1);";
+  assert.equal(looseMatch(file, old, "\n"), null);
+  const hit = shiftedMatch(file, old, "\n");
+  assert.ok(hit);
+  assert.equal(file.slice(hit.start, hit.start + hit.length), "    if (x) {\n        call(1);");
+  assert.deepEqual(hit.shift, { add: "  " });
+  assert.equal(shiftLines("  if (y) {\n\n      call(3);", hit.shift, "\n"), "    if (y) {\n\n        call(3);");
+  // too deep: taken off; a new_text line that can't lose it is refused
+  const deep = shiftedMatch(file, "      if (x) {\n          call(1);", "\n");
+  assert.deepEqual(deep && deep.shift, { remove: "  " });
+  assert.equal(shiftLines(" x", deep.shift, "\n"), null);
+  // uneven, tabs for spaces, or in two places: no guess
+  assert.equal(shiftedMatch(file, "  if (x) {\n        call(1);", "\n"), null);
+  assert.equal(shiftedMatch(file, "\tif (x) {\n\t\tcall(1);", "\n"), null);
+  assert.equal(shiftedMatch("  a\n  b\n    a\n    b\n", "a\nb", "\n"), null);
+  // tabs, one level short
+  const tabs = "x {\n\t\tdo();\n\t\tthen();\n}\n";
+  assert.deepEqual(shiftedMatch(tabs, "\tdo();\n\tthen();", "\n")?.shift, { add: "\t" });
+});
+
+test("a missed edit shows the file's lines around where it was meant to go; several places show each", () => {
+  const { notFound, aroundPlaces } = require("../src/tools.js");
+  const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+  lines[29] = "    target();";
+  const error = notFound("a.js", lines.join("\n"), "target();\nnot there", "\n");
+  assert.match(error.message, /first line appears at line 30, .*Lines 28-34 as they are now/);
+  assert.equal(error.detail.split("\n")[0], "28\tline 28");
+  assert.equal(error.detail.split("\n")[2], "30\t    target();");
+  assert.equal(error.detail.split("\n").length, 7);
+  const none = notFound("a.js", lines.join("\n"), "nowhere", "\n");
+  assert.equal(none.detail, "");
+  assert.match(none.message, /Read the file again/);
+  assert.equal(aroundPlaces("a\nx\nb\nx\nc", [2, 4], "\n"), "1\ta\n2\tx\n3\tb\n…\n3\tb\n4\tx\n5\tc");
+});

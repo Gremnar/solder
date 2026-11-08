@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **edit_file forgives indentation that’s off by one even amount.** When old_text matches in one place with every line indented by the same amount more or less than the file (a deep block copied a level off), it’s applied at the file’s own depth, new_text shifted the same way, and the model is told. Uneven indentation, or tabs for spaces, is still refused rather than guessed at.
+- **A missed edit shows the file’s lines.** When old_text isn’t found but its first line is, the error includes the lines around there as they are now (up to 40), so the next try copies from them with no read in between. old_text found in several places shows each of the first three with a line either side. In a live test, both models fixed the edit straight from those lines, 4 times in 4.
+- **Several edits to one file in a reply are checked once.** The problems check waits for the last of them (up to 2.5 s saved for each of the others) and compares with the file as it was before the first, so a break that a later edit fixes is never reported. If the later edit fails, the check still runs.
+- **Fix: a plan step marked done in the same reply as the next step’s first reads swallowed those reads.** A step now ends where the reply that finishes it begins.
+- The “Writing …” line finds the file a call is about near the call’s start only, and before its content (whose text may hold a “path” of its own), instead of rescanning the whole call as it streams in.
 - **A used-up allowance is recognised from the gateway’s words too.** A 429 that says its credit limit or quota is reached now counts as used up even without an allowance header or a long Retry-After: it isn’t retried, it shows as used up (with Resume for after the reset), and the status bar’s allowance goes to 0. The limit and the reset time are read from the message when no header gives them (“500/500 credits used … reset is in 3h 12m”), and the message says when it resets: “The allowance is used up (500 credits). It resets in about 3 hours, at 4:12 PM.” A 429 that asks for a short wait is still retried, even if it says quota.
 
 ## 0.2.1 (2026-11-06)

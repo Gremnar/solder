@@ -28,6 +28,8 @@ const TRANSIENT_HTTP = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523
 const BUSY_HTTP = new Set([429, 503]); // turned away before the model saw it: safe to resend
 const BACKOFF_MS = [1000, 4000, 8000];
 const MAX_RETRY_AFTER_MS = 60_000;
+/** How far into a call being written its path is looked for. */
+const PATH_LOOK_CHARS = 2_000;
 /** A 429 that asks to wait longer than this is an allowance used up, not a busy moment. */
 const EXHAUSTED_WAIT_MS = 10 * 60_000;
 const MAX_EVENT_BYTES = 256 * 1024;
@@ -429,6 +431,8 @@ class ChatStream {
    *   pieces arrive (from gateways that stream them; others send each call whole, at the end)
    */
   constructor(emit, onCalls = () => {}) {
+    /** @type {Map<number, string>} each call's path, once found */
+    this.paths = new Map();
     this.emit = emit;
     this.onCalls = onCalls;
     this.text = "";
@@ -475,8 +479,7 @@ class ChatStream {
         this.calls.set(index, entry);
       }
       if (pieces.length) {
-        this.onCalls([...this.calls.values()].map((call) => ({ name: call.name, chars: call.arguments.length,
-          path: (/"(?:path|to)"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(call.arguments)?.[1] ?? "").replace(/\\\\/g, "\\") })));
+        this.onCalls([...this.calls.entries()].map(([index, call]) => ({ name: call.name, chars: call.arguments.length, path: this._pathOf(index, call) })));
       }
       for (const text of [delta.content, delta.refusal]) {
         if (typeof text === "string" && text) {
@@ -496,6 +499,23 @@ class ChatStream {
       }
     }
     return false;
+  }
+
+  /**
+   * The file a call being written is about, for "Writing …": looked for near its start only (a call can be
+   * megabytes, and arrive in thousands of pieces), before any "content" (whose text may hold a "path" of its own),
+   * and kept once found. @param {number} index @param {any} call
+   */
+  _pathOf(index, call) {
+    const known = this.paths.get(index);
+    if (known) return known;
+    const head = call.arguments.slice(0, PATH_LOOK_CHARS);
+    const found = /"(?:path|to)"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(head);
+    const content = head.indexOf('"content"');
+    if (!found || (content !== -1 && content < found.index)) return "";
+    const path = found[1].replace(/\\\\/g, "\\");
+    this.paths.set(index, path);
+    return path;
   }
 
   finish() {

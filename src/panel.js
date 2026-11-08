@@ -111,6 +111,7 @@ class SolderPanel {
       systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
         rules: vscode.workspace.getConfiguration("solder").get("rules", ""), docs: this.tools.docsFolders() }),
       runTool: (/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) => this.tools.run(name, args, ctx),
+      settleEdits: (/** @type {string} */ group) => this.tools.settleEdits(group),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
       save: (/** @type {any} */ chat) => this.store.save(chat),
     };
