@@ -27,7 +27,8 @@ class SettingsScreen {
   }
 
   async open() {
-    await policy.refresh().catch(() => {});
+    // Read the policy again; if it changed, the panel follows it too (its connection, models and docs).
+    if (await policy.refresh().catch(() => false)) this.hooks.policyChanged?.();
     this.view = { open: true, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
     // While it's open, the docs index's progress keeps the screen current.
     clearInterval(this.timer);
@@ -141,6 +142,7 @@ class SettingsScreen {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 30_000);
           let ids;
+          policy.gate();
           try { ids = await new GatewayClient({ endpoint: String(config.get("endpoint", "")), apiKey: key }).models(controller.signal); }
           finally { clearTimeout(timer); }
           this.view.checking = false;

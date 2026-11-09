@@ -102,3 +102,27 @@ test("a policy that can't be read fails closed; off Windows there's none", async
   assert.equal(await later.refresh(), true);
   assert.equal(later.error, "");
 });
+
+test("the gate: nothing connects while the policy can't be read", async () => {
+  const broken = new Policy({ platform: "win32", read: async () => { throw new Error("x"); } });
+  await broken.refresh();
+  assert.throws(() => broken.gate(), /couldn't be read/);
+  const fine = await policyWith({});
+  assert.doesNotThrow(() => fine.gate());
+});
+
+test("reg.exe: a key that isn't there is no policy; one that can't be exported fails closed (even with TEMP pointed away)",
+  { skip: process.platform !== "win32" }, async () => {
+    const { readKey } = require("../src/policy.js");
+    assert.equal(await readKey("HKCU\\SOFTWARE\\SolderNoSuchPolicyKey"), null);
+    const temp = process.env.TEMP;
+    const tmp = process.env.TMP;
+    try {
+      process.env.TEMP = process.env.TMP = "C:\\this-folder-does-not-exist-solder";
+      await assert.rejects(readKey("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"), /couldn't export it/);
+      assert.equal(await readKey("HKCU\\SOFTWARE\\SolderNoSuchPolicyKey"), null, "and a missing key is still just missing");
+    } finally {
+      process.env.TEMP = temp;
+      process.env.TMP = tmp;
+    }
+  });

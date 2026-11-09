@@ -444,3 +444,54 @@ test("a missing path suggests the files most like it; a folder read lists it; a 
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("edit_file: old_text that loosely matches two places is refused, not matched somewhere else by its indentation", () => {
+  const { locate, ToolError } = require("../src/tools.js");
+  assert.throws(() => locate("a.txt", "foo   \nfoo  \n  foo \n", "foo    ", "bar", "\n"), (e) => e instanceof ToolError && /appears 2 times/.test(e.message));
+  assert.throws(() => locate("a.txt", "  foo \n  foo  \n    foo\n", "  foo\t", "  bar", "\n"), /appears 2 times/);
+  // one loose match is still fine, and so is one shifted one
+  assert.ok(locate("a.txt", "foo  \nbar\n", "foo", "baz", "\n"));
+  assert.ok(locate("a.txt", "x {\n    do();\n}\n", "  do();", "  done();", "\n"));
+});
+
+test("a missed edit whose first line is a wrong extra one still finds the place", () => {
+  const { notFound } = require("../src/tools.js");
+  const error = notFound("a.js", "first line of file\nsecond line of file\nthird\n", "// a wrong extra line\nfirst line of file\nsecond line of file", "\n");
+  assert.match(error.message, /closest place is around lines 1-/);
+  assert.match(error.detail, /^1\tfirst line of file/);
+});
+
+test("the search fallback (no ripgrep) reads a folder glob as everything in it", async () => {
+  const { WorkspaceTools } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-fallback-"));
+  try {
+    fs.mkdirSync(path.join(top, "src", "a"), { recursive: true });
+    fs.writeFileSync(path.join(top, "src", "a", "x.js"), "say hi\n");
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [top];
+    for (const glob of ["src", "src/", "*.js"]) {
+      const lines = await tools.searchInJs(top, "hi", false, glob);
+      assert.equal(lines.length, 1, `glob ${glob}: ${JSON.stringify(lines)}`);
+    }
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("a folder's tree stamp changes when anything in it does", () => {
+  const { treeStamp } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-tree-"));
+  try {
+    fs.mkdirSync(path.join(top, "sub"));
+    fs.writeFileSync(path.join(top, "sub", "a.txt"), "one");
+    const first = treeStamp(top);
+    assert.equal(treeStamp(top), first, "nothing changed");
+    fs.writeFileSync(path.join(top, "b.txt"), "new");
+    assert.notEqual(treeStamp(top), first, "a file added");
+    const second = treeStamp(top);
+    fs.writeFileSync(path.join(top, "sub", "a.txt"), "one, and more");
+    assert.notEqual(treeStamp(top), second, "a file changed");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});

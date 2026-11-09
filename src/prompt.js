@@ -321,6 +321,7 @@ line (start_line and end_line ${line}). If it's minified or generated code, sear
 text around each match.)`
     : `(line ${line} is ${chars.toLocaleString("en-US")} characters long, more than one read can show, probably minified or generated \
 code, so only its start is shown. Search for the names you need instead: that shows the text around each match in a long line.)`,
+  outsideNotShown: "(outside the workspace and your docs folders, so not shown: read_file it to see it, which asks the user first)",
   alsoDefined: (/** @type {string} */ name, /** @type {string[]} */ places) =>
     `(${name} is also defined in ${places.join(", ")}: these are the uses of the first. Give path and line for another's.)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>

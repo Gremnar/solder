@@ -98,6 +98,7 @@ async function checkConnection(context, output) {
   const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
   let client;
   try {
+    policy.gate();
     client = new GatewayClient({ endpoint: config.get("endpoint", ""),
       apiKey: (await context.secrets.get(KEY)) ?? "" });
   } catch (error) {

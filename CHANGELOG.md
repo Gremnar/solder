@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6 (2026-11-08)
+
+A bug-fix round: 18 bugs found by five independent reviews, each checked against the code before it was fixed.
+
+- **Organization policy really fails closed now.** A `reg.exe` export that failed for any reason other than a missing key (access denied, or a temp folder that can’t be written, which a user could arrange) read as “no policy”: now Solder asks `reg.exe query` whether the key is there, and if it is, doesn’t connect. Check connection (in Settings, the guided setup and the command) now honours a policy that can’t be read, and a connection made before a policy change no longer survives it (opening Settings applies the change at once).
+- **edit_file:** old_text that loosely matches two places is refused as ambiguous instead of being matched somewhere else by its indentation; a missed edit copied with line numbers, or with a wrong extra first line, still shows the closest lines.
+- **Undo:** overwriting a UTF-16 file that wasn’t open (Windows PowerShell 5’s default) no longer saves a garbled backup; undoing a copied folder is refused if anything in the copy has changed since; a git diff view of a file is no longer mistaken for the file (wrong backups, false “changed on disk”).
+- **symbols** no longer loops when VS Code’s index names a file the name has left, and a definition or use outside the workspace and docs folders is named but not shown (reading it asks first, as read_file does).
+- **search:** without ripgrep, a folder glob (`src`, `src/`) finds what’s in it; and with several workspace folders, a ripgrep that fails to start no longer doubles the paths.
+- **The engine:** Resume’s and the plan nudge’s “carry on” continue the same task (its results keep their protection, and it isn’t summarised partway); the nudge isn’t put off by a `?` in code or a URL; the model can’t be switched while its task runs (its thought signatures belong to the running model); a read in the reply that finishes a plan step, and the step in progress at a re-plan, now leave the chat with their step.
+- **Chats:** saves of one chat made at the same moment no longer collide on one temporary file.
+
 ## 0.2.5 (2026-11-08)
 
 - **Settings an organization enforces (Group Policy and Intune).** Every setting can be set and locked for users, under `HKLM` or `HKCUSOFTWAREPoliciesGremnarSolder` (computer policy wins). A value that’s there is used instead of the user’s own setting, and its field in Settings is locked and marked “Set by your organization”; guided setup skips what’s set; an enforced model or effort also locks the picker and /model and /effort. Two more: `AllowUserDocsFolders` lets users add docs folders of their own beside the organization’s, and `OrgRules` adds rules after the user’s own, for every chat. If the policy can’t be read, Solder doesn’t connect. ADMX and ADML templates are in `policy/` and attached to each release; the guide is docs/POLICY.md. The API key is never set by policy.

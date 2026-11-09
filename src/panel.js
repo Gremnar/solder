@@ -66,6 +66,7 @@ class SolderPanel {
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
+      policyChanged: () => { this.policyChanged(); },
       testEmbedding: async (/** @type {string} */ model) => {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
         return { dims: vectors[0].length, tokens };
@@ -159,9 +160,9 @@ class SolderPanel {
   /** @type {GatewayClient | null} */
   _client = null;
   client() {
+    // Fail closed: while the organisation's policy can't be read, nothing is sent (a client made before included).
+    policy.gate();
     if (!this._client) {
-      // Fail closed: while the organisation's policy can't be read, nothing is sent.
-      if (policy.error) throw new Error(policy.error);
       const config = solderSettings();
       this._client = new GatewayClient({ endpoint: config.get("endpoint", ""), apiKey: this._key ?? "" });
     }
@@ -315,6 +316,7 @@ class SolderPanel {
       }
       case "model":
         if (policy.locked("model")) { vscode.window.showInformationMessage("Your organization sets the model Solder uses."); return; }
+        if (this.engine.busy && this.runId === this.chat.id) { vscode.window.showInformationMessage("Solder can switch models once this reply is done, or press Stop first."); return; }
         this.chat.model = message.id; await this.store.save(this.chat); this.post(); return;
       case "effort":
         if (policy.locked("effort")) { vscode.window.showInformationMessage("Your organization sets the effort Solder uses."); return; }

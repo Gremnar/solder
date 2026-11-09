@@ -88,18 +88,31 @@ function readKey(key) {
   const file = path.join(os.tmpdir(), `solder-policy-${crypto.randomBytes(6).toString("hex")}.reg`);
   return new Promise((resolve, reject) => {
     execFile(reg, ["export", key, file, "/y", "/reg:64"], { windowsHide: true, timeout: READ_MS }, (error) => {
+      const done = (/** @type {() => void} */ then) => { fs.rm(file, { force: true }, () => {}); then(); };
       try {
-        if (error && /** @type {any} */ (error).killed) { reject(new Error("reg.exe took too long")); return; }
+        if (error && /** @type {any} */ (error).killed) { done(() => reject(new Error("reg.exe took too long"))); return; }
         // A start that failed (missing, or blocked) has a string code; a plain exit code is a number.
-        if (error && typeof /** @type {any} */ (error).code === "string") { reject(new Error(`reg.exe couldn't run: ${/** @type {any} */ (error).code}`)); return; }
-        if (error || !fs.existsSync(file)) { resolve(null); return; } // no such key: nothing enforced there
+        if (error && typeof /** @type {any} */ (error).code === "string") { done(() => reject(new Error(`reg.exe couldn't run: ${/** @type {any} */ (error).code}`))); return; }
+        if (error || !fs.existsSync(file)) {
+          // The export failed. That's "nothing enforced" only if the key really isn't there (reg.exe's messages are
+          // translated, so its exit code is what's asked): a key that's there but couldn't be exported fails closed.
+          execFile(reg, ["query", key, "/reg:64"], { windowsHide: true, timeout: READ_MS }, (queryError) => {
+            if (!queryError) { done(() => reject(new Error("the policy key is there, but reg.exe couldn't export it"))); return; }
+            if (/** @type {any} */ (queryError).killed || typeof /** @type {any} */ (queryError).code === "string") {
+              done(() => reject(new Error("reg.exe couldn't check the policy key"))); return;
+            }
+            done(() => resolve(null));
+          });
+          return;
+        }
         const raw = fs.readFileSync(file);
         const text = raw[0] === 0xff && raw[1] === 0xfe ? raw.toString("utf16le") : raw.toString("utf8");
         const full = key.replace(/^HKLM\\/i, "HKEY_LOCAL_MACHINE\\").replace(/^HKCU\\/i, "HKEY_CURRENT_USER\\");
-        if (!/^\uFEFF?Windows Registry Editor/.test(text)) { reject(new Error("reg.exe's export couldn't be read")); return; }
-        resolve(parseRegFile(text, full));
-      } finally {
-        fs.rm(file, { force: true }, () => {});
+        if (!/^\uFEFF?Windows Registry Editor/.test(text)) { done(() => reject(new Error("reg.exe's export couldn't be read"))); return; }
+        const values = parseRegFile(text, full);
+        done(() => resolve(values));
+      } catch (problem) {
+        done(() => reject(problem instanceof Error ? problem : new Error(String(problem))));
       }
     });
   });
@@ -159,6 +172,11 @@ class Policy {
     const org = raw.get(ORG_RULES.toLowerCase());
     this.orgRules = org === undefined ? "" : (Array.isArray(org) ? org.join("\n") : String(org)).trim();
     this.names = [...this.values.keys(), ...(this.allowUserDocs ? [ALLOW_USER_DOCS] : []), ...(this.orgRules ? [ORG_RULES] : [])];
+  }
+
+  /** Before anything connects: throws while the policy can't be read (fail closed). */
+  gate() {
+    if (this.error) throw new Error(this.error);
   }
 
   /** Whether the user can't change this setting. @param {string} name */

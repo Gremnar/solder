@@ -87,7 +87,8 @@ class SetupWizard {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), CHECK_MS);
           let ids;
-          try { ids = await new GatewayClient({ endpoint: view.endpoint, apiKey: key }).models(controller.signal); }
+          policy.gate();
+          try { ids = await new GatewayClient({ endpoint: String(config.get("endpoint", "") || view.endpoint), apiKey: key }).models(controller.signal); }
           finally { clearTimeout(timer); }
           const filter = String(config.get("modelFilter", ""));
           if (filter) { try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); } catch { /* shown in settings */ } }

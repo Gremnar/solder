@@ -344,6 +344,7 @@ class WorkspaceTools {
     const name = plainName(String(args.name));
     /** @type {string[]} other places the name is declared, when none was given */
     let others = [];
+    const fromIndex = !args.path;
     if (!args.path) {
       // No file given: VS Code's workspace symbols find where the name is declared.
       const found = await deadline(vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", name), LOOKUP_MS);
@@ -366,6 +367,8 @@ class WorkspaceTools {
     const position = positionOf(document, symbols, name, args.line);
     // Not in the file given: the whole workspace, as with no path (saves a search and a second call).
     if (!position) {
+      // The index named a file the name isn't in (it's behind an edit): text matches, not another lookup.
+      if (fromIndex) return this.textMatches(name, signal);
       const elsewhere = await this.symbols({ name, find }, signal);
       return { ...elsewhere, output: RESULTS.notInFile(name, file.shown) + "\n\n" + elsewhere.output };
     }
@@ -377,12 +380,20 @@ class WorkspaceTools {
     return others.length ? { ...uses, output: uses.output + "\n\n" + RESULTS.alsoDefined(name, others) } : uses;
   }
 
+  /** A file the model may see without asking: in the workspace or a docs folder (as read_file's approval). @param {string} full */
+  mayRead(full) {
+    let file;
+    try { file = this.resolve(full); } catch { return false; }
+    return file.inside || this.docsFolders().some((folder) => within(realPath(file.full), realPath(folder.path)));
+  }
+
   /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */
   async definitions(/** @type {string} */ name, /** @type {{uri: vscode.Uri, range: vscode.Range}[]} */ found) {
     const blocks = [];
     for (const place of found.slice(0, MAX_DEFINITIONS)) {
       const shown = this.shown(place.uri.fsPath);
       if (place.uri.scheme !== "file") { blocks.push(`${shown} ${place.range.start.line + 1}`); continue; }
+      if (!this.mayRead(place.uri.fsPath)) { blocks.push(`${shown} ${place.range.start.line + 1} ` + RESULTS.outsideNotShown); continue; }
       let document;
       try { document = await vscode.workspace.openTextDocument(place.uri); } catch { blocks.push(`${shown} ${place.range.start.line + 1}`); continue; }
       const extent = enclosing(await this.symbolsOf(document), place.range.start.line) ?? place.range;
@@ -418,7 +429,7 @@ class WorkspaceTools {
     let count = 0;
     for (const { uri, lines } of files.values()) {
       let document = null;
-      try { if (uri.scheme === "file") document = await vscode.workspace.openTextDocument(uri); } catch { /* listed without text */ }
+      try { if (uri.scheme === "file" && this.mayRead(uri.fsPath)) document = await vscode.workspace.openTextDocument(uri); } catch { /* listed without text */ }
       for (const line of lines.sort((a, b) => a - b)) {
         count++;
         if (out.length >= MAX_REFERENCES) continue;
@@ -580,7 +591,7 @@ class WorkspaceTools {
         : await this.searchInJs(root, query, !!args.regex, args.glob);
       if (/** @type {any} */ (found).incomplete) incomplete = true;
       // ripgrep's paths are relative to where it ran: as the model sees paths, for the other folders.
-      lines.push(...(root === base || !rg ? found : found.map((line) => {
+      lines.push(...(root === base || !rg || /** @type {any} */ (found).shownPaths ? found : found.map((line) => {
         const cut = line.indexOf(":");
         return cut > 0 ? this.shown(path.join(root, line.slice(0, cut))) + line.slice(cut) : line;
       })));
@@ -779,7 +790,7 @@ class WorkspaceTools {
         clearTimeout(timer);
         if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
         this._rg = null; // blocked or missing: fall back from now on
-        this.searchInJs(root, query, regex, glob, caseSensitive).then(resolve, reject);
+        this.searchInJs(root, query, regex, glob, caseSensitive).then((lines) => { /** @type {any} */ (lines).shownPaths = true; resolve(lines); }, reject);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
@@ -810,7 +821,7 @@ class WorkspaceTools {
     } catch (error) {
       throw new ToolError(RESULTS.badRegex);
     }
-    const files = await this.listFiles(root, globOf(glob || "**/*"), 5000);
+    const files = await this.listFiles(root, globOf(glob ? rgGlob(root, glob) : "**/*"), 5000);
     const lines = [];
     for (const uri of files) {
       let text;
@@ -887,14 +898,14 @@ class WorkspaceTools {
     // Exactly, then forgiving trailing spaces, then a uniform indentation shift. Failing those, old_text copied
     // with read_file's line numbers ("12\t…") is tried without them.
     let found = locate(file.shown, text, old, replacement, eol);
+    const plain = withoutLineNumbers(old, eol);
     if (!found) {
-      const plain = withoutLineNumbers(old, eol);
       const plainNew = plain === null ? null : numberedLines(replacement, eol);
       if (plain !== null && plainNew === false) throw new ToolError(RESULTS.numberedNewText);
       const again = plain === null ? null : locate(file.shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);
       if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
     }
-    if (!found) throw notFound(file.shown, text, old, eol);
+    if (!found) throw notFound(file.shown, text, plain ?? old, eol);
     const { start, length, replaced } = found;
     const shiftNote = found.note;
     const key = file.full.toLowerCase();
@@ -929,8 +940,9 @@ class WorkspaceTools {
       if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.isFolder(file.shown));
       exists = true;
     } catch (error) { if (error instanceof ToolError) throw error; }
-    const open = vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath.toLowerCase() === file.full.toLowerCase());
-    const previous = exists ? (open ? open.getText() : fs.readFileSync(file.full, "utf8")) : "";
+    const open = vscode.workspace.textDocuments.find((doc) => doc.uri.scheme === "file" && doc.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+    // #5: a file that isn't open is read as its encoding says (UTF-16 included), so its backup is its text.
+    const previous = exists ? (open ? open.getText() : decodeText(fs.readFileSync(file.full))) : "";
     const backup = exists ? await this.backup(chat, file, previous) : "";
     const before = exists ? problemKeys(file.uri) : new Set();
     if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
@@ -1031,7 +1043,7 @@ class WorkspaceTools {
   /** The file's errors that weren't there before the change (VS Code's language servers need a moment). */
   async newProblems(/** @type {any} */ file, /** @type {Set<string>} */ before) {
     // A language that has never reported diagnostics (plain JavaScript, Markdown) isn't worth the full wait.
-    const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
     await this.diagnosticsFor(file, doc && this._diagnosed.has(doc.languageId) ? DIAGNOSTICS_WAIT_MS : DIAGNOSTICS_SHORT_MS);
     const fresh = vscode.languages.getDiagnostics(file.uri)
       .filter((d) => d.severity === vscode.DiagnosticSeverity.Error && !before.has(keyOf(d)));
@@ -1099,7 +1111,7 @@ class WorkspaceTools {
     return { output: RESULTS.moved(copy, source.shown, target.shown, files) + mentions,
       summary: `${copy ? "Copied" : "Moved"} ${source.shown} → ${target.shown}` + (folder ? ` · ${files} file${files === 1 ? "" : "s"}` : ""),
       change: { path: target.full, shown: target.shown, from: source.full, fromShown: source.shown, moved: !copy, copied: copy, folder,
-        madeFolder, stamp: folder ? "" : stampOf(target.full) } };
+        madeFolder, stamp: folder ? (copy ? treeStamp(target.full) : "") : stampOf(target.full) } };
   }
 
   // ---------------------------------------------------------------- remove_item --
@@ -1139,10 +1151,14 @@ class WorkspaceTools {
     // Undo puts back what the step found; if the file has changed since, that would throw the later work away.
     const changedSince = () => {
       if (change.after) {
-        const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === change.path.toLowerCase());
+        const open = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath.toLowerCase() === change.path.toLowerCase());
         let now = null;
-        try { now = open ? open.getText() : fs.readFileSync(change.path, "utf8"); } catch { now = null; }
+        try { now = open ? open.getText() : decodeText(fs.readFileSync(change.path)); } catch { now = null; }
         return now !== null && hash(now) !== change.after;
+      }
+      if (change.copied && change.folder) {
+        if (vscode.workspace.textDocuments.some((d) => d.isDirty && d.uri.scheme === "file" && within(d.uri.fsPath, change.path))) return true;
+        return !!change.stamp && fs.existsSync(change.path) && treeStamp(change.path) !== change.stamp;
       }
       return !!change.stamp && fs.existsSync(change.path) && stampOf(change.path) !== change.stamp;
     };
@@ -1549,6 +1565,23 @@ function shownInEditor(full) {
 }
 
 /** A file's time and size, to tell later whether it changed. @param {string} full */
+/** A folder's whole tree as one stamp: every file's path, size and time, so any change in it shows. @param {string} full */
+function treeStamp(full) {
+  const parts = [];
+  const walk = (/** @type {string} */ dir, /** @type {string} */ rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (parts.length > 50_000) return;
+      const next = path.join(dir, entry.name);
+      if (entry.isDirectory()) { parts.push(rel + entry.name + "/"); walk(next, rel + entry.name + "/"); }
+      else parts.push(rel + entry.name + ":" + stampOf(next));
+    }
+  };
+  walk(full, "");
+  return "tree:" + hash(parts.join("\n"));
+}
+
 function stampOf(full) {
   try { const stat = fs.statSync(full); return `${stat.mtimeMs}:${stat.size}`; } catch { return ""; }
 }
@@ -1789,18 +1822,21 @@ function lineOf(/** @type {string} */ text, /** @type {number} */ index) {
 }
 
 /** The same lines with only trailing spaces differing, found exactly once: [start, length] or null. */
+/** Where old_text's lines match the file's, trailing spaces aside: the first line of each place (0-based). */
+function looseHits(/** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
+  const lines = text.split(eol);
+  const want = old.split(eol).map((line) => line.trimEnd());
+  const hits = [];
+  for (let i = 0; i + want.length <= lines.length; i++) if (want.every((line, k) => lines[i + k].trimEnd() === line)) hits.push(i);
+  return hits;
+}
+
 function looseMatch(/** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ eol) {
   const lines = text.split(eol);
   const want = old.split(eol).map((line) => line.trimEnd());
-  if (!want.length) return null;
-  let hit = null;
-  for (let i = 0; i + want.length <= lines.length; i++) {
-    if (want.every((line, k) => lines[i + k].trimEnd() === line)) {
-      if (hit !== null) return null;
-      hit = i;
-    }
-  }
-  if (hit === null) return null;
+  const hits = looseHits(text, old, eol);
+  if (hits.length !== 1) return null;
+  const hit = hits[0];
   const start = lines.slice(0, hit).reduce((sum, line) => sum + line.length + eol.length, 0);
   const length = lines.slice(hit, hit + want.length).join(eol).length;
   return [start, length];
@@ -1835,14 +1871,14 @@ function notFound(/** @type {string} */ shown, /** @type {string} */ text, /** @
   let most = 0;
   let tied = false;
   for (const [at, count] of votes) {
-    if (at < 0 || at >= lines.length) continue;
+    if (at <= -want.length || at >= lines.length) continue; // (a place starting above line 1: old_text has a wrong first line)
     if (count > most) { best = at; most = count; tied = false; } else if (count === most) tied = true;
   }
   // One vote is enough when it comes from a line found just once in the file and long enough to mean something.
   const telling = most === 1 && want.some((line, k) => line.length >= 6 && where.get(line)?.length === 1 && where.get(line)?.[0] === best + k);
-  if (best < 0 || tied || (most < Math.min(2, counted) && !telling)) return new ToolError(RESULTS.notFound(shown, 0, 0, 0, 0));
+  if (!most || tied || (most < Math.min(2, counted) && !telling)) return new ToolError(RESULTS.notFound(shown, 0, 0, 0, 0));
   const from = Math.max(0, best - 2);
-  const to = Math.min(lines.length, best + want.length + 3, from + MISS_LINES);
+  const to = Math.min(lines.length, Math.max(best, 0) + want.length + 3, from + MISS_LINES);
   return new ToolError(RESULTS.notFound(shown, from + 1, to, most, counted), numbered(lines, from, to));
 }
 
@@ -1868,6 +1904,8 @@ function locate(/** @type {string} */ shown, /** @type {string} */ text, /** @ty
   }
   const grow = (/** @type {number} */ start, /** @type {number} */ length) =>
     breakAfter && text.startsWith(eol, start + length) ? length + eol.length : length;
+  const many = looseHits(text, lines, eol);
+  if (many.length > 1) throw new ToolError(RESULTS.manyMatches(many.length, shown, many.slice(0, 10).map((i) => i + 1)), aroundPlaces(text, many.map((i) => i + 1), eol));
   const loose = looseMatch(text, lines, eol);
   if (loose) return { start: loose[0], length: grow(loose[0], loose[1]), replaced: swap, note: "" };
   // The same lines, all indented by the same amount more or less (a deep block copied a level off):
@@ -2012,4 +2050,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainName, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

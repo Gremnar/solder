@@ -830,3 +830,54 @@ test("a task that stops with plan steps left is asked once to carry on; a questi
   await engine(later, fakeHost()).ask(third, "something else");
   assert.equal(third.messages.filter((m) => m.meta?.nudge).length, 1);
 });
+
+test("the plan nudge's and Resume's \"carry on\" keep the task's results protected (they're the same task)", () => {
+  const big = "x".repeat(80_000);
+  const chat = Engine.newChat();
+  chat.messages.push(
+    { role: "user", content: "do the thing", meta: { typed: "do the thing" } },
+    { role: "assistant", content: "", tool_calls: [{ id: "r1", type: "function", function: { name: "read_file", arguments: "{\"path\":\"a.js\"}" } }] },
+    { role: "tool", tool_call_id: "r1", content: big, meta: { name: "read_file", summary: "Read a.js" } },
+    { role: "assistant", content: "", tool_calls: [{ id: "r2", type: "function", function: { name: "read_file", arguments: "{\"path\":\"b.js\"}" } }] },
+    { role: "tool", tool_call_id: "r2", content: big, meta: { name: "read_file", summary: "Read b.js" } },
+    { role: "assistant", content: "I read them." },
+    { role: "user", content: "carry on", meta: { typed: "Carry on", resume: true, nudge: true } },
+    { role: "assistant", content: "", tool_calls: [{ id: "r3", type: "function", function: { name: "read_file", arguments: "{\"path\":\"c.js\"}" } }] },
+    { role: "tool", tool_call_id: "r3", content: "small", meta: { name: "read_file", summary: "Read c.js" } });
+  trim(chat, 100_000);
+  assert.ok(!chat.messages[2].meta.stub && !chat.messages[4].meta.stub, "the reads before the nudge are this task's, and stay whole");
+});
+
+test("the plan nudge isn't put off by a ? in code or a URL; a question in the last lines still counts", async () => {
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  const run = async (/** @type {string} */ last) => {
+    const client = fakeClient([{ calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1")] }, { content: last }, { content: "ok" }]);
+    const chat = Engine.newChat();
+    await engine(client, fakeHost()).ask(chat, "fix a and b");
+    return chat.messages.filter((m) => m.meta?.nudge).length;
+  };
+  assert.equal(await run("Done: I replaced `a ? b : c` in src/x.js, see https://example.com/x?page=2."), 1);
+  assert.equal(await run("I fixed A.\n\n```js\nconst y = x ? 1 : 2;\n```"), 1);
+  assert.equal(await run("A is done. Should B keep the old name too?"), 0);
+});
+
+test("plan steps: a read in the reply that finishes a step is the next step's (and leaves with it); a re-plan keeps the step in progress", async () => {
+  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
+  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
+  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
+    // a re-plan partway through A (C reworded): A keeps where it began
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C and D" }] }, "p2")] },
+    { calls: [call("r2", "read_file", { path: "b.js" }), plan({ done: 1, notes: "A fixed." }, "p3")] },
+    { calls: [plan({ done: 2, notes: "B fixed." }, "p4")] },
+    { calls: [call("r3", "read_file", { path: "c.js" })] },
+    (req) => {
+      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
+      assert.match(results.r1, /^\(Step 1 is done/, "A's read leaves with A, though the plan was re-made partway");
+      assert.match(results.r2, /^\(Step 2 is done/, "the read in A's finishing reply was B's");
+      return { content: "done" };
+    },
+  ]);
+  await engine(client, host).ask(Engine.newChat(), "fix them");
+});

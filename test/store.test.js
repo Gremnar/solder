@@ -49,3 +49,18 @@ test("chats from a workspace's own storage (0.1.3 and before) are copied in once
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("saves of one chat made at once all land, the newest last", async () => {
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-saves-"));
+  try {
+    const store = new ChatStore(top);
+    const chat = { id: "c1", title: "t", created: 1, updated: 1, messages: [{ role: "user", content: "hi" }], compaction: null, usage: { tokens: 0 } };
+    const saves = [];
+    for (let i = 0; i < 8; i++) { chat.title = "title " + i; saves.push(store.save(chat)); }
+    await Promise.all(saves);
+    const saved = JSON.parse(fs.readFileSync(path.join(top, "chats", "c1.json"), "utf8"));
+    assert.equal(saved.title, "title 7");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});

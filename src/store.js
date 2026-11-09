@@ -26,6 +26,8 @@ class ChatStore {
     this.homeOf = scope.homeOf || (() => "");
     /** @type {Map<string, any>} whole chats, once opened */
     this.cache = new Map();
+    /** @type {Map<string, Promise<void>>} each chat's save in progress, so the next waits for it */
+    this.saving = new Map();
     /** @type {Map<string, {stamp: string, summary: any}>} each file's list entry, until the file changes */
     this.summaries = new Map();
   }
@@ -82,10 +84,18 @@ class ChatStore {
     this.cache.set(chat.id, chat);
     if (!chat.messages.length) return; // an empty chat isn't worth a file
     if (chat.home === undefined) chat.home = this.homeOf(chat);
-    const target = this.file(chat.id);
-    const temporary = target + ".tmp";
-    await fs.promises.writeFile(temporary, JSON.stringify(chat), "utf8");
-    await fs.promises.rename(temporary, target);
+    // One chat's saves run one after another (a title saved meanwhile would race for the same temporary file);
+    // each writes the chat as it is when its turn comes, so the newest state is what lands.
+    const prior = this.saving.get(chat.id) || Promise.resolve();
+    const mine = prior.catch(() => {}).then(async () => {
+      const target = this.file(chat.id);
+      const temporary = target + ".tmp";
+      await fs.promises.writeFile(temporary, JSON.stringify(chat), "utf8");
+      await fs.promises.rename(temporary, target);
+    });
+    this.saving.set(chat.id, mine);
+    mine.finally(() => { if (this.saving.get(chat.id) === mine) this.saving.delete(chat.id); }).catch(() => {});
+    return mine;
   }
 
   /** @param {string} id */

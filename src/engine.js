@@ -256,7 +256,7 @@ class Engine {
     for (;;) {
       // Before every step, not just a new message, so a long task can't run far past the limit. Only
       // earlier turns are summarised: this one's calls carry thought signatures some models check.
-      await this._compactIfDue(chat, signal, lastUser(chat));
+      await this._compactIfDue(chat, signal, taskStart(chat));
       trim(chat, settings.compactAt);
       const system = await this.host.systemPrompt(chat);
       const messages = outbound(chat, system);
@@ -668,7 +668,7 @@ function pathKey(given) {
 function unfinishedSteps(chat) {
   const plan = /** @type {any} */ (chat).plan;
   if (!plan?.steps?.length) return [];
-  const since = chat.messages.slice(lastUser(chat));
+  const since = chat.messages.slice(taskStart(chat));
   if (!since.some((m) => m.role === "tool" && m.meta?.name === "plan" && !m.meta.failed)) return [];
   return plan.steps.map((/** @type {any} */ step, /** @type {number} */ index) => ({ number: index + 1, goal: step.goal, state: step.state }))
     .filter((/** @type {any} */ step) => step.state !== "done").map(({ number, goal }) => ({ number, goal }));
@@ -676,7 +676,10 @@ function unfinishedSteps(chat) {
 
 /** A reply that ends on a question for the user (its last lines ask something). @param {string} text */
 function asksSomething(text) {
-  return /\?/.test(String(text || "").trim().slice(-400));
+  // Only the prose counts: a ? in code, inline code or a URL isn't a question.
+  const prose = String(text || "").replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").replace(/\bhttps?:\/\/\S+/g, "");
+  const lines = prose.split("\n").map((line) => line.trim()).filter(Boolean);
+  return /\?/.test(lines.slice(-2).join(" "));
 }
 
 /** The model a chat uses: its own choice, unless the organisation enforces one. @param {Chat} chat @param {any} settings */
@@ -684,7 +687,18 @@ function modelOf(chat, settings) {
   return settings.modelLocked ? settings.model : chat.model || settings.model;
 }
 
-/** Where the current turn starts: the latest message you typed (or Resume's "carry on"). @param {Chat} chat */
+/**
+ * Where the current task started: the latest message you typed. Resume's and the plan nudge's "carry on" go on the
+ * same task, so its results keep their in-task protection and it isn't summarised partway. @param {Chat} chat
+ */
+function taskStart(chat) {
+  for (let index = chat.messages.length - 1; index >= 0; index--) {
+    if (chat.messages[index].role === "user" && !chat.messages[index].meta?.resume) return index;
+  }
+  return 0;
+}
+
+/** Where the current turn starts, as the API counts turns: the latest user message (Resume's included). @param {Chat} chat */
 function lastUser(chat) {
   for (let index = chat.messages.length - 1; index >= 0; index--) if (chat.messages[index].role === "user") return index;
   return 0;
@@ -721,12 +735,15 @@ function planStep(chat, id, args) {
     const before = new Map((plan?.steps || []).map((/** @type {any} */ step) => [String(step.goal).trim().toLowerCase(), step]));
     const steps = args.steps.slice(0, MAX_PLAN_STEPS).map((/** @type {any} */ given) => {
       const goal = String(given?.goal ?? "").trim().slice(0, 200) || "(a step)";
-      const old = before.get(goal.toLowerCase()); // a step already done stays done
-      return old && old.state === "done" ? { ...old, goal } : { goal, work: String(given?.work ?? "").trim().slice(0, 2000), state: "todo", notes: "" };
+      const old = before.get(goal.toLowerCase()); // a step already done stays done; the one being done keeps where it began
+      const work = String(given?.work ?? "").trim().slice(0, 2000);
+      if (old && old.state === "done") return { ...old, goal };
+      if (old && old.state === "doing") return { ...old, goal, work: work || old.work };
+      return { goal, work, state: "todo", notes: "" };
     });
     /** @type {any} */ (chat).plan = { steps };
     const next = steps.find((step) => step.state !== "done");
-    if (next) { next.state = "doing"; next.startCall = id; }
+    if (next) { next.startCall = next.state === "doing" && next.startCall ? next.startCall : id; next.state = "doing"; }
   }
   const current = /** @type {any} */ (chat).plan;
   if (args.done !== undefined && args.done !== null) {
@@ -741,7 +758,10 @@ function planStep(chat, id, args) {
     step.endCall = reply?.tool_calls?.[0]?.id || id;
     step.startCall ??= id;
     const next = current.steps.find((/** @type {any} */ other) => other.state === "todo");
-    if (next && !current.steps.some((/** @type {any} */ other) => other.state === "doing")) { next.state = "doing"; next.startCall = id; }
+    // The next step begins just after the last result before this reply, so this reply's other calls are its.
+    const at = reply ? chat.messages.lastIndexOf(reply) : -1;
+    const before = at > 0 ? chat.messages.slice(0, at).reverse().find((m) => m.role === "tool" && m.tool_call_id) : null;
+    if (next && !current.steps.some((/** @type {any} */ other) => other.state === "doing")) { next.state = "doing"; next.startCall = before?.tool_call_id || id; }
   }
   if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
   const done = current.steps.filter((/** @type {any} */ step) => step.state === "done").length;
@@ -832,7 +852,7 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
   const ratio = chat.tokenRatio || 1;
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
   if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return stepped;
-  const thisTask = new Set(chat.messages.slice(Math.max(start, turn)));
+  const thisTask = new Set(chat.messages.slice(Math.max(start, taskStart(chat))));
   const ceiling = compactAt * IN_TASK_CEILING;
   let kept = 0;
   let cut = false;
