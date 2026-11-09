@@ -2,7 +2,7 @@
   "name": "solder",
   "displayName": "Solder",
   "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint with tool calling.",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "publisher": "gremnar",
   "license": "MIT",
   "icon": "media/icon.png",

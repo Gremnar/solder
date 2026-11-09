@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.7 (2026-11-09)
 
 - **Fix: the status bar showed a per-minute limit as the allowance left.** A gateway that reports several allowances (a daily one and a per-minute one, say) had the emptiest shown, which just after a big request is the per-minute one. What’s shown as left is now the allowance with the longest window. The emptiest still decides whether a refusal means “used up” (a per-minute limit at 0 is only a moment’s wait).
 
