@@ -82,11 +82,10 @@ class Cancelled extends GatewayError {
  */
 
 /**
- * The tightest allowance the server reports (x-ratelimit-limit-<bucket> with its -remaining-, and
- * -reset- when sent): the bucket with the smallest share left. null when it reports none.
- * @param {import("node:http").IncomingHttpHeaders} headers @returns {Credits | null}
+ * Every allowance the server reports (x-ratelimit-limit-<bucket> with its -remaining-, and -reset- when sent).
+ * @param {import("node:http").IncomingHttpHeaders} headers @returns {Credits[]}
  */
-function credits(headers) {
+function allowances(headers) {
   /** @type {Map<string, any>} */
   const buckets = new Map();
   for (const [name, raw] of Object.entries(headers)) {
@@ -99,10 +98,31 @@ function credits(headers) {
     bucket[match[1] === "reset" ? "resetSeconds" : match[1]] = value;
     buckets.set(match[2], bucket);
   }
+  return [...buckets.values()].filter((bucket) => "limit" in bucket && "remaining" in bucket && bucket.limit > 0);
+}
+
+/**
+ * The tightest allowance: the bucket with the smallest share left. It decides whether a 429 means "used up"
+ * (a per-minute bucket at 0 is only a moment's wait). null when the server reports none.
+ * @param {import("node:http").IncomingHttpHeaders} headers @returns {Credits | null}
+ */
+function credits(headers) {
   let best = null;
-  for (const bucket of buckets.values()) {
-    if (!("limit" in bucket) || !("remaining" in bucket) || bucket.limit <= 0) continue;
-    if (!best || bucket.remaining / bucket.limit < best.remaining / best.limit) best = bucket;
+  for (const bucket of allowances(headers)) if (!best || bucket.remaining / bucket.limit < best.remaining / best.limit) best = bucket;
+  return best;
+}
+
+/**
+ * The allowance to show as what's left: the one with the longest window (the latest reset, so a daily allowance
+ * over a per-minute one, which is nearly empty just after a big request), else the largest. null when none.
+ * @param {import("node:http").IncomingHttpHeaders} headers @returns {Credits | null}
+ */
+function allowanceOf(headers) {
+  let best = null;
+  for (const bucket of allowances(headers)) {
+    const longer = !best || (bucket.resetSeconds ?? -1) > (best.resetSeconds ?? -1)
+      || ((bucket.resetSeconds ?? -1) === (best.resetSeconds ?? -1) && bucket.limit > best.limit);
+    if (longer) best = bucket;
   }
   return best;
 }
@@ -221,7 +241,7 @@ class GatewayClient {
             throw new GatewayError("The embeddings didn't come back as lists of numbers.");
           }
           const usage = value.usage || {};
-          return { vectors, tokens: Number(usage.prompt_tokens ?? usage.total_tokens ?? 0) || 0, credits: credits(headers) };
+          return { vectors, tokens: Number(usage.prompt_tokens ?? usage.total_tokens ?? 0) || 0, credits: allowanceOf(headers) };
         }
         failure = this._httpFailure(status, headers, text);
       } catch (error) {
@@ -301,7 +321,7 @@ class GatewayClient {
               const done = stream.finish(); // may throw (an empty reply): before settling
               settled = true;
               signal?.removeEventListener("abort", onAbort);
-              resolve({ ...done, credits: found });
+              resolve({ ...done, credits: allowanceOf(res.headers) });
               res.destroy();
               return true;
             }
@@ -370,7 +390,9 @@ class GatewayClient {
       const told = toldAllowance(detail);
       const seconds = zero && found?.resetSeconds ? found.resetSeconds
         : asked !== null && asked > MAX_RETRY_AFTER_MS ? asked / 1000 : told.resetSeconds ?? 0;
-      const left = found ?? (told.limit ? { bucket: "credits", limit: told.limit, remaining: 0, resetSeconds: seconds || undefined } : null);
+      // What's shown: the long-window allowance, at 0 (its header may lag the refusal), else what the words said.
+      const shown = allowanceOf(headers);
+      const left = shown ? { ...shown, remaining: 0 } : told.limit ? { bucket: "credits", limit: told.limit, remaining: 0, resetSeconds: seconds || undefined } : null;
       const size = left?.limit ? ` (${left.limit.toLocaleString("en-US")} ${left.bucket})` : "";
       const when = seconds ? ` It resets in about ${spoken(seconds)}, at ${clock(seconds)}.` : "";
       return new GatewayError(`The allowance is used up${size}.` + when + (detail ? ` (The gateway said: ${detail})` : ""),
@@ -384,14 +406,14 @@ class GatewayClient {
       if (retryAfter !== null && retryAfter > MAX_RETRY_AFTER_MS) {
         // Not retried automatically (Resume still works): hammering a limiter that asked for minutes won't help.
         return new GatewayError(message + " The gateway asked to wait longer; try again later.",
-          { status, uncertain: !BUSY_HTTP.has(status), credits: found });
+          { status, uncertain: !BUSY_HTTP.has(status), credits: allowanceOf(headers) });
       }
       const error = new GatewayError(message, { status, transient: true, uncertain: !BUSY_HTTP.has(status),
-        credits: found });
+        credits: allowanceOf(headers) });
       if (retryAfter !== null) /** @type {any} */ (error).retryAfterMs = retryAfter;
       return error;
     }
-    return new GatewayError(message, { status, credits: found });
+    return new GatewayError(message, { status, credits: allowanceOf(headers) });
   }
 
   /** @param {any} error @param {boolean} [sent] the request had gone out (the model may have seen it) */

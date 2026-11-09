@@ -338,6 +338,25 @@ test("the used-up wording alone, with no reset in it: used up, no time given", (
   assert.equal(error.message, "The allowance is used up. (The gateway said: Monthly quota reached.)");
 });
 
+test("what's shown as left is the long-window allowance (daily), not a per-minute bucket emptied by the last request", async () => {
+  const both = { "x-ratelimit-limit-tokens-minute": "1000000", "x-ratelimit-remaining-tokens-minute": "374000", "x-ratelimit-reset-tokens-minute": "40",
+    "x-ratelimit-limit-credits-day": "5000000", "x-ratelimit-remaining-credits-day": "4700000", "x-ratelimit-reset-credits-day": "30000" };
+  const gw = await fakeGateway([
+    (res) => sse(res, [{ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }], { headers: both }),
+    // the per-minute bucket at 0: a moment's wait (retried), not "used up"
+    (res) => { res.writeHead(429, { ...both, "x-ratelimit-remaining-tokens-minute": "0", "x-ratelimit-reset-tokens-minute": "0" }); res.end("{}"); },
+    (res) => sse(res, [{ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }], { headers: both }),
+  ]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  const reply = await client.reply({ model: "m", messages: ask });
+  assert.deepEqual(reply.credits, { bucket: "credits-day", limit: 5_000_000, remaining: 4_700_000, resetSeconds: 30000 });
+  const again = await client.reply({ model: "m", messages: ask });
+  assert.equal(again.content, "ok");
+  assert.equal(again.credits.bucket, "credits-day");
+  gw.server.closeAllConnections();
+  gw.server.close();
+});
+
 test("embeddings: one vector per text, in the order asked (whatever order they come back), and the gateway's token count", async () => {
   let gw;
   gw = await fakeGateway([(res) => {
