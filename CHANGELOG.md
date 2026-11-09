@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5 (2026-11-08)
 
 - **Settings an organization enforces (Group Policy and Intune).** Every setting can be set and locked for users, under `HKLM` or `HKCUSOFTWAREPoliciesGremnarSolder` (computer policy wins). A value that’s there is used instead of the user’s own setting, and its field in Settings is locked and marked “Set by your organization”; guided setup skips what’s set; an enforced model or effort also locks the picker and /model and /effort. Two more: `AllowUserDocsFolders` lets users add docs folders of their own beside the organization’s, and `OrgRules` adds rules after the user’s own, for every chat. If the policy can’t be read, Solder doesn’t connect. ADMX and ADML templates are in `policy/` and attached to each release; the guide is docs/POLICY.md. The API key is never set by policy.
 
