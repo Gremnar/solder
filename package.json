@@ -1,7 +1,7 @@
 {
   "name": "solder",
   "displayName": "Solder",
-  "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint with tool calling.",
+  "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint with tool calling. Organizations can enforce its settings with Group Policy or Intune.",
   "version": "0.2.7",
   "publisher": "gremnar",
   "license": "MIT",
@@ -13,7 +13,7 @@
   "homepage": "https://github.com/Gremnar/solder#readme",
   "engines": { "vscode": "^1.100.0" },
   "categories": ["AI", "Programming Languages"],
-  "keywords": ["agent", "chat", "coding", "openai-compatible", "tool calling"],
+  "keywords": ["agent", "chat", "coding", "openai-compatible", "tool calling", "group policy", "intune", "enterprise"],
   "main": "./src/extension.js",
   "extensionKind": ["workspace"],
   "capabilities": {

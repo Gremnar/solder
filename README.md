@@ -4,6 +4,17 @@
 
 <p><img src="media/screenshots/plan.png" width="380" alt="A longer task in Solder: its plan as a checklist (one step done with its notes, the next in progress), and the steps it has run"> <img src="media/screenshots/finished-chat.png" width="380" alt="A finished chat: the steps Solder ran, Review and Undo on its edit, and its answer"></p>
 
+## Built for organizations
+
+**Every setting can be enforced and locked through Group Policy or Intune.**
+
+- **Lock the gateway:** set the address once for every user, and they can't point Solder anywhere else. If the policy can't be read, Solder doesn't connect.
+- **Rules for everyone:** add your organization's rules to every user's chats, after their own.
+- **Shared docs:** give everyone the same reference folders, with or without folders of their own.
+- **Ready-made templates:** ADMX and ADML files come with every release. API keys stay with each user, never in policy.
+
+See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
+
 ## Getting started
 
 1. **Install it:**
