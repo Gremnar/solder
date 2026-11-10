@@ -17,6 +17,7 @@ const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
+const { MAX_SKILLS } = require("./skills.js");
 
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
@@ -67,6 +68,7 @@ class SolderPanel {
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
+      skills: () => this.tools.skills(), skillsFolder: () => this.skillsFolder(),
       policyChanged: () => { this.policyChanged(); },
       testEmbedding: async (/** @type {string} */ model) => {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
@@ -127,11 +129,19 @@ class SolderPanel {
     };
   }
 
-  /** What the model is told about the workspace, for either lane: folders, instruction files, rules, docs. */
+  /** What the model is told about the workspace, for either lane: folders, instruction files, rules, docs, skills. */
   promptContext() {
     return { workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
       // The organisation's rules go after the user's, so they read as the more recent instruction.
-      rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders() };
+      rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders(),
+      skills: this.tools.skills().filter((skill) => skill.text).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
+      skillsFolder: this.skillsFolder() };
+  }
+
+  /** Where a new skill is saved: the user's own first skills folder that's there ("" when they have none, or can't add one). */
+  skillsFolder() {
+    if (policy.locked("skillsFolders")) return "";
+    return this.tools.skillsFolders(solderSettings().own("skillsFolders", []))[0] ?? "";
   }
 
   /** The instruction files (AGENTS.md by default) at the top of each workspace folder. */

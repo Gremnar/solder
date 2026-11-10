@@ -298,6 +298,7 @@
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
     const shape = JSON.stringify({ models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
+      skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
     const values = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
     const savedNow = s.saved && (s.saved !== settingsSaved || values !== settingsValues) ? s.saved : "";
@@ -374,6 +375,7 @@
             `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
             `<div class="hint">Meaning search finds passages that say the same thing in other words. It sends every passage of your docs folders to the gateway once to be turned into numbers, then only changed files, and each search's words. The log (Copy diagnostics) shows the tokens each run used.</div>`
           : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)) +
+      section("Your skills", skillsHtml(s)) +
       section("Rules and instructions",
         label("Your rules", "rules", saved("rules")) + `<textarea class="field area" id="sf-rules" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
         (s.orgRules ? `<div class="field-label"><span>Added by your organization</span></div><div class="org-rules">${escape(s.orgRules)}</div>` : "") +
@@ -407,6 +409,31 @@
   /** "Set by your organization", for a field the policy enforces. @param {string} field */
   function orgMark(field) {
     return state?.settings?.locked?.[field] ? `<span class="org">Set by your organization</span>` : "";
+  }
+
+  /** Settings' skills: the folders (the organisation's apart), and each skill found, with anything wrong with it. @param {any} s */
+  function skillsHtml(s) {
+    const folderIcon = `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>`;
+    const org = (s.orgSkills || []).map((/** @type {string} */ f) => `<div class="doc org-doc"><div class="doc-path" title="${escape(f)}">${folderIcon}` +
+      `<span>${escape(f)}</span><span class="org">From your organization</span></div></div>`).join("");
+    const mine = (s.skillsFolders || []).map((/** @type {string} */ f, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(f)}">${folderIcon}` +
+      `<span>${escape(f)}</span><button data-sact="removeSkills" data-index="${i}" title="Stop using this folder" aria-label="Remove ${escape(f)}">✕</button></div></div>`).join("");
+    const skills = s.skills || [];
+    const list = skills.map((/** @type {any} */ k) => {
+      const note = k.problem ? `<div class="hint warn">${escape(k.problem)}</div>`
+        : `<div class="hint">${escape(k.when)}${k.cut ? " (Only its first 20,000 characters are used.)" : ""}</div>`;
+      return `<li class="skill"><button class="link skill-name" data-sact="openSkill" data-name="${escape(k.name)}" title="Open ${escape(k.name)}.md">${escape(k.name)}</button>` +
+        (k.org ? `<span class="org">From your organization</span>` : "") + (k.offered ? "" : `<span class="org">Not offered to the model</span>`) + note + `</li>`;
+    }).join("");
+    const over = skills.filter((/** @type {any} */ k) => !k.offered && !k.problem).length;
+    return (org ? `<div class="docs">${org}</div>` : "") +
+      (s.skillsLocked ? `<div class="hint">Your organization sets the skills folders.</div>`
+        : `<div class="docs">${mine}</div><button class="link-button" data-sact="addSkills">Add a folder…</button>` +
+          (s.skillsFolders?.length ? ` <button class="link-button" data-sact="newSkill">New skill…</button>` : "")) +
+      (list ? `<ul class="skills">${list}</ul>` : (s.skillsFolders?.length || org ? `<div class="hint">No skills in these folders yet.</div>` : "")) +
+      (over ? `<div class="hint warn">Only the first ${s.skillsOffered} skills are offered to the model.</div>` : "") +
+      `<div class="hint">A skill is instructions for a kind of task: one .md file, named after it, starting with a line "When to use: …". ` +
+      `The model reads a skill whole before a task it covers. Click a skill to edit it.</div>`;
   }
 
   /** The docs folders the organisation sets, shown but not changeable. @param {any} s */
@@ -1393,7 +1420,7 @@
         const key = /** @type {HTMLInputElement | null} */ (document.getElementById("settings-key"))?.value ?? "";
         if (key.trim()) vscode.postMessage({ type: "settingsScreen", action: "key", key });
       } else if (d.sact === "clearKey") vscode.postMessage({ type: "settingsScreen", action: "key", key: "" });
-      else vscode.postMessage({ type: "settingsScreen", action: d.sact, index: d.index !== undefined ? Number(d.index) : undefined });
+      else vscode.postMessage({ type: "settingsScreen", action: d.sact, index: d.index !== undefined ? Number(d.index) : undefined, name: d.name });
     } else if (d.sfield) vscode.postMessage({ type: "settingsScreen", action: "set", field: d.sfield, value: d.value });
     else if (d.setup) {
       closeMenus();

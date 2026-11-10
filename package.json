@@ -92,6 +92,9 @@
           "markdownDescription": "How docs search finds passages. **hybrid** needs **Embeddings model** and sends every passage of your docs folders to the gateway once (then only changed files), plus each search's words." },
         "solder.embeddingModel": { "type": "string", "default": "", "scope": "machine", "order": 10.2,
           "description": "The gateway's embeddings model, for docs search by meaning (Docs search: hybrid)." },
+        "solder.skillsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10.5,
+          "items": { "type": "string" },
+          "markdownDescription": "Folders of your skills: instructions for particular kinds of task, one `.md` file each, named after the skill (`python_scripts.md`), starting with a line `When to use: …`. The model is told each skill's name and when to use it, and reads a skill whole before a task it covers. A new skill is saved in the first folder. Only files directly in a folder count; at most 50 skills are offered." },
         "solder.docsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10,
           "items": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": {
             "path": { "type": "string", "description": "The folder." },

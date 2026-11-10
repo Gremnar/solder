@@ -75,6 +75,21 @@ test("docs folders: the organisation's alone, or with the user's own when AllowU
   assert.deepEqual(both.wrap(user).own("docsFolders", []), ["D:\\Mine", { path: "C:\\specs", about: "dup" }]);
 });
 
+test("skills folders: the organisation's alone, or with the user's own when AllowUserSkills is on", async () => {
+  const user = userConfig({ skillsFolders: ["D:\\My skills", "\\\\share\\Skills"] });
+  assert.deepEqual((await policyWith({})).wrap(user).get("skillsFolders", []), ["D:\\My skills", "\\\\share\\Skills"], "not enforced: the user's");
+  const only = await policyWith({ SkillsFolders: ["\\\\share\\skills", "C:\\Team skills"] });
+  assert.deepEqual(only.wrap(user).get("skillsFolders", []), ["\\\\share\\skills", "C:\\Team skills"]);
+  assert.ok(only.locked("skillsFolders"));
+  assert.deepEqual(only.orgSkills(), ["\\\\share\\skills", "C:\\Team skills"]);
+  const both = await policyWith({ SkillsFolders: "\\\\share\\skills\r\nC:\\Team skills", AllowUserSkills: 1 });
+  assert.deepEqual(both.wrap(user).get("skillsFolders", []), ["\\\\share\\skills", "C:\\Team skills", "D:\\My skills"],
+    "a plain string, one folder a line; the user's after, a folder already in the organisation's not twice");
+  assert.ok(!both.locked("skillsFolders"));
+  assert.deepEqual(both.names.sort(), ["AllowUserSkills", "skillsFolders"]);
+  assert.ok(!(await policyWith({ SkillsFolders: ["C:\\S"], AllowUserSkills: 0 })).allowUserSkills);
+});
+
 test("values of the wrong kind aren't used (and are reported), but a malformed gateway is still enforced", async () => {
   const policy = await policyWith({ Effort: "extreme", MaxRounds: "lots", Endpoint: "not a url", ModelNames: "{\"model-a\": \"A\"}", OrgRules: ["Line one.", "Line two."] });
   const config = policy.wrap(userConfig({ effort: "low", maxRounds: 30, endpoint: "https://mine.example.com/v1/chat/completions" }));

@@ -22,7 +22,7 @@ const READ_MS = 10_000;
 
 /**
  * Each setting's policy value: its registry name and what it holds.
- * @type {Record<string, {value: string, kind: "text" | "number" | "list" | "docs" | "names" | "choice", choices?: string[]}>}
+ * @type {Record<string, {value: string, kind: "text" | "number" | "list" | "docs" | "folders" | "names" | "choice", choices?: string[]}>}
  */
 const SETTINGS = {
   endpoint: { value: "Endpoint", kind: "text" },
@@ -40,9 +40,11 @@ const SETTINGS = {
   docsSearch: { value: "DocsSearch", kind: "choice", choices: ["keyword", "hybrid"] },
   embeddingModel: { value: "EmbeddingModel", kind: "text" },
   docsFolders: { value: "DocsFolders", kind: "docs" },
+  skillsFolders: { value: "SkillsFolders", kind: "folders" },
 };
 /** Policies that aren't a setting: user folders beside enforced ones, and rules added after the user's. */
 const ALLOW_USER_DOCS = "AllowUserDocsFolders";
+const ALLOW_USER_SKILLS = "AllowUserSkills";
 const ORG_RULES = "OrgRules";
 
 /**
@@ -128,6 +130,7 @@ class Policy {
     /** @type {Map<string, any>} the enforced values, by setting name */
     this.values = new Map();
     this.allowUserDocs = false;
+    this.allowUserSkills = false;
     this.orgRules = "";
     /** Why the policy couldn't be read ("" when it could): Solder won't connect while this is set. */
     this.error = "";
@@ -139,8 +142,8 @@ class Policy {
 
   /** Read the policy again. @returns {Promise<boolean>} whether anything changed */
   async refresh() {
-    const before = JSON.stringify([[...this.values], this.allowUserDocs, this.orgRules, this.error]);
-    if (this.platform !== "win32") { this.apply(new Map(), ""); return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.orgRules, this.error]); }
+    const before = JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]);
+    if (this.platform !== "win32") { this.apply(new Map(), ""); return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]); }
     try {
       /** @type {Map<string, any>} */
       const merged = new Map();
@@ -153,7 +156,7 @@ class Policy {
     } catch (error) {
       this.apply(new Map(), `Your organization's settings for Solder couldn't be read (${/** @type {any} */ (error)?.message || error}), so Solder won't connect until they can be. Ask your IT team.`);
     }
-    return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.orgRules, this.error]);
+    return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]);
   }
 
   /** @param {Map<string, any>} raw by lower-case value name @param {string} error */
@@ -169,11 +172,13 @@ class Policy {
       if (read === undefined && setting !== "endpoint") { this.problems.push(`${value}: not a usable ${kind}`); continue; }
       this.values.set(setting, read === undefined ? String(given) : read);
     }
-    const allow = raw.get(ALLOW_USER_DOCS.toLowerCase());
-    this.allowUserDocs = allow !== undefined && (typeof allow === "number" ? allow !== 0 : /^(1|true|yes)$/i.test(String(allow).trim()));
+    const on = (/** @type {any} */ value) => value !== undefined && (typeof value === "number" ? value !== 0 : /^(1|true|yes)$/i.test(String(value).trim()));
+    this.allowUserDocs = on(raw.get(ALLOW_USER_DOCS.toLowerCase()));
+    this.allowUserSkills = on(raw.get(ALLOW_USER_SKILLS.toLowerCase()));
     const org = raw.get(ORG_RULES.toLowerCase());
     this.orgRules = org === undefined ? "" : (Array.isArray(org) ? org.join("\n") : String(org)).trim();
-    this.names = [...this.values.keys(), ...(this.allowUserDocs ? [ALLOW_USER_DOCS] : []), ...(this.orgRules ? [ORG_RULES] : [])];
+    this.names = [...this.values.keys(), ...(this.allowUserDocs ? [ALLOW_USER_DOCS] : []), ...(this.allowUserSkills ? [ALLOW_USER_SKILLS] : []),
+      ...(this.orgRules ? [ORG_RULES] : [])];
   }
 
   /** Before anything connects: throws while the policy can't be read (fail closed). */
@@ -184,11 +189,15 @@ class Policy {
   /** Whether the user can't change this setting. @param {string} name */
   locked(name) {
     if (name === "docsFolders") return this.values.has("docsFolders") && !this.allowUserDocs;
+    if (name === "skillsFolders") return this.values.has("skillsFolders") && !this.allowUserSkills;
     return this.values.has(name);
   }
 
   /** The docs folders the organisation sets ([] when none). @returns {{path: string, about: string}[]} */
   orgDocs() { return this.values.get("docsFolders") || []; }
+
+  /** The skills folders the organisation sets ([] when none). @returns {string[]} */
+  orgSkills() { return this.values.get("skillsFolders") || []; }
 
   /**
    * VS Code's settings for Solder with the policy over them: enforced values win, the user's can't be changed.
@@ -205,6 +214,13 @@ class Policy {
           if (!policy.allowUserDocs) return org;
           const mine = (config.get(name, []) || []).map((/** @type {any} */ item) => typeof item === "string" ? { path: item, about: "" } : item);
           return [...org, ...mine.filter((/** @type {any} */ d) => !org.some((o) => o.path.toLowerCase() === String(d?.path ?? "").toLowerCase()))];
+        }
+        if (name === "skillsFolders") {
+          if (!policy.values.has("skillsFolders")) return config.get(name, fallback);
+          const org = policy.orgSkills();
+          if (!policy.allowUserSkills) return org;
+          const mine = (config.get(name, []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean);
+          return [...org, ...mine.filter((folder) => !org.some((o) => o.toLowerCase() === folder.toLowerCase()))];
         }
         return policy.values.has(name) ? policy.values.get(name) : config.get(name, fallback);
       },
@@ -238,6 +254,10 @@ function coerce(given, kind, choices) {
         .filter((d) => d.path);
       return docs.length ? docs : undefined;
     }
+    case "folders": {
+      const items = (Array.isArray(given) ? given : text.split(/\r?\n/)).map((s) => String(s).trim()).filter(Boolean);
+      return items.length ? items : undefined;
+    }
     case "names": {
       try { const names = JSON.parse(text); return names && typeof names === "object" && !Array.isArray(names) ? names : undefined; } catch { return undefined; }
     }
@@ -248,4 +268,4 @@ function coerce(given, kind, choices) {
 /** The one policy for this window. */
 const policy = new Policy();
 
-module.exports = { Policy, policy, parseRegFile, readKey, coerce, SETTINGS, KEYS, ALLOW_USER_DOCS, ORG_RULES };
+module.exports = { Policy, policy, parseRegFile, readKey, coerce, SETTINGS, KEYS, ALLOW_USER_DOCS, ALLOW_USER_SKILLS, ORG_RULES };

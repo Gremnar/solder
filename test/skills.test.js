@@ -121,6 +121,15 @@ test("read_file hands over a skill whole and kept, needs no approval, and doesn'
     chat.compaction = { through: 1, summary: "S" };
     assert.ok((await tools.run("read_file", { path: file }, { chat, signal: new AbortController().signal })).keep);
 
+    // A network path is opened only inside a network folder that's set up as docs or skills, compared as written.
+    assert.throws(() => tools.resolve("\\\\server\\share\\skills\\a.md"), /Network paths/);
+    tools.skillsFolders = () => ["\\\\server\\share\\skills"];
+    assert.equal(tools.resolve("\\\\server\\share\\skills\\a.md").inside, false);
+    assert.throws(() => tools.resolve("\\\\server\\share\\skills\\..\\secret.txt"), /Network paths/);
+    assert.throws(() => tools.resolve("\\\\server\\share\\skillset\\a.md"), /Network paths/);
+    assert.throws(() => tools.resolve("\\\\evil\\share\\skills\\a.md"), /Network paths/);
+    tools.skillsFolders = () => [folder];
+
     // Not a skill: a file in a subfolder, and a skill file with nothing to follow, are read as files.
     const plain = await tools.run("read_file", { path: path.join(folder, "sub", "helper.txt") }, { chat, signal: new AbortController().signal });
     assert.match(plain.output, /^1\ta$/m);

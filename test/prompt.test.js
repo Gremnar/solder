@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "e745f44eb97c93fc";
+const PINNED = "8ce64ad02fcd0ef1";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -52,6 +52,10 @@ function everything() {
     bare: systemPrompt({ workspace: "C:\\work" }),
     withDocs: systemPrompt({ workspace: "C:\\work", docs: [{ path: "D:\\Docs", about: "ABOUT" }, { path: "E:\\Specs" }] }),
     severalFolders: systemPrompt({ workspace: "S:\\repo", folders: ["S:\\repo", "C:\\local\\tools", "C:\\local\\site"] }),
+    withSkills: systemPrompt({ workspace: "C:\\work", skills: [{ name: "ps_scripts", path: "C:\\Skills\\ps_scripts.md", when: "WHEN" },
+      { name: "bare", path: "C:\\Skills\\bare.md", when: "" }], skillsFolder: "C:\\Skills" }),
+    orgSkillsOnly: systemPrompt({ workspace: "C:\\work", skills: [{ name: "review", path: "\\\\share\\skills\\review.md", when: "WHEN" }] }),
+    noSkillsYet: systemPrompt({ workspace: "C:\\work", skillsFolder: "C:\\Skills" }),
     tools: toolDefinitions(),
     starters: STARTERS,
     plan: [PLAN.now([{ goal: "G1", work: "W1", state: "done", notes: "N1" }, { goal: "G2", work: "W2", state: "doing", notes: "" }, { goal: "G3", work: "W3", state: "todo", notes: "" }]),
@@ -132,7 +136,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "0afbc7dd27e95bda";
+const ASSIST_PINNED = "439cce664f56ac84";
 
 function assistEverything() {
   return {
@@ -140,6 +144,9 @@ function assistEverything() {
       docs: [{ path: "D:\Docs", about: "ABOUT" }] }, "MESSAGE"),
     bare: ASSIST.introduce({ workspace: "C:\work" }, "MESSAGE"),
     severalFolders: ASSIST.setup({ workspace: "S:\repo", folders: ["S:\repo", "C:\local\tools"] }),
+    withSkills: ASSIST.setup({ workspace: "C:\\work", skills: [{ name: "ps_scripts", path: "C:\\Skills\\ps_scripts.md", when: "WHEN" },
+      { name: "bare", path: "C:\\Skills\\bare.md", when: "" }], skillsFolder: "C:\\Skills" }),
+    noSkillsYet: ASSIST.setup({ workspace: "C:\\work", skillsFolder: "C:\\Skills" }),
     changed: ASSIST.setupChanged("SETUP"),
     results: [ASSIST.resultOk("read_file a.js"), ASSIST.resultFailed("read_file a.js"), ASSIST.resultClosing],
     carry: [ASSIST.carryOverLead, ASSIST.carryOverLeftOut(1), ASSIST.carryOverLeftOut(4), ASSIST.carryOverEnd],

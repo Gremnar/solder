@@ -164,8 +164,11 @@ class WorkspaceTools {
     const full = path.resolve(this.base() || process.cwd(), raw);
     // Inside means inside one of the workspace's folders once links are followed: a link in it can point anywhere.
     const inside = !!root && this.roots().some((folder) => within(full, folder) && within(realPath(full), realPath(folder)));
-    // A network path can hand your Windows sign-in to that server, so only the workspace's own are opened.
-    if (!inside && /^(\\\\|\/\/)/.test(full)) throw new ToolError(RESULTS.networkPath);
+    // A network path can hand your Windows sign-in to that server, so only the workspace's own are opened, and those
+    // in a docs or skills folder you (or your organisation) set up: compared as written, so no other server is touched.
+    if (!inside && isNetwork(full) && !this.referenceFolders().some((folder) => isNetwork(folder) && within(full, folder))) {
+      throw new ToolError(RESULTS.networkPath);
+    }
     return { uri: vscode.Uri.file(full), full, inside, shown: this.shown(full) };
   }
 
@@ -328,9 +331,9 @@ class WorkspaceTools {
     return { output: RESULTS.skillRead(skill.name, skill.cut ? skills.MAX_SKILL_CHARS : 0), summary: `Read the skill ${skill.name}`, keep };
   }
 
-  /** The skills folders from the settings that exist (full paths). */
-  skillsFolders() {
-    const raw = solderSettings().get("skillsFolders", []);
+  /** The skills folders from the settings (or the list given) that exist, as full paths. @param {unknown} [given] */
+  skillsFolders(given) {
+    const raw = given ?? solderSettings().get("skillsFolders", []);
     /** @type {string[]} */
     const out = [];
     for (const item of Array.isArray(raw) ? raw : []) {
@@ -428,10 +431,15 @@ class WorkspaceTools {
     return file.inside || this.inReferenceFolder(file.full);
   }
 
+  /** The docs and skills folders: places set up by you or your organisation, which the model reads without asking. */
+  referenceFolders() {
+    return [...this.docsFolders().map((folder) => folder.path), ...this.skillsFolders()];
+  }
+
   /** Whether a path is in one of the docs or skills folders (by its real path, so a junction can't lead out). @param {string} full */
   inReferenceFolder(full) {
     const real = realPath(full);
-    return [...this.docsFolders().map((folder) => folder.path), ...this.skillsFolders()].some((folder) => within(real, realPath(folder)));
+    return this.referenceFolders().some((folder) => within(real, realPath(folder)));
   }
 
   /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */
@@ -1705,6 +1713,11 @@ function withoutSignatureLines(diff) {
 const SIGNATURE_LINE = /^[ +-]\s*(?:#|''|\/\/) [A-Za-z0-9+/=]{16,}\s*$/;
 
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
+/** A network path (\\server\share or //server/share). @param {string} full */
+function isNetwork(full) {
+  return /^(\\\\|\/\/)/.test(full);
+}
+
 function within(full, folder) {
   const a = path.resolve(full).toLowerCase();
   const b = path.resolve(folder).toLowerCase();

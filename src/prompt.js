@@ -48,11 +48,20 @@ it, ask first: one to three short questions, each with the choice you'd recommen
 Don't paste back files you edited.`;
 
 /**
+ * The skills, one line each, for either lane: name, the file to read, and when to use it.
+ * @param {{name: string, path: string, when: string}[]} skills
+ */
+function skillLines(skills) {
+  return skills.map((skill) => `- ${skill.name} (${skill.path})${skill.when ? `: ${skill.when}` : ""}`).join("\n");
+}
+
+/**
  * The system message.
  * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
- *          docs?: {path: string, about?: string}[]}} context
+ *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string}} context
+ *   skills: the skills to offer; skillsFolder: where a new one is saved ("" when the user can't add skills)
  */
-function systemPrompt({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [] }) {
+function systemPrompt({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "" }) {
   const several = folders.length > 1;
   const facts = [several
     ? `- Workspace folders: ${folders[0]} (the main one), ${folders.slice(1).join(", ")}. Relative paths are relative \
@@ -72,6 +81,15 @@ don't look for one. One in a subfolder is added to your first read there.`);
     text += "\n\n# Docs\nThe user keeps reference documentation in these folders. When a task needs something the \
 workspace doesn't have (their own APIs, hardware, specifications), search them with search and docs: true, then read \
 the passage you need with read_file:\n" + docs.map((folder) => `- ${folder.path}${folder.about ? `: ${folder.about}` : ""}`).join("\n");
+  }
+  if (skills.length || skillsFolder) {
+    text += "\n\n# Skills\n" + (skills.length ? "The user's skills: instructions for particular kinds of task. Before you start a \
+task one of them covers, read its file with read_file (it comes back whole and stays in the chat), then follow it; the \
+user's message wins if they conflict. Read only the skills the task needs:\n" + skillLines(skills) : "The user has no skills yet.");
+    if (skillsFolder) text += `\nTo save a new skill, write it with write_file as a .md file named after it \
+(short_words_like_this.md) in ${skillsFolder}: a first line "When to use: " with one sentence on the tasks it's for, then \
+the instructions, short and specific, for someone who never saw this chat. Do it when the user asks. After a long task \
+they're likely to repeat you may offer once, but save one only if they agree.`;
   }
   if (rules.trim()) text += "\n\n# The user's rules\n" + rules.trim();
   return text;
@@ -487,9 +505,9 @@ const MESSAGE_LEAD = "Here's my message:";
  * The Assist setup: the tools, how to ask for them, the workspace and what to follow. The tool lines come from TOOLS,
  * so a tool change lands in both lanes.
  * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
- *          docs?: {path: string, about?: string}[]}} context
+ *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string}} context
  */
-function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [] }) {
+function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "" }) {
   const lines = Object.entries(TOOLS).map(([name, [description, properties, required]]) => {
     const args = Object.keys(properties).map((arg) => /** @type {string[]} */ (required).includes(arg) ? arg : `${arg} (optional)`);
     return `- ${name}: ${assistText(description)}` + (args.length ? ` Arguments: ${args.join(", ")}` : "");
@@ -505,6 +523,13 @@ I ask in a message wins if they conflict:\n\n${file.text.trim()}`);
   if (docs.length) parts.push("I keep reference documentation in these folders. When a task needs something my \
 workspace doesn't have, search them with search and docs set to true, then read the passage you need with read_file:\n"
     + docs.map((d) => `- ${d.path}${d.about ? `: ${d.about}` : ""}`).join("\n"));
+  if (skills.length) parts.push("I've written some skills: instructions for particular kinds of task. Before you start a \
+task one of them covers, read its file with read_file (you get it whole, and it stays in our conversation), then follow \
+it; what I ask in a message wins if they conflict. Read only the skills the task needs:\n" + skillLines(skills));
+  if (skillsFolder) parts.push(`To save a new skill for me, write it with write_file as a .md file named after it \
+(short_words_like_this.md) in ${skillsFolder}: a first line "When to use: " with one sentence on the tasks it's for, then \
+the instructions, short and specific, for someone who never saw this conversation. Do it when I ask. After a long task \
+I'm likely to repeat you may offer once, but save one only if I agree.`);
   if (String(rules || "").trim()) parts.push("A few rules of mine, for everything in this conversation:\n\n" + String(rules).trim());
   return parts.join("\n\n");
 }

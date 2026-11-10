@@ -7,12 +7,17 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
+const { MAX_SKILLS } = require("./skills.js");
+const fs = require("node:fs");
+const path = require("node:path");
 
 class SettingsScreen {
   /**
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
-   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: () => void, refreshModels: () => Promise<void>}} hooks
+   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, refreshModels: () => Promise<void>,
+   *          skills: () => import("./skills.js").Skill[], skillsFolder?: () => string, policyChanged?: () => void,
+   *          testEmbedding: (model: string) => Promise<{dims: number, tokens: number}>}} hooks
    * @param {() => void} changed called whenever what the panel shows changes
    */
   constructor(context, keyName, hooks, changed) {
@@ -30,12 +35,14 @@ class SettingsScreen {
     // Read the policy again; if it changed, the panel follows it too (its connection, models and docs).
     if (await policy.refresh().catch(() => false)) this.hooks.policyChanged?.();
     this.view = { open: true, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
-    // While it's open, the docs index's progress keeps the screen current.
+    // While it's open, the docs index's progress keeps the screen current, and so do skills added or edited elsewhere.
     clearInterval(this.timer);
     this.timer = setInterval(async () => {
       if (!this.view) return;
       const docs = this.hooks.docs();
       if (JSON.stringify(docs) !== JSON.stringify(this.view.docsStatus)) { this.view.docsStatus = docs; this.changed(); }
+      const skills = this.skills();
+      if (JSON.stringify(skills) !== JSON.stringify(this.view.skills)) { this.view.skills = skills; this.changed(); }
     }, 1500);
     this.changed();
   }
@@ -71,7 +78,20 @@ class SettingsScreen {
         ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"]]
         .map(([field, name]) => [field, policy.locked(name)])),
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
+      skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
+      orgSkills: policy.orgSkills(), skillsLocked: policy.locked("skillsFolders"), skills: this.skills(), skillsOffered: MAX_SKILLS,
     };
+  }
+
+  /**
+   * The skills found, for the screen: name, when, any problem, whether it's the organisation's, and whether the model is
+   * offered it (as the prompt does: those with instructions, up to MAX_SKILLS).
+   */
+  skills() {
+    const org = policy.orgSkills().map((folder) => path.resolve(folder).toLowerCase());
+    let offered = 0;
+    return this.hooks.skills().map((skill) => ({ name: skill.name, when: skill.when, problem: skill.problem, cut: skill.cut,
+      org: org.includes(path.dirname(skill.path).toLowerCase()), offered: !!skill.text && ++offered <= MAX_SKILLS }));
   }
 
   /** @param {string} text @param {"ok" | "bad" | ""} [kind] */
@@ -180,6 +200,43 @@ class SettingsScreen {
         await save("docsFolders", stored(docs), "docs-" + index);
         return;
       }
+      case "addSkills": {
+        if (this.view.skillsLocked) { this.notice("Your organization sets the skills folders.", "bad"); return; }
+        const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true,
+          openLabel: "Use for skills", title: "Solder: folders of your skills (one .md file each)" });
+        if (!picked?.length) return;
+        const folders = this.view.skillsFolders.slice();
+        for (const uri of picked) if (!folders.some((/** @type {string} */ f) => f.toLowerCase() === uri.fsPath.toLowerCase())) folders.push(uri.fsPath);
+        await save("skillsFolders", folders, "skills");
+        return;
+      }
+      case "removeSkills": {
+        const folders = this.view.skillsFolders.slice();
+        folders.splice(Number(message.index), 1);
+        await save("skillsFolders", folders, "skills");
+        return;
+      }
+      case "openSkill": {
+        const skill = this.hooks.skills().find((s) => s.name === String(message.name || ""));
+        if (skill) await vscode.window.showTextDocument(vscode.Uri.file(skill.path), { preview: false });
+        return;
+      }
+      case "newSkill": {
+        const folder = this.hooks.skillsFolder?.() ?? "";
+        if (!folder) { this.notice(this.view.skillsLocked ? "Your organization sets the skills folders." : "Add a skills folder first.", "bad"); return; }
+        const name = await vscode.window.showInputBox({ title: "Solder: a new skill", prompt: `Its name, which is its file's name in ${folder}`,
+          placeHolder: "python_scripts", validateInput: (text) => skillNameProblem(text, folder) });
+        if (!name) return;
+        const file = path.join(folder, name.trim() + ".md");
+        try { fs.writeFileSync(file, "When to use: \n\n", { flag: "wx" }); } catch (error) { this.notice(`The skill couldn't be made: ${messageOf(error)}`, "bad"); return; }
+        const editor = await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+        // The cursor goes where the sentence on when to use it is written.
+        const end = new vscode.Position(0, "When to use: ".length);
+        editor.selection = new vscode.Selection(end, end);
+        Object.assign(this.view, { skills: this.skills() });
+        this.changed();
+        return;
+      }
       case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
       case "testEmbedding": {
         const model = String(solderSettings().get("embeddingModel", "")).trim();
@@ -195,6 +252,15 @@ class SettingsScreen {
       }
     }
   }
+}
+
+/** Why a new skill's name won't do, or null. @param {string} text @param {string} folder */
+function skillNameProblem(text, folder) {
+  const name = String(text || "").trim();
+  if (!name) return "Give it a name.";
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/.test(name)) return "Letters, digits, - and _ only, like python_scripts.";
+  if (fs.existsSync(path.join(folder, name + ".md"))) return "There's already a skill with that name.";
+  return null;
 }
 
 /** @param {{path: string, about: string}[]} docs */
