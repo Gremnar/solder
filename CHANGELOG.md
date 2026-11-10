@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.8 (2026-11-09)
 
 - **Assist models (a second kind of model).** Some gateways offer, beside the usual Tool models (system prompt, native tool calls), Assist models that take plain text only and keep the conversation in a session of their own. Set **Tool models** to a pattern for your Tool models' ids, and every other model is an Assist model: Solder introduces your workspace and its tools in plain first person, the model asks for tools by writing a request in its reply (read leniently: Windows paths, broken JSON in a long file, a forgotten fence), and steps, approvals, Review and Undo work as always. With **Assist session block** set, only each new message is sent while the gateway's session holds the chat; otherwise, and whenever it doesn't (a switch, a fork, compaction, a session that ended), the conversation is carried over in one message. Assist tokens are shown as free. Both settings can be enforced by policy.
 - **Switch and carry on when the allowance runs out.** On a Tool model whose Assist twin is on offer, the used-up message offers **Switch to … and resume**: the chat moves to the Assist model, which doesn't use the allowance, and the task carries on where it stopped.
