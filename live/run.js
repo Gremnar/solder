@@ -7,6 +7,7 @@
  *
  *   node live/run.js --model <id> [--endpoint <url>] [--runs 3] [--only a,b] [--skip bugs12] [--parallel 4]
  *                    [--src <a copy of Solder's src>] [--label name] [--baseline label] [--effort low]
+ *                    [--tool-models <regex>] [--assist-block <name>]   (the Assist lane: see live/README.md)
  *
  * The key comes from SOLDER_LIVE_KEY (or "test"). Results go to live/results/<label>.jsonl (not in git).
  */
@@ -29,6 +30,10 @@ const runs = Number(opt("runs", "3"));
 const parallel = Number(opt("parallel", "4"));
 const src = path.resolve(opt("src", path.join(__dirname, "..", "src")));
 const effort = opt("effort", "low");
+// The Assist lane: --tool-models is the pattern for Tool models (the model under test is Assist when it doesn't match),
+// --assist-block the session block's name (empty: every Assist request carries the conversation over).
+const toolModels = opt("tool-models", "");
+const assistBlock = opt("assist-block", "");
 const label = opt("label", `run-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 const baseline = opt("baseline");
 const only = opt("only") ? opt("only").split(",") : null;
@@ -64,8 +69,11 @@ async function once(scenario, run) {
   let requests = 0;
   const reply = client.reply.bind(client);
   // The task's own requests (with tools): not the chat's title, which goes out on its own afterwards.
-  client.reply = async (/** @type {any} */ req) => { if (req.tools?.length) requests++; return reply(req); };
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: 40 }), onEvent: () => {} });
+  client.reply = async (/** @type {any} */ req) => {
+    if (!String(req.messages?.at(-1)?.content || "").startsWith("Give a short title")) requests++;
+    return reply(req);
+  };
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: 40, toolModels, assistSessionBlock: assistBlock }), onEvent: () => {} });
   const chat = S.Engine.newChat();
   const started = Date.now();
   let error = "";
@@ -81,7 +89,7 @@ async function once(scenario, run) {
   const plan = /** @type {any} */ (chat).plan;
   const row = {
     label, model, scenario: scenario.name, run, ok: !why, why: why || "",
-    tokens: chat.usage.tokens, requests, minutes: +((Date.now() - started) / 60000).toFixed(2),
+    tokens: chat.usage.tokens + (chat.usage.assistTokens || 0), requests, minutes: +((Date.now() - started) / 60000).toFixed(2),
     calls: ws.calls.length, failed: ws.calls.filter((/** @type {any} */ c) => c.failed).length, edits: ws.edits,
     failedCalls: ws.calls.filter((/** @type {any} */ c) => c.failed).map((/** @type {any} */ c) => `${c.name}(${c.args.path || c.args.glob || c.args.query || c.args.name || ""})`),
     reads: ws.calls.filter((/** @type {any} */ c) => c.name === "read_file").length,
@@ -90,6 +98,8 @@ async function once(scenario, run) {
     planned: !!plan, planLeft: plan ? plan.steps.filter((/** @type {any} */ s) => s.state !== "done").length : 0,
     nudges: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
     answer: answer.replace(/\s+/g, " ").slice(0, 300),
+    // What an Assist model really wrote, when a run fails (its tool blocks included).
+    raw: why ? chat.messages.filter((/** @type {any} */ m) => m.meta?.raw).slice(-2).map((/** @type {any} */ m) => String(m.meta.raw).slice(0, 700)) : undefined,
   };
   fs.appendFileSync(resultsFile, JSON.stringify(row) + "\n");
   fs.rmSync(root, { recursive: true, force: true });
@@ -116,6 +126,9 @@ function table(rows, base) {
   lines.push(`\n${passed}/${rows.length} passed · ${(total / 1e6).toFixed(2)}M tokens · results in ${path.relative(process.cwd(), resultsFile)}`);
   return lines.join("\n");
 }
+
+// Code a model wrote can throw later, from a callback, while a check runs it: that's a failed run, not a crashed suite.
+process.on("uncaughtException", (error) => { console.log(`(a model's code threw outside its check: ${error && error.message})`); });
 
 (async () => {
   console.log(`Solder live suite · model ${model} · ${chosen.length} scenarios × ${runs} · src ${src} · label ${label}`);

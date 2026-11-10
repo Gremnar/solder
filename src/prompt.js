@@ -456,7 +456,8 @@ request, like this:
 \`\`\`
 
 My extension runs it and sends you the result in my next message, and you can keep going like that for as many \
-steps as you need. You can put up to eight requests in one reply, each in its own tool block, when you already know \
+steps as you need. When you say you'll do something, end that same reply with the request for it: I can't see a \
+step you only describe. You can put up to eight requests in one reply, each in its own tool block, when you already know \
 everything each one needs; at most five of them can change files. My extension runs them in order and stops at the \
 first one that fails or that I decline, so a later request can rely on the earlier ones having worked; a read that \
 fails doesn't stop the reads after it. Every result stays in our conversation, so keep outputs small: search before \
@@ -467,7 +468,8 @@ around it. Edits are saved right away (I can undo them), and you'll see any new 
 broke before moving on. For a task of two or more steps, call plan first, then do one step at a time. My extension \
 can't run commands: when something needs building, testing or running, tell me what to run and I will. I only see \
 what my extension sends back, so wait for a result before describing what a file says. If a change could lose my \
-work, or what I'm asking is unclear and reading the code can't settle it, ask me first. When you're done, tell me \
+work, or what I'm asking is unclear and reading the code can't settle it, ask me first: one to three short \
+questions, each with the choice you'd recommend. When you're done, tell me \
 what you changed or found in a few sentences, with file paths, and don't paste back files you edited. If you don't \
 need anything from my workspace, just answer normally.`;
 

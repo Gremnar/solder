@@ -45,6 +45,7 @@ class Log {
       case "error": this.write(`error: ${pathless(event.message)}${event.exhausted ? " (allowance used up)" : ""}`); break;
       case "done": this.write(`done${event.limit ? ` (step limit ${event.limit})` : ""}`); break;
       case "titled": this.write("titled"); break;
+      case "assist": this.write(`assist ${event.kind} ${n(event.chars)} chars${event.note ? " · " + event.note : ""}`); break;
     }
   }
 

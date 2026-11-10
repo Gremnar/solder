@@ -116,14 +116,21 @@ class SolderPanel {
 
   host() {
     return {
-      systemPrompt: async () => systemPrompt({ workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
-        // The organisation's rules go after the user's, so they read as the more recent instruction.
-        rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders() }),
+      systemPrompt: async () => systemPrompt(this.promptContext()),
+      // The same facts, for an Assist model's introduction (which says them in its own words).
+      assistContext: async () => this.promptContext(),
       runTool: (/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) => this.tools.run(name, args, ctx),
       settleEdits: (/** @type {string} */ group) => this.tools.settleEdits(group),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
       save: (/** @type {any} */ chat) => this.store.save(chat),
     };
+  }
+
+  /** What the model is told about the workspace, for either lane: folders, instruction files, rules, docs. */
+  promptContext() {
+    return { workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
+      // The organisation's rules go after the user's, so they read as the more recent instruction.
+      rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders() };
   }
 
   /** The instruction files (AGENTS.md by default) at the top of each workspace folder. */
@@ -146,7 +153,8 @@ class SolderPanel {
   settings() {
     const config = solderSettings();
     return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
-      compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)) };
+      compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)),
+      toolModels: String(config.get("toolModels", "") || ""), assistSessionBlock: String(config.get("assistSessionBlock", "") || "") };
   }
 
   /** The organisation's policy changed: the client, the models, the docs folders and what's shown follow it. */

@@ -131,7 +131,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "ff35e58cb8dc69d8";
+const ASSIST_PINNED = "0afbc7dd27e95bda";
 
 function assistEverything() {
   return {

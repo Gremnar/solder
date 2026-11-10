@@ -394,5 +394,94 @@ function carryOver(setup, rendered, budget) {
   return [setup, ASSIST.carryOverLead, ...(left ? [ASSIST.carryOverLeftOut(left)] : []), ...kept, ASSIST.carryOverEnd, stripSetup(newest.content)].join("\n\n");
 }
 
+// ================================================================ sessions: what goes out, and what the gateway holds
+
+const crypto = require("node:crypto");
+
+/** What the gateway saw of a stored message (the Assist rendering's inputs), as one line. @param {any} m */
+function canonicalOf(m) {
+  return JSON.stringify([m.role, m.role === "user" ? (m.meta?.sent ?? m.content) : m.role === "assistant" ? (m.meta?.raw ?? m.content) : m.content,
+    m.tool_call_id || "", (m.tool_calls || []).map((/** @type {any} */ c) => [c.id, c.function.name, c.function.arguments])]);
+}
+/** @param {string} text */
+const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
+/** A fingerprint for the log: never the session id or token itself. @param {string} text */
+const fp = (text) => sha(String(text || "")).slice(0, 8);
+
+/** The first `count` stored messages, as one hash: any rewrite of them (compaction, a fork, a Tool-lane reply) shows. @param {any[]} messages @param {number} count */
+function prefixHash(messages, count) {
+  const hash = crypto.createHash("sha256");
+  for (let i = 0; i < count; i++) hash.update(canonicalOf(messages[i]) + "\n");
+  return hash.digest("hex");
+}
+
+/**
+ * How an Assist request goes, for the chat as stored (ending with something to answer: your message, or results).
+ * - "stateful": the gateway's session holds everything before the new user-side messages: only those go, as one.
+ * - "fresh": nothing came before: the introduction and the message, with no session (one comes back).
+ * - "carry_over": there's history the gateway doesn't hold (a switch from the Tool lane, a fork, compaction, a
+ *   session that ended, another Assist model, or no sessions configured): all of it goes in one user message.
+ * @param {any} chat @param {string} model @param {{assistSessionBlock?: string, compactAt: number}} settings
+ * @param {any} context the setup's facts (workspace, instructions, rules, docs) @param {(message: any) => string} resultText
+ * @returns {{kind: "stateful" | "fresh" | "carry_over", messages: {role: "user", content: string}[], session: {block: string, fields: Record<string, string>} | null, setup: string, single: any}}
+ */
+function sessionPlan(chat, model, settings, context, resultText) {
+  const record = chat.assist;
+  const block = String(settings.assistSessionBlock || "").trim();
+  const n = chat.messages.length;
+  const setup = ASSIST.setup(context);
+  const told = sha(setup);
+  if (block && record?.fields && !record.lost && record.model === model && record.held <= n
+      && prefixHash(chat.messages, record.held) === record.heldHash) {
+    const after = chat.messages.slice(record.held);
+    // A finished reply after the held point is one the gateway never saw (the Tool lane answered in between): it
+    // doesn't hold the conversation any more. A partial one (a reply that failed partway) is left out of what's sent.
+    const unseen = after.some((/** @type {any} */ m) => m.role === "assistant" && !m.meta?.incomplete);
+    if (!unseen && after.some((/** @type {any} */ m) => m.role !== "assistant")) {
+      const fresh = { ...chat, compaction: null, messages: after.filter((/** @type {any} */ m) => m.role !== "assistant") };
+      let text = assistOutbound(fresh, resultText).filter((m) => m.role === "user").map((m) => m.content).join("\n\n");
+      if (record.told !== told) text = ASSIST.setupChanged(setup) + "\n\n" + text;
+      const users = fresh.messages.filter((/** @type {any} */ m) => m.role === "user");
+      return { kind: "stateful", messages: [{ role: "user", content: text }], session: { block, fields: record.fields }, setup,
+        single: users.length === 1 && fresh.messages.length === 1 ? users[0] : null };
+    }
+  }
+  const rendered = assistOutbound(chat, resultText);
+  if (rendered.length === 1 && !chat.compaction && rendered[0].role === "user") {
+    const only = chat.messages.filter((/** @type {any} */ m) => m.role === "user");
+    const content = rendered[0].content.startsWith(ASSIST.lead) ? rendered[0].content : setup + "\n\n" + ASSIST.messageLead + "\n\n" + rendered[0].content;
+    return { kind: "fresh", messages: [{ role: "user", content }], session: null, setup, single: only.length === 1 ? only[0] : null };
+  }
+  return { kind: "carry_over", messages: [{ role: "user", content: carryOver(setup, rendered, carryBudget(settings)) }], session: null, setup, single: null };
+}
+
+/** Well within the model's context: four fifths of the compaction limit, in characters. @param {{compactAt: number}} settings */
+function carryBudget(settings) {
+  return Math.floor((settings.compactAt || 100_000) * 4 * 0.8);
+}
+
+/**
+ * After a reply: the session it came back with (or the one it continued) now holds everything stored so far, the
+ * reply included. Returns what happened, for the log (fingerprints and ages only).
+ * @param {any} chat @param {string} model @param {{kind: string, setup: string}} plan @param {{session?: {fields: Record<string, string>} | null}} reply
+ * @param {(fields: Record<string, string>) => string} sessionId @returns {string}
+ */
+function holdSession(chat, model, plan, reply, sessionId) {
+  const old = chat.assist || {};
+  const now = Date.now();
+  const held = { held: chat.messages.length, heldHash: prefixHash(chat.messages, chat.messages.length), told: sha(plan.setup), usedAt: now, model };
+  if (!reply.session) {
+    // No session in the answer: the one sent still holds it (stateful), or there's none (fresh, carry-over).
+    if (plan.kind === "stateful") { chat.assist = { ...old, ...held }; return `continued ${fp(sessionId(old.fields || {}))}`; }
+    chat.assist = { lost: true, why: "none", since: now };
+    return "no session";
+  }
+  const id = sessionId(reply.session.fields);
+  const same = !!old.fields && sessionId(old.fields) === id;
+  chat.assist = { fields: reply.session.fields, startedAt: same ? old.startedAt : now, ...held };
+  if (plan.kind === "stateful" && !same) return `replaced ${fp(sessionId(old.fields || {}))} by ${fp(id)} after ${Math.round((now - (old.startedAt || now)) / 60000)} min`;
+  return same ? `continued ${fp(id)}, ${Math.round((now - (old.startedAt || now)) / 60000)} min old` : `started ${fp(id)} (${plan.kind})`;
+}
+
 module.exports = { findRequests, parseReply, visibleText, decode, salvage, canonical, fence, resultMessage, requestBlock,
-  assistOutbound, carryOver, stripSetup };
+  assistOutbound, carryOver, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };

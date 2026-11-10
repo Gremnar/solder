@@ -14,6 +14,8 @@ node live/run.js --model <id> [--runs 3] [--only typo,rename] [--skip bugs12] [-
 - **A before and after:** run a copy of the old `src/` with `--src` and `--label before`, then the new one with
   `--baseline before`; the table shows both.
 - **Results:** `live/results/<label>.jsonl`, one line per run (not in git).
+- **The Assist lane:** `--tool-models <regex>` makes every model that doesn't match an Assist model (plain text, tool requests
+  written in the reply). With no `--assist-block`, there are no sessions: every request carries the conversation over.
 - **Cost:** a light scenario is 5–40k tokens a run; `bugs12` is about half a million. Skip it with `--skip bugs12`.
 
 Each scenario (`live/scenarios.js`) sets up files, gives a task, and checks the outcome on disk by running the

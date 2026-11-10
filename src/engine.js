@@ -13,8 +13,13 @@
  * Every call is answered by a tool message, even one that never ran, so the history always lines up.
  */
 
-const { Cancelled } = require("./gateway.js");
-const { READ_ONLY, TEXTS, TOOLS, PLAN, timeNote, toolDefinitions } = require("./prompt.js");
+const { Cancelled, sessionId } = require("./gateway.js");
+const { READ_ONLY, TEXTS, TOOLS, PLAN, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
+const { laneOf } = require("./lanes.js");
+const { sessionPlan, holdSession, parseReply, visibleText } = require("./assist.js");
+
+/** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
+const MAX_REPAIRS = 2;
 
 const CHARS_PER_TOKEN = 4;
 /** Within the chat, the newest results stay whole up to about this many tokens… */
@@ -97,8 +102,14 @@ class Engine {
   }
 
   /** Count a reply's tokens (a failed one that was billed too) and show them. @param {Chat} chat @param {any} usage @param {any} credits */
-  _spend(chat, usage, credits) {
+  _spend(chat, usage, credits, free = false) {
     const used = usage?.total_tokens || ((usage?.prompt_tokens || 0) + (usage?.completion_tokens || 0));
+    if (free) {
+      // An Assist model's tokens aren't billed: counted apart, and not in what this chat has cost.
+      chat.usage.assistTokens = (chat.usage.assistTokens || 0) + used;
+      this.emit({ type: "usage", chat: chat.id, answer: this.answerTokens, total: chat.usage.tokens, prompt: 0, credits: credits || null, free: true });
+      return;
+    }
     this.answerTokens += used;
     chat.usage.tokens += used;
     this.emit({ type: "usage", chat: chat.id, answer: this.answerTokens, total: chat.usage.tokens,
@@ -121,6 +132,7 @@ class Engine {
     const fresh = Engine.newChat();
     const copy = JSON.parse(JSON.stringify(chat));
     const base = String(chat.title || "New chat").replace(/ \(fork\)$/, "");
+    if (copy.assist) copy.assist = { lost: true, why: "fork", since: Date.now() };
     return { ...copy, id: fresh.id, created: fresh.created, updated: fresh.updated, usage: { tokens: 0 },
       title: `${base} (fork)`, titleSource: "user", forkedFrom: { id: chat.id, title: chat.title } };
   }
@@ -253,32 +265,44 @@ class Engine {
     const tools = toolDefinitions();
     let rounds = 0;
     let nudged = false;
+    let repairs = 0;
     for (;;) {
-      // Before every step, not just a new message, so a long task can't run far past the limit. Only
-      // earlier turns are summarised: this one's calls carry thought signatures some models check.
-      await this._compactIfDue(chat, signal, taskStart(chat));
-      trim(chat, settings.compactAt);
-      const system = await this.host.systemPrompt(chat);
-      const messages = outbound(chat, system);
-      this.emit({ type: "thinking", chat: chat.id });
-      const reply = await this._patient(chat, { model: modelOf(chat, settings), messages, tools,
-        effort: effortOf(settings.effortLocked ? settings.effort : chat.effort || settings.effort), signal });
-      // The server's count over our estimate, so compaction triggers on real tokens (code runs about 30% over).
-      const sentEstimate = estimateMessages(messages) + estimate(JSON.stringify(tools));
-      if (reply.usage?.prompt_tokens > 0 && sentEstimate > 0) {
-        chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
-      }
-      this._spend(chat, reply.usage, reply.credits);
-      this.emit({ type: "reply", chat: chat.id, model: modelOf(chat, settings), ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
-        completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: reply.calls.length });
+      const model = modelOf(chat, settings);
+      /** @type {any} */
+      let reply;
       /** @type {Stored} */
-      const assistant = { role: "assistant", content: reply.content };
-      if (reply.calls.length) {
-        const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
-        assistant.tool_calls = reply.calls.map((/** @type {any} */ call) => ({ id: unique(call.id, used), type: "function",
-          function: { name: call.name, arguments: call.arguments }, ...(call.extra ? { extra_content: call.extra } : {}) }));
+      let assistant;
+      if (laneOf(model, settings) === "assist") {
+        // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
+        const step = await this._assistStep(chat, model, settings, signal, repairs);
+        if (step.repair) { repairs++; continue; }
+        ({ reply, assistant } = step);
+      } else {
+        // Before every step, not just a new message, so a long task can't run far past the limit. Only
+        // earlier turns are summarised: this one's calls carry thought signatures some models check.
+        await this._compactIfDue(chat, signal, taskStart(chat));
+        trim(chat, settings.compactAt);
+        const system = await this.host.systemPrompt(chat);
+        const messages = outbound(chat, system);
+        this.emit({ type: "thinking", chat: chat.id });
+        reply = await this._patient(chat, { model, messages, tools,
+          effort: effortOf(settings.effortLocked ? settings.effort : chat.effort || settings.effort), signal });
+        // The server's count over our estimate, so compaction triggers on real tokens (code runs about 30% over).
+        const sentEstimate = estimateMessages(messages) + estimate(JSON.stringify(tools));
+        if (reply.usage?.prompt_tokens > 0 && sentEstimate > 0) {
+          chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
+        }
+        this._spend(chat, reply.usage, reply.credits);
+        this.emit({ type: "reply", chat: chat.id, model: modelOf(chat, settings), ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
+          completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: reply.calls.length });
+        assistant = { role: "assistant", content: reply.content };
+        if (reply.calls.length) {
+          const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
+          assistant.tool_calls = reply.calls.map((/** @type {any} */ call) => ({ id: unique(call.id, used), type: "function",
+            function: { name: call.name, arguments: call.arguments }, ...(call.extra ? { extra_content: call.extra } : {}) }));
+        }
+        chat.messages.push(assistant);
       }
-      chat.messages.push(assistant);
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
       if (!reply.calls.length) {
@@ -308,6 +332,64 @@ class Engine {
       await this._batch(chat, assistant, reply.finishReason === "length", settings.maxRounds - rounds, signal);
       if (signal.aborted) throw new Cancelled();
     }
+  }
+
+  /**
+   * One step on the Assist lane: what to send (sessionPlan: only the new message while the gateway's session holds
+   * the chat; else the introduction, or the conversation carried over), the reply, its tool requests parsed into
+   * ordinary tool calls (stored as the Tool lane stores them), and the session it came back with. A session that
+   * answers 502 has ended: the conversation is carried over once. A request that can't be read is asked for again.
+   * @param {Chat} chat @param {string} model @param {any} settings @param {AbortSignal} signal @param {number} repairs
+   * @returns {Promise<{repair: true} | {repair?: false, reply: any, assistant: Stored}>}
+   */
+  async _assistStep(chat, model, settings, signal, repairs) {
+    trim(chat, settings.compactAt); // smaller stand-ins for a carry-over; what the session holds is unaffected
+    const context = (await this.host.assistContext?.(chat)) || { workspace: "" };
+    const block = String(settings.assistSessionBlock || "").trim();
+    let plan = sessionPlan(chat, model, settings, context, resultText);
+    const send = (/** @type {any} */ p) => this._patient(chat, { model, messages: p.messages, assist: true, session: p.session, sessionBlock: block, signal });
+    this.emit({ type: "thinking", chat: chat.id });
+    /** @type {any} */
+    let reply;
+    try {
+      reply = await send(plan);
+    } catch (error) {
+      if (!(plan.kind === "stateful" && /** @type {any} */ (error)?.status === 502)) throw error;
+      this.emit({ type: "assist", chat: chat.id, kind: "ended", chars: 0, note: "the session ended (HTTP 502): carrying the conversation over" });
+      chat.assist = { lost: true, why: "ended", since: Date.now() };
+      plan = sessionPlan(chat, model, settings, context, resultText);
+      reply = await send(plan);
+    }
+    // What actually went out, kept beside what's shown: the history renders as it was sent.
+    if (plan.single && (plan.kind === "fresh" || plan.messages[0].content !== (plan.single.meta?.sent ?? plan.single.content))) {
+      plan.single.meta = { ...plan.single.meta, sent: plan.messages[0].content };
+    }
+    this._spend(chat, reply.usage, reply.credits, true);
+    const parsed = parseReply(reply.content, { cutOff: reply.finishReason === "length" });
+    this.emit({ type: "reply", chat: chat.id, model, ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
+      completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: parsed.calls.length });
+    /** @type {Stored} */
+    const assistant = { role: "assistant", content: parsed.visible, meta: { lane: "assist", raw: reply.content } };
+    if (parsed.calls.length) {
+      const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
+      const stamp = Date.now().toString(36);
+      assistant.tool_calls = parsed.calls.map((call, n) => ({ id: unique(`assist_${stamp}_${n}`, used), type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.args) } })); // no extra_content: Assist has no signatures
+    }
+    chat.messages.push(assistant);
+    const note = holdSession(chat, model, plan, reply, sessionId);
+    this.emit({ type: "assist", chat: chat.id, kind: plan.kind, chars: plan.messages[0].content.length, note });
+    if (!parsed.calls.length && parsed.found) {
+      // A request it meant but that can't be used: asked for again (a couple of times), in the user's words.
+      if (repairs >= MAX_REPAIRS) { await this._save(chat); throw new Error(ASSIST.gaveUp); }
+      const text = reply.finishReason === "length" ? ASSIST.cutOff
+        : parsed.unknown ? ASSIST.unknownTool(parsed.unknown, Object.keys(TOOLS)) : ASSIST.repair(parsed.problem || "it couldn't be read");
+      chat.messages.push({ role: "user", content: text, meta: { typed: "Asked for the tool request again", resume: true, repair: true } });
+      await this._save(chat);
+      this.emit({ type: "message", chat: chat.id });
+      return { repair: true };
+    }
+    return { reply: { content: parsed.visible, calls: assistant.tool_calls || [], finishReason: "", usage: reply.usage }, assistant };
   }
 
   /**
@@ -463,10 +545,15 @@ class Engine {
     for (;;) {
       let shown = "";
       let told = 0;
+      let visible = "";
       try {
         return await this.client.reply({ ...request, onText: (/** @type {string} */ text) => {
           shown += text;
-          if (!side) this.emit({ type: "delta", chat: chat.id, text });
+          if (side) return;
+          if (!request.assist) { this.emit({ type: "delta", chat: chat.id, text }); return; }
+          // An Assist reply streams its tool requests as text: only the words before them are shown.
+          const now = visibleText(shown, true);
+          if (now.length > visible.length && now.startsWith(visible)) { this.emit({ type: "delta", chat: chat.id, text: now.slice(visible.length) }); visible = now; }
         }, onCalls: (/** @type {{name: string, chars: number, path: string}[]} */ calls) => {
           // A tool call being written (a long file can take minutes): the panel says so, a few times a second at most.
           if (side || Date.now() - told < DRAFTING_EVERY_MS) return;
@@ -479,15 +566,19 @@ class Engine {
         const stopped = error instanceof Cancelled || request.signal.aborted;
         const partial = e.partial || shown;
         if (partial && !side) {
-          chat.messages.push({ role: "assistant", content: partial, meta: { incomplete: true } });
+          chat.messages.push(request.assist ? { role: "assistant", content: visibleText(partial), meta: { incomplete: true, lane: "assist", raw: partial } }
+            : { role: "assistant", content: partial, meta: { incomplete: true } });
           throw stopped ? new Cancelled() : error;
         }
         if (stopped) throw new Cancelled();
         const last = request.messages[request.messages.length - 1];
         if (e.empty) {
-          if (!e.transient || emptyTried || last.role !== "tool") throw error;
+          // Only after results (not after your own message): on the Assist lane those are inside a user message.
+          const afterResults = request.assist ? chat.messages[chat.messages.length - 1]?.role === "tool" : last.role === "tool";
+          if (!e.transient || emptyTried || !afterResults) throw error;
           emptyTried = true;
-          request = { ...request, messages: [...request.messages.slice(0, -1), { ...last, content: last.content + TEXTS.emptyReply }] };
+          const note = request.assist ? assistText(TEXTS.emptyReply) : TEXTS.emptyReply;
+          request = { ...request, messages: [...request.messages.slice(0, -1), { ...last, content: last.content + note }] };
           this.emit({ type: "retrying", chat: chat.id, why: "empty" });
           continue;
         }
@@ -511,6 +602,8 @@ class Engine {
   async _compactIfDue(chat, signal, limit, options = {}) {
     const force = !!options.force;
     const settings = this.settings();
+    const assistLane = laneOf(modelOf(chat, settings), settings) === "assist";
+    if (assistLane && !force) return "skipped";
     trim(chat, settings.compactAt);
     const system = await this.host.systemPrompt(chat);
     const ratio = chat.tokenRatio || 1;
@@ -539,19 +632,23 @@ class Engine {
     let reply;
     try {
       const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
-      reply = await this._patient(chat, { model: modelOf(chat, settings), signal, effort: undefined, messages: [
-        { role: "system", content: TEXTS.compactionSystem },
-        { role: "user", content: `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` +
-          (focus ? `\n\n${TEXTS.compactionFocus(focus)}` : "") }] }, true);
+      const ask = `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` + (focus ? `\n\n${TEXTS.compactionFocus(focus)}` : "");
+      // An Assist model takes no system message, and a side request there goes whole (not streamed), without a session.
+      reply = assistLane
+        ? await this._patient(chat, { model: modelOf(chat, settings), signal, assist: true, stream: false, messages: [{ role: "user", content: ask }] }, true)
+        : await this._patient(chat, { model: modelOf(chat, settings), signal, effort: undefined, messages: [
+          { role: "system", content: TEXTS.compactionSystem }, { role: "user", content: ask }] }, true);
     } catch (error) {
       if (error instanceof Cancelled || signal.aborted) throw new Cancelled();
       this.emit({ type: "compaction-failed", chat: chat.id, message: error instanceof Error ? error.message : String(error) });
       if (!force) failed.set(chat.id, attempt);
       return "failed";
     }
-    this._spend(chat, reply.usage, reply.credits);
+    this._spend(chat, reply.usage, reply.credits, assistLane); // free on the Assist lane
     if (!reply.content.trim()) { if (!force) failed.set(chat.id, attempt); return force ? "failed" : "skipped"; }
     chat.compaction = { through: cut, summary: reply.content.trim() };
+    // The session no longer matches the chat: the next Assist message starts afresh, with the recap carried over.
+    if (chat.assist) chat.assist = { lost: true, why: "compacted", since: Date.now() };
     await this._save(chat);
     this.emit({ type: "compacted", chat: chat.id, through: cut });
     return "done";
@@ -573,10 +670,11 @@ class Engine {
     const settings = this.settings();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
+    const assistLane = laneOf(modelOf(chat, settings), settings) === "assist";
     Promise.resolve().then(() => this.client.reply({ model: modelOf(chat, settings), signal: controller.signal,
-      messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
+      ...(assistLane ? { assist: true, stream: false } : {}), messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
       .then(async (/** @type {any} */ reply) => {
-        if (reply.usage) { this._spend(chat, reply.usage, reply.credits); await this._save(chat); }
+        if (reply.usage) { this._spend(chat, reply.usage, reply.credits, assistLane); await this._save(chat); }
         const title = cleanTitle(reply.content || "");
         if (!title || chat.titleSource === "user" || title === chat.title) return;
         chat.title = title;

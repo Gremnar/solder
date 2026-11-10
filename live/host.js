@@ -42,6 +42,7 @@ function workspaceHost(root, S, hooks = {}) {
   const ws = new Workspace(root, S, hooks);
   return { ws, host: {
     async systemPrompt() { return S.prompt.systemPrompt({ workspace: root }); },
+    async assistContext() { return { workspace: root }; },
     needsApproval: () => null,
     async save() {},
     async runTool(/** @type {string} */ name, /** @type {any} */ args) { return ws.run(name, args); },
