@@ -326,6 +326,13 @@ code, so only its start is shown. Search for the names you need instead: that sh
     `(${name} is also defined in ${places.join(", ")}: these are the uses of the first. Give path and line for another's.)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
     `This folder's ${file} says (it applies to files under it):\n${text}`,
+  skillRead: (/** @type {string} */ name, /** @type {number} */ cutAt) => `The skill ${name}, whole, is below. It stays in \
+this chat, so you needn't read it again: follow it for this task.` + (cutAt ? ` (The file is longer than a skill may be: \
+only its first ${cutAt.toLocaleString("en-US")} characters are here.)` : ""),
+  skillAgain: (/** @type {string} */ name) => `You've already read the skill ${name}: it's earlier in this chat, whole \
+and unchanged. Follow it from there.`,
+  skillText: (/** @type {string} */ name, /** @type {string} */ when, /** @type {string} */ text) =>
+    `Skill: ${name}` + (when ? `\nWhen to use: ${when}` : "") + `\n\n${text}`,
   noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \
 If you were checking whether something already exists, it probably doesn't: carry on without it rather than \
 searching again with other words.`,

@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "b8b85e4ec4394134";
+const PINNED = "e745f44eb97c93fc";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -24,7 +24,8 @@ const RESULT_SAMPLES = {
   references: [["total", 1, 1], ["total", 1200, 9]], referencesCapped: [[1100]], noLanguageHits: [["total"]], noHitsAtAll: [["total"]],
   notGit: [["src"]], gitFailed: [["bad"]], noChanges: [[""], ["src"]], changedFiles: [[1, false], [7, true]], changedCapped: [[30]],
   newFiles: [[["a.js", "b.js"]]], unsaved: [[["a.js"]]], docsHits: [["pump", 1], ["pump", 10]], docsLoose: [[1, 6]],
-  docsNoMatches: [["pump"]], docsBuilding: [[1234]], longLine: [[1, 250000, false], [14, 3400, true]], alsoDefined: [["parse", ["src/b.js 4", "lib/c.js 10"]]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
+  docsNoMatches: [["pump"]], docsBuilding: [[1234]], longLine: [[1, 250000, false], [14, 3400, true]], alsoDefined: [["parse", ["src/b.js 4", "lib/c.js 10"]]], readPart: [[1, 2000, 4100]], folderAgents: [["sub/AGENTS.md", "TEXT"]], skillRead: [["python_scripts", 0], ["big", 20000]], skillAgain: [["python_scripts"]],
+  skillText: [["python_scripts", "WHEN", "TEXT"], ["bare", "", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
   notFound: [["a.js", 0, 0, 0, 0], ["a.js", 28, 34, 2, 3], ["a.js", 5, 9, 1, 1]], nearby: [[["src/a.js", "lib/a.js"], true], [["src/a.ts"], false]],
   folderHas: [[["lib/", "a.js"], 2], [["a.js"], 150]], searchTimedOut: [[30]], searchIncomplete: [[30]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]],

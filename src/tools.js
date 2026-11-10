@@ -14,6 +14,7 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
 const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
+const skills = require("./skills.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -186,8 +187,8 @@ class WorkspaceTools {
       if (!args.path) return null;
       let file;
       try { file = this.resolve(args.path); } catch { return null; }
-      if (file.inside || this.docsFolders().some((folder) => within(realPath(file.full), realPath(folder.path)))) return null;
-      return "It reads a file outside the workspace folder and your docs folders.";
+      if (file.inside || this.inReferenceFolder(file.full)) return null;
+      return "It reads a file outside the workspace folder, your docs folders and your skills folders.";
     }
     if (name === "changes" && args.path) {
       let target;
@@ -248,6 +249,8 @@ class WorkspaceTools {
   async readFile(/** @type {any} */ args, /** @type {any} */ chat) {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
+    const skill = this.readSkill(file.full, chat);
+    if (skill) return skill;
     /** @type {{lineCount: number, lineAt: (index: number) => {text: string}, getText: () => string}} */
     let document;
     if (isOffice(file.full)) {
@@ -305,6 +308,44 @@ class WorkspaceTools {
     const agents = this.nestedAgents(file, chat);
     return { output, summary: `Read ${file.shown}` + (partial ? ` · lines ${start}–${end} of ${total}` : ` · ${total} lines`),
       ...(agents ? { keep: agents } : {}) };
+  }
+
+  /**
+   * A skill's file, read: always whole (a range asked for is ignored), without line numbers, and as `keep`, so
+   * it stays in the chat when the result is cut or its plan step is done. A skill the chat already holds, word
+   * for word, isn't sent again. null when the file isn't a skill (or has nothing in it to follow): read as a file.
+   * @param {string} full @param {any} chat @returns {{output: string, summary: string, keep?: string} | null}
+   */
+  readSkill(full, chat) {
+    const real = realPath(full);
+    if (!skills.isSkill(this.skillsFolders().map(realPath), real)) return null;
+    const skill = skills.readSkill(real);
+    if (!skill.text) return null;
+    const keep = RESULTS.skillText(skill.name, skill.when, skill.text);
+    const since = chat?.compaction?.through ?? 0;
+    const held = (chat?.messages || []).slice(since).some((/** @type {any} */ m) => m.role === "tool" && String(m.meta?.keep ?? "").includes(keep));
+    if (held) return { output: RESULTS.skillAgain(skill.name), summary: `Skill ${skill.name} · already in this chat` };
+    return { output: RESULTS.skillRead(skill.name, skill.cut ? skills.MAX_SKILL_CHARS : 0), summary: `Read the skill ${skill.name}`, keep };
+  }
+
+  /** The skills folders from the settings that exist (full paths). */
+  skillsFolders() {
+    const raw = solderSettings().get("skillsFolders", []);
+    /** @type {string[]} */
+    const out = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const given = typeof item === "string" ? item : item && typeof item === "object" ? String(item.path ?? "") : "";
+      if (!given.trim()) continue;
+      const full = path.resolve(given.trim().replace(/^~(?=$|[\\/])/, os.homedir()));
+      try { if (!fs.statSync(full).isDirectory()) continue; } catch { continue; }
+      if (!out.some((folder) => folder.toLowerCase() === full.toLowerCase())) out.push(full);
+    }
+    return out;
+  }
+
+  /** The skills the model is told about: in the skills folders, the organisation's first. */
+  skills() {
+    return skills.listSkills(this.skillsFolders());
   }
 
   /** The first read in a folder with its own AGENTS.md brings that file along (the nearest one wins). */
@@ -380,11 +421,17 @@ class WorkspaceTools {
     return others.length ? { ...uses, output: uses.output + "\n\n" + RESULTS.alsoDefined(name, others) } : uses;
   }
 
-  /** A file the model may see without asking: in the workspace or a docs folder (as read_file's approval). @param {string} full */
+  /** A file the model may see without asking: in the workspace, a docs folder or a skills folder (as read_file's approval). @param {string} full */
   mayRead(full) {
     let file;
     try { file = this.resolve(full); } catch { return false; }
-    return file.inside || this.docsFolders().some((folder) => within(realPath(file.full), realPath(folder.path)));
+    return file.inside || this.inReferenceFolder(file.full);
+  }
+
+  /** Whether a path is in one of the docs or skills folders (by its real path, so a junction can't lead out). @param {string} full */
+  inReferenceFolder(full) {
+    const real = realPath(full);
+    return [...this.docsFolders().map((folder) => folder.path), ...this.skillsFolders()].some((folder) => within(real, realPath(folder)));
   }
 
   /** Definitions with their code (the whole symbol when VS Code knows its extent, capped). */
