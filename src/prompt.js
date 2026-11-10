@@ -437,4 +437,129 @@ function timeNote(now = new Date()) {
   return `(${day}, ${time})`;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote };
+// ================================================================ the Assist lane
+/*
+ * Assist models take no system message and no tools: everything they need goes inside the user's own messages, in
+ * plain first person, about the user's own program ("I'm using Solder, a small VS Code extension of mine…"). Newer
+ * models refuse pseudo-system wrappers ("[SYSTEM]", "You are…" role-play); this style hasn't been refused. These texts
+ * are the Assist lane's alone: the Tool lane's RULES and systemPrompt aren't built from them, nor they from those,
+ * and each lane is pinned by its own test, so work on one can't change the other.
+ */
+const ASSIST_LEAD = "I'm using Solder, a small VS Code extension of mine, to talk with you. It works in my workspace \
+and can do a few things there that you can't do directly:";
+
+const ASSIST_HOW = `When one of these would help, end your reply with a code block tagged tool that holds one JSON \
+request, like this:
+
+\`\`\`tool
+{"tool": "read_file", "path": "src/app.js"}
+\`\`\`
+
+My extension runs it and sends you the result in my next message, and you can keep going like that for as many \
+steps as you need. You can put up to eight requests in one reply, each in its own tool block, when you already know \
+everything each one needs; at most five of them can change files. My extension runs them in order and stops at the \
+first one that fails or that I decline, so a later request can rely on the earlier ones having worked; a read that \
+fails doesn't stop the reads after it. Every result stays in our conversation, so keep outputs small: search before \
+reading, and for a big file you haven't seen, get its outline with symbols and read only the lines you need. To find \
+where a function, class or method is defined or used, use symbols rather than search. Read only what the task needs, \
+and never guess what a file says: read it. Make the smallest change that does the job, in the style of the code \
+around it. Edits are saved right away (I can undo them), and you'll see any new problems they cause: fix what you \
+broke before moving on. For a task of two or more steps, call plan first, then do one step at a time. My extension \
+can't run commands: when something needs building, testing or running, tell me what to run and I will. I only see \
+what my extension sends back, so wait for a result before describing what a file says. If a change could lose my \
+work, or what I'm asking is unclear and reading the code can't settle it, ask me first. When you're done, tell me \
+what you changed or found in a few sentences, with file paths, and don't paste back files you edited. If you don't \
+need anything from my workspace, just answer normally.`;
+
+/** The lead before the user's own words. Kept identical always: it's how a saved message is split back up. */
+const MESSAGE_LEAD = "Here's my message:";
+
+/**
+ * The Assist setup: the tools, how to ask for them, the workspace and what to follow. The tool lines come from TOOLS,
+ * so a tool change lands in both lanes.
+ * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
+ *          docs?: {path: string, about?: string}[]}} context
+ */
+function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [] }) {
+  const lines = Object.entries(TOOLS).map(([name, [description, properties, required]]) => {
+    const args = Object.keys(properties).map((arg) => /** @type {string[]} */ (required).includes(arg) ? arg : `${arg} (optional)`);
+    return `- ${name}: ${assistText(description)}` + (args.length ? ` Arguments: ${args.join(", ")}` : "");
+  });
+  const where = folders.length > 1
+    ? `My workspace folders are ${folders[0]} (the main one) and ${folders.slice(1).join(", ")}. Relative paths are \
+relative to the working folder when my message names one, otherwise to the main folder; use full paths for the others.`
+    : `My workspace folder is ${workspace || "(none open)"}. Relative paths are relative to the working folder when my \
+message names one, otherwise to this folder.`;
+  const parts = [ASSIST_LEAD + "\n\n" + lines.join("\n"), ASSIST_HOW, `${where} I'm on ${os}. Each of my messages starts with my local date and time.`];
+  for (const file of instructions) parts.push(`My project's instructions (${file.path}), which you should follow; what \
+I ask in a message wins if they conflict:\n\n${file.text.trim()}`);
+  if (docs.length) parts.push("I keep reference documentation in these folders. When a task needs something my \
+workspace doesn't have, search them with search and docs set to true, then read the passage you need with read_file:\n"
+    + docs.map((d) => `- ${d.path}${d.about ? `: ${d.about}` : ""}`).join("\n"));
+  if (String(rules || "").trim()) parts.push("A few rules of mine, for everything in this conversation:\n\n" + String(rules).trim());
+  return parts.join("\n\n");
+}
+
+/** Texts that say "the user", in the Assist lane's first person (the user is the one speaking there). */
+const ASSIST_SWAPS = [
+  [TEXTS.notRun, "My extension didn't run this one: an earlier request in the same reply failed or I declined it."],
+  [TEXTS.notRunStopped, "I stopped the reply before this one, so my extension didn't run it."],
+  [TEXTS.stoppedRunning, "I stopped the reply while this was running, so there's no result."],
+  [TEXTS.declined, "I declined this."],
+  [TEXTS.emptyReply, "\n\n(Your reply to this came back empty, so here it is again. Please carry on: send your next tool \
+request, or give me your answer.)"],
+  ["The user's note: ", "My note: "],
+  ["Also, a message from the user while you were working:", "Also, a message from me while you were working:"],
+  ["tell the user to sign it again", "remind me to sign it again"],
+  ["Tell the user it wasn't checked, so they can open it to have it checked.", "Tell me it wasn't checked, so I can open it to have it checked."],
+  ["Tell the user it may not have been checked.", "Tell me it may not have been checked."],
+  ["The user can add them", "I can add them"],
+  ["which asks the user first", "which asks me first"],
+  ["Ask the user to save it first.", "Ask me to save it first."],
+  ["Never overwrites; the user can undo it.", "Never overwrites; I can undo it."],
+  ["The user is asked first, and can undo it.", "I'm asked first, and can undo it."],
+  ["The user sees each step's goal as a checklist.", "I see each step's goal as a checklist."],
+];
+
+const ASSIST = {
+  lead: ASSIST_LEAD,
+  messageLead: MESSAGE_LEAD,
+  setup: assistSetup,
+  /** The whole first message: the setup, the lead, then the user's own words. @param {any} context @param {string} message */
+  introduce: (context, message) => assistSetup(context) + "\n\n" + MESSAGE_LEAD + "\n\n" + message,
+  /** A setup that changed since the model was told: said in front of the new message. */
+  setupChanged: (/** @type {string} */ setup) => `(My setup has changed since I first told you about it. Here's how it is \
+now; please go by this from now on:\n\n${setup})`,
+  setupChangedLead: "(My setup has changed since I first told you about it.",
+  resultOk: (/** @type {string} */ label) => `Here's what my extension returned for ${label}:`,
+  resultFailed: (/** @type {string} */ label) => `My extension tried ${label}, but it didn't work:`,
+  resultClosing: "Send another tool request if you need more, otherwise go ahead and answer.",
+  carryOverLead: "Here's our conversation so far, as my extension saved it, so you can pick up where we left off. \
+\"Me\" is me, including the results my extension sent you, and \"You\" is you.",
+  carryOverLeftOut: (/** @type {number} */ count) => `(${count} earlier message${count === 1 ? " is" : "s are"} left out here.)`,
+  carryOverEnd: "That's the conversation so far. My new message:",
+  /** A request that couldn't be read, asked for again. */
+  repair: (/** @type {string} */ problem) => `My extension couldn't read that request (${problem}). Could you send it again \
+as a single \`\`\`tool block holding valid JSON?`,
+  /** A request for a tool there isn't. */
+  unknownTool: (/** @type {string} */ name, /** @type {string[]} */ tools) => `My extension couldn't run that request: there's \
+no tool called '${name}'. The tools you can use here are ${tools.join(", ")}. Send it again with one of those, or answer \
+without a tool if none of them fits.`,
+  /** A request cut off at the length limit. */
+  cutOff: "My extension couldn't use that request: your reply was cut off at the length limit before it ended, so the \
+content was incomplete. Could you send it in smaller parts? For a big file, write_file with the first part, then \
+edit_file to add each of the rest.",
+  /** Shown to the user (not the model) after asking twice. */
+  gaveUp: "Solder couldn't read the tool request in this reply, even after asking again, so nothing was run.",
+  /** The Tool lane's texts that say "the user", with their first-person versions. */
+  swaps: ASSIST_SWAPS,
+};
+
+/** A shared text as the Assist lane says it: "the user" becomes "I" (or "me"); anything else is unchanged. @param {string} text */
+function assistText(text) {
+  let out = String(text);
+  for (const [from, to] of ASSIST_SWAPS) if (out.includes(from)) out = out.split(from).join(to);
+  return out;
+}
+
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };

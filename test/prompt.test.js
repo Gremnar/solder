@@ -7,7 +7,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote } = require("../src/prompt.js");
+const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
 const PINNED = "b8b85e4ec4394134";
 
@@ -126,4 +126,36 @@ test("the notes read right", () => {
   assert.equal(TEXTS.wrongType("a", "b", "integer"), "a's b must be a whole number; it wasn't run.");
   assert.match(TEXTS.unknownTool("run", ["read_file", "search"]), /no tool called run\. The tools are: read_file, search\./);
   assert.ok(TEXTS.emptyReply.startsWith("\n\n"), "it's appended to a result");
+});
+
+// ================================================================ the Assist lane, pinned on its own
+
+/** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
+const ASSIST_PINNED = "ff35e58cb8dc69d8";
+
+function assistEverything() {
+  return {
+    intro: ASSIST.introduce({ workspace: "C:\work", instructions: [{ path: "AGENTS.md", text: "AGENTS" }], rules: "RULE",
+      docs: [{ path: "D:\Docs", about: "ABOUT" }] }, "MESSAGE"),
+    bare: ASSIST.introduce({ workspace: "C:\work" }, "MESSAGE"),
+    severalFolders: ASSIST.setup({ workspace: "S:\repo", folders: ["S:\repo", "C:\local\tools"] }),
+    changed: ASSIST.setupChanged("SETUP"),
+    results: [ASSIST.resultOk("read_file a.js"), ASSIST.resultFailed("read_file a.js"), ASSIST.resultClosing],
+    carry: [ASSIST.carryOverLead, ASSIST.carryOverLeftOut(1), ASSIST.carryOverLeftOut(4), ASSIST.carryOverEnd],
+    repairs: [ASSIST.repair("PROBLEM"), ASSIST.unknownTool("x", ["a", "b"]), ASSIST.cutOff, ASSIST.gaveUp],
+    swaps: ASSIST.swaps,
+  };
+}
+
+test("the Assist lane's texts match their own pinned fingerprint", () => {
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify(assistEverything())).digest("hex").slice(0, 16);
+  assert.equal(fingerprint, ASSIST_PINNED, `The Assist texts changed. If that was deliberate, live-test them, then set ASSIST_PINNED to "${fingerprint}".`);
+});
+
+test("every shared text, as the Assist lane says it, is in first person: none says \"the user\"", () => {
+  const all = everything();
+  const texts = [...Object.values(all.texts), ...Object.values(all.results), ...all.plan, ...all.context,
+    ...Object.values(toolDefinitions()).map((/** @type {any} */ d) => d.function.description)];
+  const left = texts.map((t) => assistText(String(t))).filter((t) => /the user/i.test(t));
+  assert.deepEqual(left, []);
 });
