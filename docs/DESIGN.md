@@ -11,7 +11,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
 | 11 tools: read, symbols, search, find, changes, edit, write, move, remove, problems, plan | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
-| Follows `AGENTS.md`, plus a few simple rules you set | Skills, notes and project folders |
+| Follows `AGENTS.md`, a few simple rules you set, and your skills (one `.md` file each, read when a task needs one) | Skills with scripts, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
 | Token meter, allowance left, compaction | Telemetry, accounts, sign-in |
 
@@ -75,6 +75,12 @@ Details that matter:
   - **What the model gets:** results are the 10 best passages, with path, lines, heading and a bracketed excerpt. The model then reads the lines it needs with `read_file`.
   - **Restraint:** Alloy's "loose matches" note when the best hits share a third or fewer of the query's words, and a "try once with other words, else carry on" note when nothing matches.
   - **The system prompt:** it lists the folders and the user's one-line description of each.
+- **Skills** (`src/skills.js`, decided 2026-11-09). Alloy's skills, without their tools.
+  - **What one is:** a `.md` file directly in a skills folder, named after the skill, whose first line is `When to use: …`. A front-matter `description:` (Claude's and Codex's `SKILL.md`) is read too, never written. No folder skills: they exist to ship scripts, and Solder runs nothing.
+  - **How the model gets them:** both lanes' prompts list each skill (name, file, when; up to 50) and, when the user has a folder of their own, where to save a new one (offered rarely, saved only when they agree). There's no `read_skill` or `create_skill`: the model reads a skill with `read_file` and saves one with `write_file`, which asks, as the folder is outside the workspace.
+  - **The read:** a file that's a skill comes back whole (any range ignored, no line numbers, up to 20,000 characters) as `keep`, so cutting old results and finishing its plan step leave it in the chat (Alloy's lesson: a skill read must stay whole). If the chat already holds that text since the last compaction, a short "already read" goes back instead.
+  - **Folders:** `solder.skillsFolders` (per user, scope `machine`), and the `SkillsFolders` and `AllowUserSkills` policies, as for docs. Skills folders are read without asking, like docs folders, and a network path is opened inside a docs or skills folder that's set up (compared as written).
+  - **Live tests:** `skill-follow`, `skill-plan`, `skill-save` and `skill-unneeded` in `live/scenarios.js`: 48/48 on two models, both lanes.
 - **Undo.** Before the first change a step makes to a file, keep its text (in memory and in `globalStorageUri/backups`). The step's **Undo** restores it. **Review** opens `vscode.diff(backup, current)`. VS Code's own Ctrl+Z also works, because edits go through the editor.
 - **Paths.** Everything resolves against the workspace folder. Writes outside it ask first. Reads outside it are allowed but shown in the step line.
 
@@ -124,6 +130,7 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 | `solder.rules` | "" | plain lines added to the system prompt |
 | `solder.instructionFiles` | ["AGENTS.md"] | |
 | `solder.docsFolders` | [] | per user (scope `machine`): paths, or `{path, about}`. The setting's description lists the file types that are searched. Also set with **Use as Solder docs** on a folder in the Explorer |
+| `solder.skillsFolders` | [] | per user (scope `machine`): folders of skills, one `.md` file each; a new one is saved in the first |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.
@@ -142,7 +149,7 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 - **Reading them:** `src/policy.js` runs `reg.exe export` (directly, with no shell) and parses the UTF-16 `.reg` file. `src/config.js` wraps VS Code's settings, so every read sees the policy.
 - **Failing closed:** if the policy can't be read, nothing is sent.
 - **Two policies that aren't settings:**
-  - `AllowUserDocsFolders` adds the user's own docs folders to the enforced ones.
+  - `AllowUserDocsFolders` adds the user's own docs folders to the enforced ones, and `AllowUserSkills` their own skills folders.
   - `OrgRules` is added after the user's rules, so it reads as the more recent instruction.
 - **The API key is never set by policy:** every local user can read the Policies keys.
 - **A possible later addition, only if an organization asks:** limiting what Solder can do (for example, no edits, or no writes outside the workspace) by policy.

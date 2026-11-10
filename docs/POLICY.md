@@ -33,6 +33,8 @@ Solder reads two registry keys, both writable only by administrators:
 | `DocsFolders` | REG_MULTI_SZ | Docs folders, one per line, each optionally followed by `\|` and a note on what's in it: `\\fileserver\docs\api\|The API reference`. |
 | `AllowUserDocsFolders` | REG_DWORD | With `DocsFolders` set: `1` lets users add folders of their own beside the organization's; `0` or absent, only the organization's. |
 | `DocsSearch` | REG_SZ | `keyword` or `hybrid` (keywords and meaning). Enforce `keyword` to keep docs text from being sent for embedding. |
+| `SkillsFolders` | REG_MULTI_SZ | Skills folders, one per line, such as `\\fileserver\it\solder-skills`. Each skill is one `.md` file directly in a folder, starting with a `When to use:` line; the model reads one whole before a task it covers. Users see the organization's skills in settings but can't change the folders. |
+| `AllowUserSkills` | REG_DWORD | With `SkillsFolders` set: `1` lets users add skills folders of their own beside the organization's (where a skill they ask Solder to save goes); `0` or absent, only the organization's, and users can't save new skills. |
 | `EmbeddingModel` | REG_SZ | The gateway's embeddings model, for search by meaning. |
 | `Rules` | REG_MULTI_SZ | Rules that replace the user's own, one per line. |
 | `OrgRules` | REG_MULTI_SZ | Rules added after the user's own, so they read as the more recent instruction. Users see them in settings but can't change them. |
@@ -43,6 +45,11 @@ Solder reads two registry keys, both writable only by administrators:
 
 A value of the wrong kind (a word where a number belongs, an unknown effort) isn't used, and Solder's
 **⋯ → Copy diagnostics** names it, along with which settings are enforced.
+
+**Folders on a share.** Solder opens network paths (`\\server\share`) only inside the workspace and inside the docs
+and skills folders you or the user set up, compared as written, so a path the model makes up can't send the user's
+Windows sign-in to another server. Users need read access to the share; a skills share can be read-only, with your
+skills managed centrally.
 
 ## Group Policy
 

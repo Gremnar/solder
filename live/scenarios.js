@@ -4,7 +4,9 @@
  * The live scenarios. Each sets up a small workspace, gives a task, and checks the result on disk (not just the
  * answer). `hooks` change things under the model (a file edited after it read it) to test recovery.
  * @typedef {{name: string, about: string, heavy?: boolean, setup: (write: (p: string, t: string) => void) => void, task: string,
- *   hooks?: any, check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string, load: (p: string) => any}) => string}} Scenario
+ *   hooks?: any, skills?: Record<string, string>, check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
+ *   load: (p: string, mocks?: Record<string, any>) => any, skillsFolder: string}) => string}} Scenario
+ *   skills: name → file text, put in a skills folder beside the workspace
  * check returns "" when it passed, else what was wrong.
  */
 const fs = require("node:fs");
@@ -327,6 +329,128 @@ SCENARIOS.push({
     const report = (() => { try { return read("docs/fixes.md"); } catch { return ""; } })();
     const listed = expect.filter((/** @type {any} */ x) => report.includes(x.fn)).length;
     return wrong.length ? `${12 - wrong.length}/12 fixed` : listed < 12 ? `report lists ${listed}/12` : "";
+  },
+});
+
+// ---------------------------------------------------------------- skills --
+// The skills are in a folder beside the workspace (run.js); a skill read goes through Solder's own read.
+
+const JS_STYLE = `When to use: Writing or changing JavaScript code in any of the user's projects.
+
+House rules for JavaScript:
+1. Every function you add or change starts with a trace call as its first statement: trace("<the function's name>");
+   trace comes from trace.js in the same folder: const { trace } = require("./trace");
+   Add that require at the top of the file if it isn't there yet.
+2. Record each function you add as a line in CHANGES.md at the workspace root: "- added <name> to <file>". Create CHANGES.md if it isn't there.
+3. Use const and let, never var.
+`;
+const MIGRATIONS = `When to use: Writing or changing SQL database migrations.
+
+Every migration goes in migrations/ as NNNN_description.sql, with a matching NNNN_description.rollback.sql that undoes it.
+Never change a migration that has been released: add a new one.
+`;
+const TRACE = "\"use strict\";\nfunction trace(name) { /* records the call */ }\nmodule.exports = { trace };\n";
+
+/** A workspace module with ./trace stood in for, and the names it traced. @param {any} load @param {string} file */
+function traced(load, file) {
+  /** @type {string[]} */
+  const seen = [];
+  const stand = { trace: (/** @type {string} */ name) => { seen.push(String(name)); } };
+  return { mod: load(file, { "./trace": stand, "./trace.js": stand }), seen };
+}
+
+/** Whether a skill was read before the first change. @param {any} ws @param {string} name */
+function readFirst(ws, name) {
+  const read = ws.calls.findIndex((/** @type {any} */ c) => c.name === "read_file" && String(c.args.path || "").replace(/\\/g, "/").endsWith(`/${name}.md`));
+  const change = ws.calls.findIndex((/** @type {any} */ c) => c.name === "edit_file" || c.name === "write_file");
+  return read >= 0 && (change < 0 || read < change);
+}
+
+SCENARIOS.push({
+  name: "skill-follow",
+  about: "a JavaScript task the user's skill covers: read it before the first edit, follow it, leave the unrelated skill alone",
+  skills: { js_style: JS_STYLE, sql_migrations: MIGRATIONS },
+  setup: (w) => {
+    w("src/trace.js", TRACE);
+    w("src/pricing.js", "\"use strict\";\nfunction total(items) {\n  return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\nmodule.exports = { total };\n");
+  },
+  task: "Add a function discount(total, percent) to src/pricing.js that returns the total after taking off that percentage, and export it.",
+  check: ({ ws, read, load }) => {
+    if (!readFirst(ws, "js_style")) return "didn't read the skill before changing code";
+    const { mod, seen } = traced(load, "src/pricing.js");
+    if (typeof mod.discount !== "function" || Math.abs(mod.discount(200, 25) - 150) > 1e-9) return "discount wrong";
+    if (!seen.includes("discount")) return "skill not followed: no trace(\"discount\")";
+    if (/\bvar\s/.test(read("src/pricing.js"))) return "skill not followed: var";
+    let changes = "";
+    try { changes = read("CHANGES.md"); } catch { return "skill not followed: no CHANGES.md"; }
+    if (!/discount/.test(changes)) return "skill not followed: CHANGES.md doesn't list discount";
+    if (ws.files().some((/** @type {string} */ f) => /migrations/.test(f))) return "followed the unrelated skill";
+    return "";
+  },
+});
+
+SCENARIOS.push({
+  name: "skill-plan",
+  about: "a planned three-file task: the skill read at the start still applies after earlier steps are done (and their results cut)",
+  skills: { js_style: JS_STYLE, sql_migrations: MIGRATIONS },
+  setup: (w) => {
+    w("src/trace.js", TRACE);
+    w("src/math.js", "\"use strict\";\nfunction double(n) {\n  return n * 2;\n}\nmodule.exports = { double };\n");
+    w("src/text.js", "\"use strict\";\nfunction shout(text) {\n  return String(text).toUpperCase() + \"!\";\n}\nmodule.exports = { shout };\n");
+    w("src/list.js", "\"use strict\";\nfunction first(list) {\n  return list[0];\n}\nmodule.exports = { first };\n");
+  },
+  task: "Add three functions, each exported: clamp(n, lo, hi) to src/math.js; slugify(text) to src/text.js (lowercase words joined by -, " +
+    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Make a plan first, one step per file, and do one step at a time.",
+  check: ({ ws, read, load }) => {
+    if (!readFirst(ws, "js_style")) return "didn't read the skill before changing code";
+    const math = traced(load, "src/math.js");
+    const text = traced(load, "src/text.js");
+    const list = traced(load, "src/list.js");
+    try {
+      if (math.mod.clamp(15, 0, 10) !== 10 || math.mod.clamp(-3, 0, 10) !== 0 || math.mod.clamp(4, 0, 10) !== 4) return "clamp wrong";
+      if (text.mod.slugify("Hello, World 2!") !== "hello-world-2") return `slugify wrong: ${JSON.stringify(text.mod.slugify("Hello, World 2!"))}`;
+      if (list.mod.sum([1, 2, 3.5]) !== 6.5) return "sum wrong";
+    } catch (e) { return "threw: " + /** @type {any} */ (e)?.message; }
+    const missing = [["clamp", math], ["slugify", text], ["sum", list]].filter(([name, m]) => !/** @type {any} */ (m).seen.includes(name)).map(([name]) => name);
+    if (missing.length) return `skill not followed (no trace) in: ${missing.join(", ")}`;
+    let changes = "";
+    try { changes = read("CHANGES.md"); } catch { return "skill not followed: no CHANGES.md"; }
+    const unlisted = ["clamp", "slugify", "sum"].filter((name) => !changes.includes(name));
+    return unlisted.length ? `CHANGES.md doesn't list ${unlisted.join(", ")}` : "";
+  },
+});
+
+SCENARIOS.push({
+  name: "skill-save",
+  about: "save a new skill when asked: the right folder, a When to use line, the instructions",
+  skills: { js_style: JS_STYLE },
+  setup: (w) => w("README.md", "# Demo\n"),
+  task: "Save a skill called branch_names for how we name git branches: feature/<ticket>-<short-slug> or fix/<ticket>-<short-slug>, " +
+    "all lowercase, where the ticket looks like abc-123 and the slug is two to four words joined by -.",
+  check: ({ ws, skillsFolder }) => {
+    const file = require("node:path").join(skillsFolder, "branch_names.md");
+    if (!fs.existsSync(file)) return "no branch_names.md in the skills folder" + (ws.calls.some((/** @type {any} */ c) => c.name === "write_file") ? " (written elsewhere)" : "");
+    const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");
+    if (!/^when to use:\s*\S/i.test(text)) return "no When to use first line";
+    if (!/feature\//.test(text) || !/fix\//.test(text)) return "instructions incomplete";
+    return "";
+  },
+});
+
+SCENARIOS.push({
+  name: "skill-unneeded",
+  about: "a question no skill covers: answered without reading one",
+  skills: { js_style: JS_STYLE, sql_migrations: MIGRATIONS },
+  setup: (w) => {
+    w("src/trace.js", TRACE);
+    w("src/pricing.js", "\"use strict\";\nfunction total(items) {\n  return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\nmodule.exports = { total };\n");
+  },
+  task: "What does total in src/pricing.js return for an empty list? Just tell me; don't change anything.",
+  check: ({ ws, answer }) => {
+    if (ws.edits) return "changed something";
+    if (!/\b0\b|zero/i.test(answer)) return "wrong answer";
+    const read = ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && /\.md$/i.test(String(c.args.path || "")));
+    return read.length ? "read a skill it didn't need" : "";
   },
 });
 

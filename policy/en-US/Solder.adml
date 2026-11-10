@@ -5,11 +5,12 @@
   <description>Settings for Solder, the coding agent in VS Code, enforced by your organization.</description>
   <resources>
     <stringTable>
-      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later)</string>
+      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills: 0.2.9 or later)</string>
       <string id="Cat_Solder">Solder</string>
       <string id="Cat_Connection">Connection</string>
       <string id="Cat_Model">Model</string>
       <string id="Cat_Docs">Docs</string>
+      <string id="Cat_Skills">Skills</string>
       <string id="Cat_Rules">Rules and instructions</string>
       <string id="Cat_Limits">Limits</string>
 
@@ -45,6 +46,15 @@ C:\Specs
 Enabled: these folders are searched. Users can't change them, or add their own unless "Let users add docs folders" is also enabled.</string>
       <string id="AllowUserDocsFolders">Let users add docs folders</string>
       <string id="AllowUserDocsFolders_Help">With "Docs folders" enforced: Enabled lets users add folders of their own beside the organization's (which they still can't remove). Disabled or not configured: only the organization's folders.</string>
+      <string id="SkillsFolders">Skills folders</string>
+      <string id="SkillsFolders_Help">Folders of skills, one per line, for example:
+\\fileserver\it\solder-skills
+
+A skill is instructions for a kind of task: one .md file directly in a folder, named after the skill (code_review.md), whose first line says when to use it ("When to use: Reviewing a change before it's committed."). The model is told each skill's name and when to use it, and reads one whole before a task it covers.
+
+Enabled: these folders' skills are offered to every user. Users see them in Settings but can't remove the folders, or add their own unless "Let users add skills folders" is also enabled. Solder reads the folders; users only need read access.</string>
+      <string id="AllowUserSkills">Let users add skills folders</string>
+      <string id="AllowUserSkills_Help">With "Skills folders" enforced: Enabled lets users add skills folders of their own beside the organization's (which they still can't remove), and save new skills there. Disabled or not configured: only the organization's skills.</string>
       <string id="DocsSearch">Docs search</string>
       <string id="DocsSearch_Help">Keywords: the docs index stays on the PC, and only the passages the model reads are sent to the gateway. Keywords and meaning: every passage is also sent to the gateway once, to its embeddings model. Enforce Keywords to keep docs text from being sent for embedding.</string>
       <string id="DocsSearch_Keyword">Keywords</string>
@@ -75,6 +85,7 @@ Enabled: these folders are searched. Users can't change them, or add their own u
       <presentation id="ModelNames"><textBox refId="ModelNames"><label>JSON:</label></textBox></presentation>
       <presentation id="Effort"><dropdownList refId="Effort" noSort="true" defaultItem="0">Effort:</dropdownList></presentation>
       <presentation id="DocsFolders"><multiTextBox refId="DocsFolders">Folders, one per line (path|note):</multiTextBox></presentation>
+      <presentation id="SkillsFolders"><multiTextBox refId="SkillsFolders">Folders, one per line:</multiTextBox></presentation>
       <presentation id="DocsSearch"><dropdownList refId="DocsSearch" noSort="true" defaultItem="0">Search by:</dropdownList></presentation>
       <presentation id="EmbeddingModel"><textBox refId="EmbeddingModel"><label>Model id:</label></textBox></presentation>
       <presentation id="Rules"><multiTextBox refId="Rules">Rules, one per line:</multiTextBox></presentation>

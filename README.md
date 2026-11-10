@@ -11,6 +11,7 @@
 - **Lock the gateway:** set the address once for every user, and they can't point Solder anywhere else. If the policy can't be read, Solder doesn't connect.
 - **Rules for everyone:** add your organization's rules to every user's chats, after their own.
 - **Shared docs:** give everyone the same reference folders, with or without folders of their own.
+- **Shared skills:** give everyone the same skills, your organization's way of doing a kind of task, from a share.
 - **Ready-made templates:** ADMX and ADML files come with every release. API keys stay with each user, never in policy.
 
 See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
@@ -45,7 +46,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - deleting anything;
   - changing a file outside the workspace, or one with unsaved changes;
   - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`), where a change can make programs run;
-  - reading a file outside the workspace and your docs folders.
+  - reading a file outside the workspace and your docs and skills folders.
 
   You can add a note for the model when you answer.
 - **Slash commands.** Type **/** in the box for the list; the arrow keys move, **Enter** or **Tab** picks one, **Esc** closes it:
@@ -96,6 +97,29 @@ Point Solder at folders of reference documentation that only exist on your PC: i
 
 <img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
 
+## Skills
+
+A skill is your instructions for a kind of task: how you write PowerShell scripts, review a change, or add an API endpoint. The model is told what skills you have, and reads one whole before starting a task it covers.
+
+- **What one looks like:** a Markdown file, named after the skill (`ps_scripts.md`). Its first line says when to use it; the instructions follow:
+
+  ```markdown
+  When to use: Writing or changing a PowerShell script.
+
+  - Target Windows PowerShell 5.1: no ternaries, no ?? or ?. operators.
+  - Use approved verbs (Get-, Set-, New-...) and full cmdlet names, not aliases.
+  - Every script starts with a comment block saying what it does and how to run it.
+  ```
+
+  A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
+- **Where they go:** in **Settings → Your skills**, add a folder, then **New skill...** makes one and opens it to write. You can also ask Solder to save one ("save how we did that as a skill"); it writes it to your first skills folder, and asks first. Edit a skill like any file: changes count from your next message.
+- **The rules:**
+  - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
+  - no scripts or other files: Solder doesn't run anything, so a skill is instructions only;
+  - keep each to a page or two: the model reads up to 20,000 characters of one, and at most 50 skills are offered.
+- **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even after its plan steps are done. Reading your skills folders never needs your approval; changing a skill does. Settings flags a skill with no "When to use" line, since the model can't know when to read it.
+- **For organizations:** the `SkillsFolders` policy gives everyone the same skills, from a share if you like; `AllowUserSkills` lets users add folders of their own beside them. See the [admin guide](docs/POLICY.md).
+
 ## Two kinds of model (optional)
 
 Some gateways offer two kinds of model: **Tool models**, which take a system prompt and native tool calls (what Solder uses by default), and **Assist models**, which take plain text only and often keep the conversation on their side. Solder can use both.
@@ -109,6 +133,7 @@ Some gateways offer two kinds of model: **Tool models**, which take a system pro
 
 - **`AGENTS.md`:** if your workspace has one at its root, Solder follows it. One in a subfolder applies once Solder reads files there. The **Instruction files** setting adds others, such as `CLAUDE.md`.
 - **Your rules:** a few plain lines in the **Rules** setting, or in the guided setup, added to every chat.
+- **Your skills:** instructions for particular kinds of task, read only when a task needs them (see [Skills](#skills)).
 
 ## Tokens and cost
 
@@ -130,6 +155,7 @@ The panel shows what the chat has used, and the status bar shows the allowance l
 | **Max rounds** | the most steps with tool calls for one message |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
+| **Skills folders** | your skills (see [Skills](#skills)); a new one is saved in the first |
 | **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Two kinds of model](#two-kinds-of-model-optional)) |
 | **Storage limit GB** | the most disk space Undo's backups may use, 5 GB by default; past it, the oldest go first |
 

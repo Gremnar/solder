@@ -25,6 +25,8 @@ function solder(src) {
     ...require(path.join(src, "gateway.js")),
     prompt: require(path.join(src, "prompt.js")),
     tools: require(path.join(src, "tools.js")),
+    // An older src (a baseline) has no skills.
+    skills: fs.existsSync(path.join(src, "skills.js")) ? require(path.join(src, "skills.js")) : null,
   };
 }
 
@@ -37,25 +39,32 @@ const SEARCH_LINES = 200;
 /**
  * @param {string} root the workspace @param {any} S Solder's modules (solder())
  * @param {{beforeEdit?: (ws: Workspace, args: any) => void, overrides?: Record<string, (args: any) => any>}} [hooks]
+ * @param {string} [skillsFolder] a skills folder (outside the workspace), offered as Solder offers the user's
  */
-function workspaceHost(root, S, hooks = {}) {
-  const ws = new Workspace(root, S, hooks);
+function workspaceHost(root, S, hooks = {}, skillsFolder = "") {
+  const ws = new Workspace(root, S, hooks, skillsFolder);
+  const context = () => {
+    if (!skillsFolder) return { workspace: root };
+    const skills = S.skills.listSkills([skillsFolder]).filter((/** @type {any} */ s) => s.text).map(({ name, path: file, when }) => ({ name, path: file, when }));
+    return { workspace: root, skills, skillsFolder };
+  };
   return { ws, host: {
-    async systemPrompt() { return S.prompt.systemPrompt({ workspace: root }); },
-    async assistContext() { return { workspace: root }; },
+    async systemPrompt() { return S.prompt.systemPrompt(context()); },
+    async assistContext() { return context(); },
     needsApproval: () => null,
     async save() {},
-    async runTool(/** @type {string} */ name, /** @type {any} */ args) { return ws.run(name, args); },
+    async runTool(/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) { return ws.run(name, args, ctx); },
   } };
 }
 
 class Workspace {
-  /** @param {string} root @param {any} S @param {any} hooks */
-  constructor(root, S, hooks) {
+  /** @param {string} root @param {any} S @param {any} hooks @param {string} skillsFolder */
+  constructor(root, S, hooks, skillsFolder) {
     this.root = root;
     this.S = S;
     this.R = S.prompt.RESULTS;
     this.hooks = hooks;
+    this.skillsFolder = skillsFolder;
     /** @type {{name: string, args: any, failed: boolean}[]} */
     this.calls = [];
     this.edits = 0;
@@ -97,12 +106,15 @@ class Workspace {
     return out.sort();
   }
 
-  /** @param {string} name @param {any} args */
-  async run(name, args) {
+  /** @param {string} name @param {any} args @param {any} [ctx] the engine's (its chat) */
+  async run(name, args, ctx) {
     let result;
     try {
       const own = this.hooks.overrides?.[name];
-      result = own ? await own.call(this, args) : await this.tool(name, args);
+      // A skill's file goes through Solder's own read (whole, kept, not twice), as it does in VS Code.
+      const skill = name === "read_file" && this.skillsFolder && args?.path
+        ? this.S.tools.WorkspaceTools.prototype.readSkill.call({ skillsFolders: () => [this.skillsFolder] }, this.full(args.path), ctx?.chat) : null;
+      result = skill ?? (own ? await own.call(this, args) : await this.tool(name, args));
     } catch (error) {
       const e = /** @type {any} */ (error);
       result = e instanceof this.S.tools.ToolError

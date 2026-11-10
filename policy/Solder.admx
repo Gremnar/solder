@@ -18,6 +18,7 @@
     <category name="Connection" displayName="$(string.Cat_Connection)"><parentCategory ref="Solder" /></category>
     <category name="Model" displayName="$(string.Cat_Model)"><parentCategory ref="Solder" /></category>
     <category name="Docs" displayName="$(string.Cat_Docs)"><parentCategory ref="Solder" /></category>
+    <category name="Skills" displayName="$(string.Cat_Skills)"><parentCategory ref="Solder" /></category>
     <category name="Rules" displayName="$(string.Cat_Rules)"><parentCategory ref="Solder" /></category>
     <category name="Limits" displayName="$(string.Cat_Limits)"><parentCategory ref="Solder" /></category>
   </categories>
@@ -63,6 +64,15 @@
     </policy>
     <policy name="AllowUserDocsFolders" class="Both" displayName="$(string.AllowUserDocsFolders)" explainText="$(string.AllowUserDocsFolders_Help)" key="Software\Policies\Gremnar\Solder" valueName="AllowUserDocsFolders">
       <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="SkillsFolders" class="Both" displayName="$(string.SkillsFolders)" explainText="$(string.SkillsFolders_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.SkillsFolders)">
+      <parentCategory ref="Skills" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><multiText id="SkillsFolders" valueName="SkillsFolders" maxLength="4096" required="true" /></elements>
+    </policy>
+    <policy name="AllowUserSkills" class="Both" displayName="$(string.AllowUserSkills)" explainText="$(string.AllowUserSkills_Help)" key="Software\Policies\Gremnar\Solder" valueName="AllowUserSkills">
+      <parentCategory ref="Skills" /><supportedOn ref="SUPPORTED_Solder" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

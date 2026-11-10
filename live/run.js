@@ -64,7 +64,15 @@ async function once(scenario, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `solder-live-${scenario.name}-`));
   const write = (/** @type {string} */ p, /** @type {string} */ t) => { const f = path.join(root, p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); };
   scenario.setup(write);
-  const { ws, host } = workspaceHost(root, S, typeof scenario.hooks === "function" ? scenario.hooks() : (scenario.hooks || {}));
+  // A scenario's skills go in a folder beside the workspace (outside it, as a user's would be).
+  let skillsFolder = "";
+  if (scenario.skills) {
+    if (!S.skills) throw new Error("this src has no skills");
+    skillsFolder = root + "-skills";
+    fs.mkdirSync(skillsFolder, { recursive: true });
+    for (const [name, text] of Object.entries(scenario.skills)) fs.writeFileSync(path.join(skillsFolder, name + ".md"), String(text));
+  }
+  const { ws, host } = workspaceHost(root, S, typeof scenario.hooks === "function" ? scenario.hooks() : (scenario.hooks || {}), skillsFolder);
   const client = new S.GatewayClient({ endpoint, apiKey: process.env.SOLDER_LIVE_KEY || "test" });
   let requests = 0;
   const reply = client.reply.bind(client);
@@ -81,7 +89,7 @@ async function once(scenario, run) {
   const answer = [...chat.messages].reverse().find((/** @type {any} */ m) => m.role === "assistant" && (m.content || "").trim())?.content || "";
   let why;
   try {
-    why = await scenario.check({ ws, chat, answer, read: (/** @type {string} */ p) => fs.readFileSync(path.join(root, p), "utf8"), load: loader(root) });
+    why = await scenario.check({ ws, chat, answer, read: (/** @type {string} */ p) => fs.readFileSync(path.join(root, p), "utf8"), load: loader(root), skillsFolder });
   } catch (e) { why = "check failed: " + /** @type {any} */ (e)?.message; }
   if (error) why = "error: " + error;
   const replies = chat.messages.filter((/** @type {any} */ m) => m.role === "assistant");
@@ -97,14 +105,17 @@ async function once(scenario, run) {
     maxReads: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => c.function.name === "read_file").length)),
     planned: !!plan, planLeft: plan ? plan.steps.filter((/** @type {any} */ s) => s.state !== "done").length : 0,
     nudges: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
+    skillsRead: skillsFolder ? ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && path.resolve(root, String(c.args.path || "")).startsWith(skillsFolder))
+      .map((/** @type {any} */ c) => path.basename(String(c.args.path), ".md")) : undefined,
     answer: answer.replace(/\s+/g, " ").slice(0, 300),
     // What an Assist model really wrote, when a run fails (its tool blocks included).
     raw: why ? chat.messages.filter((/** @type {any} */ m) => m.meta?.raw).slice(-2).map((/** @type {any} */ m) => String(m.meta.raw).slice(0, 700)) : undefined,
   };
   fs.appendFileSync(resultsFile, JSON.stringify(row) + "\n");
   fs.rmSync(root, { recursive: true, force: true });
+  if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +
-    (row.nudges ? `  nudged ${row.nudges}` : "") + (row.why ? `  — ${row.why}` : ""));
+    (row.nudges ? `  nudged ${row.nudges}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
   return row;
 }
 

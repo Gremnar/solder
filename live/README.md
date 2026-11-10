@@ -18,5 +18,8 @@ node live/run.js --model <id> [--runs 3] [--only typo,rename] [--skip bugs12] [-
   written in the reply). With no `--assist-block`, there are no sessions: every request carries the conversation over.
 - **Cost:** a light scenario is 5–40k tokens a run; `bugs12` is about half a million. Skip it with `--skip bugs12`.
 
+- **Skills:** a scenario with `skills` gets them in a folder beside the workspace, offered as Solder offers the user's,
+  and a read of one goes through Solder's own skill read. The table's rows show which skills were read.
+
 Each scenario (`live/scenarios.js`) sets up files, gives a task, and checks the outcome on disk by running the
 code, not by reading the answer. Some change a file under the model on purpose (`hooks`) to test recovery.
