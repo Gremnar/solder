@@ -45,12 +45,16 @@ async function activate(context) {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.setup.start();
     }),
-    vscode.commands.registerCommand("solder.feedback", () => {
+    vscode.commands.registerCommand("solder.feedback", async () => {
       // Your own email app, through the system: Solder itself sends nothing. Versions only, nothing from your chats.
+      // To your organisation's own address when its policy sets one (read afresh, so a new one applies at once).
+      await policy.refresh().catch(() => false);
+      const where = policy.feedbackTo(FEEDBACK_TO);
+      if ("problem" in where) { vscode.window.showWarningMessage(`Solder: ${where.problem}`); return; }
       const version = context.extension?.packageJSON?.version ?? "";
       const body = `\n\n\n---\nSolder ${version} · VS Code ${vscode.version} · ${process.platform} ${os.release()}\n` +
         "(For a problem: ⋯ → Copy diagnostics in Solder's panel, then paste them here.)\n";
-      const link = `mailto:${FEEDBACK_TO}?subject=${encodeURIComponent(FEEDBACK_SUBJECT)}&body=${encodeURIComponent(body)}`;
+      const link = `mailto:${where.to}?subject=${encodeURIComponent(FEEDBACK_SUBJECT)}&body=${encodeURIComponent(body)}`;
       return vscode.env.openExternal(vscode.Uri.parse(link, true));
     }),
     vscode.commands.registerCommand("solder.copyDiagnostics", async () => {

@@ -90,6 +90,23 @@ test("skills folders: the organisation's alone, or with the user's own when Allo
   assert.ok(!(await policyWith({ SkillsFolders: ["C:\\S"], AllowUserSkills: 0 })).allowUserSkills);
 });
 
+test("feedback: Solder's own address, the organisation's when set, and nothing at all when it's unusable or unreadable", async () => {
+  const OURS = "support@example.com";
+  assert.deepEqual((await policyWith({})).feedbackTo(OURS), { to: OURS });
+  const set = await policyWith({ FeedbackAddress: "  solder-feedback@corp.example.com " });
+  assert.deepEqual(set.feedbackTo(OURS), { to: "solder-feedback@corp.example.com" });
+  assert.deepEqual(set.names, ["FeedbackAddress"]);
+  assert.deepEqual((await policyWith({}, { FeedbackAddress: "it.help+solder@corp.example.com" })).feedbackTo(OURS), { to: "it.help+solder@corp.example.com" }, "user policy too");
+  for (const bad of ["", "not an address", "a@b", "x@corp.example.com?cc=attacker@evil.example", "x@corp.example.com,y@evil.example", "x@corp.example.com&body=hi",
+    "x y@corp.example.com", "<x@corp.example.com>", "x@-corp.example.com"]) {
+    const problem = /** @type {any} */ ((await policyWith({ FeedbackAddress: bad })).feedbackTo(OURS));
+    assert.ok(problem.problem && !problem.to, `refused, never Solder's own: ${JSON.stringify(bad)}`);
+  }
+  const unreadable = new Policy({ platform: "win32", read: async () => { throw new Error("blocked"); } });
+  await unreadable.refresh();
+  assert.match(/** @type {any} */ (unreadable.feedbackTo(OURS)).problem, /couldn't be read/, "a policy that can't be read sends nowhere");
+});
+
 test("values of the wrong kind aren't used (and are reported), but a malformed gateway is still enforced", async () => {
   const policy = await policyWith({ Effort: "extreme", MaxRounds: "lots", Endpoint: "not a url", ModelNames: "{\"model-a\": \"A\"}", OrgRules: ["Line one.", "Line two."] });
   const config = policy.wrap(userConfig({ effort: "low", maxRounds: 30, endpoint: "https://mine.example.com/v1/chat/completions" }));

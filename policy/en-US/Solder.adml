@@ -5,12 +5,13 @@
   <description>Settings for Solder, the coding agent in VS Code, enforced by your organization.</description>
   <resources>
     <stringTable>
-      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills: 0.2.9 or later)</string>
+      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later)</string>
       <string id="Cat_Solder">Solder</string>
       <string id="Cat_Connection">Connection</string>
       <string id="Cat_Model">Model</string>
       <string id="Cat_Docs">Docs</string>
       <string id="Cat_Skills">Skills</string>
+      <string id="Cat_Support">Support</string>
       <string id="Cat_Rules">Rules and instructions</string>
       <string id="Cat_Limits">Limits</string>
 
@@ -75,6 +76,14 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <string id="MaxRounds_Help">The most steps with tool calls for one message (1 to 100).</string>
       <string id="StorageLimitGB">Storage limit (GB)</string>
       <string id="StorageLimitGB_Help">The most disk space Undo's backups may use; past it, the oldest go first.</string>
+
+      <string id="FeedbackAddress">Feedback address</string>
+      <string id="FeedbackAddress_Help">The email address Solder's Send feedback goes to, for example solder-feedback@example.com, instead of Solder's own support address (support@gremnar.com). Use it to keep feedback, which may mention your code or projects, inside your organization.
+
+Send feedback only opens the user's own email app with the address filled in; Solder itself sends nothing.
+
+Enabled: feedback goes to this address. If it isn't a usable email address, Send feedback says so and opens nothing: it never falls back to Solder's own address. The same happens while your policy can't be read.
+Not configured: feedback goes to Solder's support address.</string>
     </stringTable>
     <presentationTable>
       <presentation id="Endpoint"><textBox refId="Endpoint"><label>Gateway address:</label></textBox></presentation>
@@ -85,6 +94,7 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <presentation id="ModelNames"><textBox refId="ModelNames"><label>JSON:</label></textBox></presentation>
       <presentation id="Effort"><dropdownList refId="Effort" noSort="true" defaultItem="0">Effort:</dropdownList></presentation>
       <presentation id="DocsFolders"><multiTextBox refId="DocsFolders">Folders, one per line (path|note):</multiTextBox></presentation>
+      <presentation id="FeedbackAddress"><textBox refId="FeedbackAddress"><label>Email address:</label></textBox></presentation>
       <presentation id="SkillsFolders"><multiTextBox refId="SkillsFolders">Folders, one per line:</multiTextBox></presentation>
       <presentation id="DocsSearch"><dropdownList refId="DocsSearch" noSort="true" defaultItem="0">Search by:</dropdownList></presentation>
       <presentation id="EmbeddingModel"><textBox refId="EmbeddingModel"><label>Model id:</label></textBox></presentation>

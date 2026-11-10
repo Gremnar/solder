@@ -46,6 +46,10 @@ const SETTINGS = {
 const ALLOW_USER_DOCS = "AllowUserDocsFolders";
 const ALLOW_USER_SKILLS = "AllowUserSkills";
 const ORG_RULES = "OrgRules";
+/** Where Send feedback goes instead of Solder's own support address (an organisation's own, so reports stay inside). */
+const FEEDBACK_ADDRESS = "FeedbackAddress";
+/** An email address that's safe in a mailto: link: no spaces, and nothing that would start a header or another address. */
+const EMAIL = /^[A-Za-z0-9.!$'*+/=^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 
 /**
  * A .reg export's values for one key: strings, numbers (dword) and lists (multi-string). Others are left out.
@@ -132,6 +136,8 @@ class Policy {
     this.allowUserDocs = false;
     this.allowUserSkills = false;
     this.orgRules = "";
+    /** @type {string | null} the feedback address the organisation sets, as given (null when it sets none) */
+    this.feedbackAddress = null;
     /** Why the policy couldn't be read ("" when it could): Solder won't connect while this is set. */
     this.error = "";
     /** @type {string[]} values that were there but couldn't be used (for diagnostics) */
@@ -142,8 +148,8 @@ class Policy {
 
   /** Read the policy again. @returns {Promise<boolean>} whether anything changed */
   async refresh() {
-    const before = JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]);
-    if (this.platform !== "win32") { this.apply(new Map(), ""); return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]); }
+    const before = JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.feedbackAddress, this.error]);
+    if (this.platform !== "win32") { this.apply(new Map(), ""); return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.feedbackAddress, this.error]); }
     try {
       /** @type {Map<string, any>} */
       const merged = new Map();
@@ -156,7 +162,7 @@ class Policy {
     } catch (error) {
       this.apply(new Map(), `Your organization's settings for Solder couldn't be read (${/** @type {any} */ (error)?.message || error}), so Solder won't connect until they can be. Ask your IT team.`);
     }
-    return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.error]);
+    return before !== JSON.stringify([[...this.values], this.allowUserDocs, this.allowUserSkills, this.orgRules, this.feedbackAddress, this.error]);
   }
 
   /** @param {Map<string, any>} raw by lower-case value name @param {string} error */
@@ -177,8 +183,25 @@ class Policy {
     this.allowUserSkills = on(raw.get(ALLOW_USER_SKILLS.toLowerCase()));
     const org = raw.get(ORG_RULES.toLowerCase());
     this.orgRules = org === undefined ? "" : (Array.isArray(org) ? org.join("\n") : String(org)).trim();
+    const feedback = raw.get(FEEDBACK_ADDRESS.toLowerCase());
+    this.feedbackAddress = feedback === undefined ? null : (Array.isArray(feedback) ? feedback.join(" ") : String(feedback)).trim();
     this.names = [...this.values.keys(), ...(this.allowUserDocs ? [ALLOW_USER_DOCS] : []), ...(this.allowUserSkills ? [ALLOW_USER_SKILLS] : []),
-      ...(this.orgRules ? [ORG_RULES] : [])];
+      ...(this.orgRules ? [ORG_RULES] : []), ...(this.feedbackAddress !== null ? [FEEDBACK_ADDRESS] : [])];
+  }
+
+  /**
+   * Where Send feedback goes: the organisation's address when it sets one, else Solder's own. It fails closed: an
+   * address that's set but isn't a usable email address, or a policy that can't be read, sends nothing (it never
+   * falls back to Solder's, so feedback meant to stay inside can't leave).
+   * @param {string} fallback Solder's own support address @returns {{to: string} | {problem: string}}
+   */
+  feedbackTo(fallback) {
+    if (this.error) return { problem: "Your organization's settings for Solder couldn't be read, so Send feedback can't tell where your feedback should go. Ask your IT team." };
+    if (this.feedbackAddress === null) return { to: fallback };
+    if (!EMAIL.test(this.feedbackAddress) || this.feedbackAddress.length > 254) {
+      return { problem: "Your organization sets where Solder's feedback goes, but the address it set isn't a usable email address, so nothing was sent. Ask your IT team." };
+    }
+    return { to: this.feedbackAddress };
   }
 
   /** Before anything connects: throws while the policy can't be read (fail closed). */
@@ -268,4 +291,4 @@ function coerce(given, kind, choices) {
 /** The one policy for this window. */
 const policy = new Policy();
 
-module.exports = { Policy, policy, parseRegFile, readKey, coerce, SETTINGS, KEYS, ALLOW_USER_DOCS, ALLOW_USER_SKILLS, ORG_RULES };
+module.exports = { Policy, policy, parseRegFile, readKey, coerce, SETTINGS, KEYS, ALLOW_USER_DOCS, ALLOW_USER_SKILLS, ORG_RULES, FEEDBACK_ADDRESS };

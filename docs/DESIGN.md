@@ -148,9 +148,10 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 - **The keys:** values under `HKLM` and then `HKCU`, each `\SOFTWARE\Policies\Gremnar\Solder`. Computer policy wins over user policy. A value that's there locks its setting.
 - **Reading them:** `src/policy.js` runs `reg.exe export` (directly, with no shell) and parses the UTF-16 `.reg` file. `src/config.js` wraps VS Code's settings, so every read sees the policy.
 - **Failing closed:** if the policy can't be read, nothing is sent.
-- **Two policies that aren't settings:**
+- **Policies that aren't settings:**
   - `AllowUserDocsFolders` adds the user's own docs folders to the enforced ones, and `AllowUserSkills` their own skills folders.
   - `OrgRules` is added after the user's rules, so it reads as the more recent instruction.
+  - `FeedbackAddress` replaces Solder's support address in Send feedback. It fails closed: an unusable address, or a policy that can't be read, opens nothing (never Solder's address instead).
 - **The API key is never set by policy:** every local user can read the Policies keys.
 - **A possible later addition, only if an organization asks:** limiting what Solder can do (for example, no edits, or no writes outside the workspace) by policy.
 

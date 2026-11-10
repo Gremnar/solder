@@ -12,6 +12,7 @@
 - **Rules for everyone:** add your organization's rules to every user's chats, after their own.
 - **Shared docs:** give everyone the same reference folders, with or without folders of their own.
 - **Shared skills:** give everyone the same skills, your organization's way of doing a kind of task, from a share.
+- **Feedback stays inside:** send **Send feedback** to your own address instead of Solder's support, so nothing about your code leaves by mistake.
 - **Ready-made templates:** ADMX and ADML files come with every release. API keys stay with each user, never in policy.
 
 See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
@@ -165,7 +166,7 @@ The API key is set with **Solder: Set API key**, or in the guided setup. It's ne
 
 ## Privacy
 
-- **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet. **⋯ → Send feedback…** opens your own email app, addressed to support, with only the Solder and VS Code versions filled in.
+- **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet. **⋯ → Send feedback…** opens your own email app, addressed to support (or to your organization's own address, when it sets one), with only the Solder and VS Code versions filled in.
 - **Your key:** kept in VS Code's secret storage.
 - **Your chats and the docs index:** stay on your PC, in VS Code's storage for Solder.
 

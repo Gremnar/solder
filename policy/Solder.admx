@@ -19,6 +19,7 @@
     <category name="Model" displayName="$(string.Cat_Model)"><parentCategory ref="Solder" /></category>
     <category name="Docs" displayName="$(string.Cat_Docs)"><parentCategory ref="Solder" /></category>
     <category name="Skills" displayName="$(string.Cat_Skills)"><parentCategory ref="Solder" /></category>
+    <category name="Support" displayName="$(string.Cat_Support)"><parentCategory ref="Solder" /></category>
     <category name="Rules" displayName="$(string.Cat_Rules)"><parentCategory ref="Solder" /></category>
     <category name="Limits" displayName="$(string.Cat_Limits)"><parentCategory ref="Solder" /></category>
   </categories>
@@ -112,6 +113,10 @@
     <policy name="StorageLimitGB" class="Both" displayName="$(string.StorageLimitGB)" explainText="$(string.StorageLimitGB_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.StorageLimitGB)">
       <parentCategory ref="Limits" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><decimal id="StorageLimitGB" valueName="StorageLimitGB" minValue="1" maxValue="1000" required="true" /></elements>
+    </policy>
+    <policy name="FeedbackAddress" class="Both" displayName="$(string.FeedbackAddress)" explainText="$(string.FeedbackAddress_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.FeedbackAddress)">
+      <parentCategory ref="Support" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="FeedbackAddress" valueName="FeedbackAddress" maxLength="254" required="true" /></elements>
     </policy>
   </policies>
 </policyDefinitions>

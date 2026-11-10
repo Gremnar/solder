@@ -42,6 +42,7 @@ Solder reads two registry keys, both writable only by administrators:
 | `CompactAtTokens` | REG_DWORD | When the older part of a chat is summarized (30,000 or more). |
 | `MaxRounds` | REG_DWORD | The most steps with tool calls for one message (1–100). |
 | `StorageLimitGB` | REG_DWORD | The most disk space Undo's backups may use. |
+| `FeedbackAddress` | REG_SZ | The email address **Send feedback** goes to, such as `solder-feedback@example.com`, instead of Solder's own support address, so feedback that may mention your code stays inside your organization. If it isn't a usable email address, or the policy can't be read, Send feedback opens nothing: it never falls back to Solder's address. |
 
 A value of the wrong kind (a word where a number belongs, an unknown effort) isn't used, and Solder's
 **⋯ → Copy diagnostics** names it, along with which settings are enforced.
