@@ -622,6 +622,12 @@ body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: no
   .send.stop::after { border-right-color: var(--link); border-bottom-color: var(--link); border-left-color: var(--link); opacity: 0.6; }
 }
 
+/* Assist models: tagged in the picker */
+#model-menu .tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 0.8em; border: 1px solid var(--line); color: var(--muted); }
+.banner.offer { flex-wrap: wrap; }
+.banner.offer .msg { flex-basis: calc(100% - 30px); }
+.banner button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+
 /* what the organisation sets (policy): marked, and shown but not changeable */
 .settings .org { margin-left: 8px; font-size: 0.85em; font-weight: 400; color: var(--muted); }
 .settings .org-doc .doc-path { opacity: 0.85; margin-bottom: 0; }

@@ -128,6 +128,14 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.
 
+**Two lanes (Tool and Assist models).** The `solder.toolModels` pattern sends matching models down the **Tool lane**: a system prompt, native tool calls, and the whole chat on every request. Every other model goes down the **Assist lane**, which has no system prompt and no tools, and works like this:
+- **Calls:** the model asks for a tool by writing a JSON block in its reply. `src/assist.js` parses those blocks into ordinary tool calls before they're stored.
+- **Storage:** chats are stored the same way on both lanes, so batching, approvals, the plan and Undo don't change.
+- **Rendering:** each lane renders the stored chat its own way.
+- **Sessions:** `sessionPlan` sends only each new message while the gateway's session holds the chat. Otherwise it sends the introduction (`ASSIST` in prompt.js), or carries the conversation over inside one user message.
+- **The texts:** the two lanes' model-facing texts are separate, and each is pinned by its own test.
+- **When the allowance runs out:** on a Tool model, the panel offers to switch the chat to its Assist twin.
+
 **Organization policy (Group Policy, Intune).** Every setting above can be enforced. The guide for admins is [POLICY.md](POLICY.md).
 - **Why Solder reads its own keys:** VS Code only applies policies to extension settings listed in its own product.json, which leaves out third-party extensions.
 - **The keys:** values under `HKLM` and then `HKCU`, each `\SOFTWARE\Policies\Gremnar\Solder`. Computer policy wins over user policy. A value that's there locks its setting.

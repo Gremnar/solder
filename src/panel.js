@@ -6,6 +6,7 @@
  */
 const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
+const { laneOf, assistTwin } = require("./lanes.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments } = require("./engine.js");
@@ -157,6 +158,20 @@ class SolderPanel {
       toolModels: String(config.get("toolModels", "") || ""), assistSessionBlock: String(config.get("assistSessionBlock", "") || "") };
   }
 
+  /**
+   * When the Tool models' allowance runs out: the chat's model's Assist twin to switch to (it doesn't use the
+   * allowance), if it's on offer and the model isn't locked by policy. null otherwise.
+   * @param {any} event the error event @returns {{model: string, name: string} | null}
+   */
+  switchOffer(event) {
+    if (!event.exhausted) return null;
+    const settings = this.settings();
+    if (settings.modelLocked) return null;
+    const chat = event.chat === this.chat.id ? this.chat : this.runChat;
+    const twin = assistTwin(String(chat?.model || settings.model || ""), settings, this.models.map((m) => m.id));
+    return twin ? { model: twin, name: this.models.find((m) => m.id === twin)?.name || twin } : null;
+  }
+
   /** The organisation's policy changed: the client, the models, the docs folders and what's shown follow it. */
   async policyChanged() {
     this._client = null;
@@ -243,7 +258,7 @@ class SolderPanel {
           if (this.chat.id !== this.runId) this.awayDone = this.runId; // finished while you were reading another chat
         }
         break;
-      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted }; this.errorChat = event.chat;
+      case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted, switchTo: this.switchOffer(event) }; this.errorChat = event.chat;
         if (event.credits) { this.credits = event.credits; this.updateStatusBar(); } // a used-up allowance shows as 0 left
         break;
       case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; this.errorChat = event.chat; break;
@@ -269,6 +284,15 @@ class SolderPanel {
       case "command": return this.command(String(message.name || ""), String(message.arg || "").trim());
       case "chatAction": return this.chatAction(String(message.action || ""), String(message.id || ""));
       case "stop": this.engine.stop(); return;
+      case "switch-and-resume": {
+        // The allowance ran out: this chat (not the default) moves to the Assist twin, which doesn't use it, and carries on.
+        if (this.engine.busy || policy.locked("model")) return;
+        const target = String(message.model || "");
+        if (!this.models.some((m) => m.id === target)) return;
+        this.chat.model = target;
+        await this.store.save(this.chat);
+        this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
+      }
       case "resume":
         if (this.engine.busy) { vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Resume this one when it's done.`); return; }
         this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
@@ -692,9 +716,11 @@ class SolderPanel {
     const current = (settings.modelLocked ? settings.model : chat.model || settings.model) || "";
     this.view.webview.postMessage({
       type: "state",
-      chat: { id: chat.id, title: chat.title, items: this.items(), tokens: chat.usage.tokens },
+      chat: { id: chat.id, title: chat.title, items: this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0 },
       chats: chatList(this.store.list()),
-      models: this.models.length || !current ? this.models : [{ id: current, name: current }],
+      // Assist models are tagged in the picker: free, slower, and no thinking level.
+      models: (this.models.length || !current ? this.models : [{ id: current, name: current }]).map((m) => ({ ...m, assist: laneOf(m.id, settings) === "assist" })),
+      assist: laneOf(current, settings) === "assist",
       modelsProblem: this.modelsProblem,
       model: current,
       effort: settings.effortLocked ? settings.effort : chat.effort || settings.effort,

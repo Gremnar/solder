@@ -183,7 +183,7 @@
 
   /** What identifies an element across a redraw, most specific first. */
   const FOCUS_KEYS = ["data-step", "data-chip", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
-    "data-action", "data-review", "data-undo", "data-unsteer", "data-model", "data-open", "id"];
+    "data-action", "data-switch", "data-review", "data-undo", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
    * Runs a redraw of root; if it replaced the focused element, focus goes to its new copy (or to fallback).
@@ -833,10 +833,12 @@
     const away = state.elsewhere;
     const awayText = !away ? "" : away.done ? (away.problem ? `"${away.title}" stopped: ${away.problem}` : `"${away.title}" is done.`)
       : away.waiting ? `"${away.title}" is waiting for your approval.` : `Solder is working in "${away.title}".`;
-    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped ? " soft" : "")
+    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped ? " soft" : "") + (state.error.switchTo ? " offer" : "")
       : away ? "banner soft" + (away.waiting ? " waiting" : "") : "banner hidden";
     const bannerHtml = state.error && !state.busy ? (state.error.stopped ? ICONS.pause : ICONS.alert) + `<span class="msg">${escape(state.error.message)}` +
-      (state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
+      (state.error.switchTo ? ` Everything so far is saved. To carry on now, switch this chat to ${escape(state.error.switchTo.name)} (an Assist model, which doesn't use the allowance), then resume.`
+        : state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
+      (state.error.switchTo && !(away && !away.done) ? `<button class="primary" data-switch="${escape(state.error.switchTo.model)}" title="Assist models don't use the daily allowance. Each step takes a few seconds longer, and there's no thinking level.">Switch to ${escape(state.error.switchTo.name)} and resume</button>` : "") +
       (state.error.resumable && !(away && !away.done) ? `<button data-action="resume">Resume</button>` : "")
       : away ? (away.done ? (away.problem ? ICONS.pause : ICONS.check) : `<span class="spinner" aria-hidden="true"></span>`) + `<span class="msg">${escape(awayText)}</span>` +
         `<button data-open="${escape(away.id)}">${away.done ? "Open it" : "Go back"}</button>` : "";
@@ -864,16 +866,18 @@
     }
     // model
     const model = state.models.find((/** @type {any} */ m) => m.id === state.model);
-    $("model-name").textContent = model ? model.name : state.model || "Choose a model";
+    $("model-name").textContent = (model ? model.name : state.model || "Choose a model") + (state.assist ? " · Assist" : "");
     const locks = state.locks || {};
     /** @type {HTMLButtonElement} */ ($("model-button")).disabled = !!locks.model;
     $("model-button").title = locks.model ? "Set by your organization" : "Model";
     const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button role="menuitemradio" aria-checked="${m.id === state.model}" tabindex="-1" data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
-        `<span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
+        `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Free, and slower: a few seconds more per step. No thinking level.">Assist</span>` : ""}</span>` +
+        `${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
       : `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No models listed.</div>`;
     if (models !== shownModels) { shownModels = models; $("model-menu").innerHTML = models; } // an open menu doesn't flicker
-    // effort
+    // effort (Assist models take no thinking level)
+    $("effort").classList.toggle("hidden", !!state.assist);
     const level = state.effort === "default" ? "low" : state.effort;
     for (const button of $("effort").querySelectorAll("button")) {
       button.classList.toggle("active", button.dataset.level === level);
@@ -888,6 +892,7 @@
     // footer
     const footer = [];
     if (state.chat.tokens) footer.push(`<span title="Tokens this chat has used">${compact(state.chat.tokens)} tokens</span>`);
+    if (state.chat.freeTokens) footer.push(`<span title="Tokens on Assist models, which don't use the allowance">${compact(state.chat.freeTokens)} free</span>`);
     const share = state.credits && state.credits.limit ? Math.max(0, Math.min(1, state.credits.remaining / state.credits.limit)) : 0;
     if (state.credits) footer.push(`<span class="left" title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">` +
       `${state.credits.limit ? `<span class="meter${share < 0.15 ? " low" : ""}"></span>` : ""}${compact(state.credits.remaining)} left</span>`);
@@ -1374,11 +1379,12 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-fold],[data-action],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
+    else if (d.switch) { closeMenus(); vscode.postMessage({ type: "switch-and-resume", model: d.switch }); }
     else if (d.starter) { stickToBottom = true; vscode.postMessage({ type: "starter", id: d.starter }); }
     else if (d.sact) {
       if (el.hasAttribute("disabled")) return;

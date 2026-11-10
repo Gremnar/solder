@@ -96,6 +96,15 @@ Point Solder at folders of reference documentation that only exist on your PC: i
 
 <img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
 
+## Two kinds of model (optional)
+
+Some gateways offer two kinds of model: **Tool models**, which take a system prompt and native tool calls (what Solder uses by default), and **Assist models**, which take plain text only and often keep the conversation on their side. Solder can use both.
+
+- **Tell them apart:** set **Tool models** to a pattern that matches your Tool models' ids. Every other model is then an Assist model, tagged **Assist** in the picker.
+- **How Assist models work in Solder:** Solder tells them about your workspace and its tools in plain words, and they ask for a tool by writing a short request in their reply. Steps, approvals, Review and Undo work the same. Assist models take no thinking level.
+- **Sessions:** if your gateway keeps Assist conversations in a session, set **Assist session block** to the name of the object its responses carry it in. Solder then sends only each new message.
+- **Switching:** a chat can move between the two at any point. If your Tool models' daily allowance runs out mid-task, Solder offers to switch the chat to the Assist version of the same model and carry on.
+
 ## Instructions it follows
 
 - **`AGENTS.md`:** if your workspace has one at its root, Solder follows it. One in a subfolder applies once Solder reads files there. The **Instruction files** setting adds others, such as `CLAUDE.md`.
@@ -121,6 +130,7 @@ The panel shows what the chat has used, and the status bar shows the allowance l
 | **Max rounds** | the most steps with tool calls for one message |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
+| **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Two kinds of model](#two-kinds-of-model-optional)) |
 | **Storage limit GB** | the most disk space Undo's backups may use, 5 GB by default; past it, the oldest go first |
 
 The API key is set with **Solder: Set API key**, or in the guided setup. It's never stored in settings.
