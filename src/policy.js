@@ -28,6 +28,8 @@ const SETTINGS = {
   endpoint: { value: "Endpoint", kind: "text" },
   model: { value: "Model", kind: "text" },
   modelFilter: { value: "ModelFilter", kind: "text" },
+  toolModels: { value: "ToolModels", kind: "text" },
+  assistSessionBlock: { value: "AssistSessionBlock", kind: "text" },
   modelNames: { value: "ModelNames", kind: "names" },
   effort: { value: "Effort", kind: "choice", choices: ["default", "low", "medium", "high"] },
   compactAtTokens: { value: "CompactAtTokens", kind: "number" },

@@ -24,6 +24,10 @@ Each user still sets their own API key: keys are never set by policy.</string>
       <string id="Model_Help">The model id Solder uses. Enabled: users can't pick another model, for new chats or existing ones.</string>
       <string id="ModelFilter">Models offered</string>
       <string id="ModelFilter_Help">A regular expression: only models whose id matches are offered in the model picker, for example -tools$ or ^(model-a|model-b)$.</string>
+      <string id="ToolModels">Tool models</string>
+      <string id="ToolModels_Help">A regular expression: models whose id matches are Tool models (a system prompt and native tool calls). Every other model is an Assist model, which takes plain text only and is reached through Solder's text protocol and the gateway's sessions. Not configured or empty: every model is a Tool model.</string>
+      <string id="AssistSessionBlock">Assist session block</string>
+      <string id="AssistSessionBlock_Help">The name of the object in the gateway's responses that carries an Assist model's session. Not configured or empty: no sessions, so every Assist request carries the conversation over in one message.</string>
       <string id="ModelNames">Model display names</string>
       <string id="ModelNames_Help">Short names for model ids in the picker, as JSON, for example {"model-a": "Model A"}.</string>
       <string id="Effort">Effort</string>
@@ -66,6 +70,8 @@ Enabled: these folders are searched. Users can't change them, or add their own u
       <presentation id="Endpoint"><textBox refId="Endpoint"><label>Gateway address:</label></textBox></presentation>
       <presentation id="Model"><textBox refId="Model"><label>Model id:</label></textBox></presentation>
       <presentation id="ModelFilter"><textBox refId="ModelFilter"><label>Regular expression:</label></textBox></presentation>
+      <presentation id="ToolModels"><textBox refId="ToolModels"><label>Regular expression:</label></textBox></presentation>
+      <presentation id="AssistSessionBlock"><textBox refId="AssistSessionBlock"><label>Block name:</label></textBox></presentation>
       <presentation id="ModelNames"><textBox refId="ModelNames"><label>JSON:</label></textBox></presentation>
       <presentation id="Effort"><dropdownList refId="Effort" noSort="true" defaultItem="0">Effort:</dropdownList></presentation>
       <presentation id="DocsFolders"><multiTextBox refId="DocsFolders">Folders, one per line (path|note):</multiTextBox></presentation>

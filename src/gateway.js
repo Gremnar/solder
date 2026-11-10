@@ -127,6 +127,34 @@ function allowanceOf(headers) {
   return best;
 }
 
+/** The longest a session field may be (a session id, a token). */
+const MAX_SESSION_FIELD_CHARS = 8192;
+/** How long an answer-whole side request may take (they've taken minutes on slow backends). */
+const SIDE_MS = 180_000;
+
+/**
+ * An Assist session from a response or a chunk: every short printable string field of the named block (a session
+ * id and a token, as the gateway names them; anything else, such as a list of thoughts, is left out). null when
+ * there's no such block, or fewer than two such fields. Never logged: only fingerprints of it are.
+ * @param {any} value @param {string} block @returns {{block: string, fields: Record<string, string>} | null}
+ */
+function sessionOf(value, block) {
+  const found = value && typeof value === "object" ? value[block] : null;
+  if (!found || typeof found !== "object" || Array.isArray(found)) return null;
+  /** @type {Record<string, string>} */
+  const fields = {};
+  for (const [key, field] of Object.entries(found)) {
+    if (typeof field === "string" && field.length > 0 && field.length <= MAX_SESSION_FIELD_CHARS
+      && /^[\x20-\x7e]+$/.test(field) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) fields[key] = field;
+  }
+  return Object.keys(fields).length >= 2 ? { block, fields } : null;
+}
+
+/** A session's identity, for "the same session or another": its field called session, else its first. @param {Record<string, string>} fields */
+function sessionId(fields) {
+  return fields.session ?? Object.values(fields)[0] ?? "";
+}
+
 /** @param {unknown} call */
 function callId(call) {
   const value = call && typeof call === "object" ? /** @type {any} */ (call).id : undefined;
@@ -161,40 +189,63 @@ class GatewayClient {
   }
 
   /**
-   * One reply. `messages` is the whole chat (Tool models keep no session), starting with the system
-   * message; the last must be user text or a tool result. Text streams through `onText`.
+   * One reply. On the Tool lane, `messages` is the whole chat (no session), starting with the system message; the
+   * last must be user text or a tool result. On the Assist lane (`assist`), it's plain user and assistant text only,
+   * ending with the user's, and no tools, effort or output limit go with it; `session` continues a conversation the
+   * gateway holds, and `sessionBlock` names the response object that carries one. Text streams through `onText`;
+   * `stream: false` (Assist side requests) waits for the whole answer instead.
    * @param {{model: string, messages: Message[], tools?: object[], effort?: "low"|"medium"|"high",
-   *          onText?: (text: string) => void, signal?: AbortSignal}} request
+   *          assist?: boolean, session?: {block: string, fields: Record<string, string>} | null, sessionBlock?: string,
+   *          stream?: boolean, onText?: (text: string) => void, signal?: AbortSignal}} request
    * @returns {Promise<Reply>}
    */
-  async reply({ model, messages, tools, effort, onText = () => {}, onCalls = () => {}, signal }) {
+  async reply({ model, messages, tools, effort, assist = false, session = null, sessionBlock = "", stream = true,
+    onText = () => {}, onCalls = () => {}, signal }) {
     if (typeof model !== "string" || !model.trim() || model.length > 500) {
       throw new GatewayError("Choose a model before sending a message.");
     }
     if (!Array.isArray(messages) || !messages.length) throw new GatewayError("There's nothing to send.");
     const last = messages[messages.length - 1].role;
-    if (last !== "user" && last !== "tool") throw new GatewayError("The last message must be user text or a tool result.");
-    // Field order as Alloy sends it (the gateway was picky about Zom's shape; keep it).
+    if (assist) {
+      // Plain user and assistant text only, ending with the user's: Assist models take nothing else.
+      for (const m of messages) {
+        if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string") {
+          throw new GatewayError("Only user and assistant text can go to this model.");
+        }
+      }
+      if (last !== "user") throw new GatewayError("The last message must be user text.");
+    } else if (last !== "user" && last !== "tool") throw new GatewayError("The last message must be user text or a tool result.");
+    // Field order as Alloy sends it (the gateway was picky about Zom's shape; keep it): the model, a session (at the
+    // top level, then inside its block), the messages, stream.
     /** @type {any} */
-    const payload = { model, messages, stream: true };
-    if (tools && tools.length) Object.assign(payload, { tools, tool_choice: "auto" });
-    if (effort) payload.reasoning_effort = effort; // nothing = the model's default (answers like low)
-    payload.max_tokens = this.maxOutputTokens;
+    const payload = { model };
+    if (assist && session && session.block) Object.assign(payload, session.fields, { [session.block]: { ...session.fields } });
+    Object.assign(payload, { messages, stream });
+    if (!assist) {
+      if (tools && tools.length) Object.assign(payload, { tools, tool_choice: "auto" });
+      if (effort) payload.reasoning_effort = effort; // nothing = the model's default (answers like low)
+      payload.max_tokens = this.maxOutputTokens;
+    }
+    const block = assist ? String(sessionBlock || session?.block || "") : "";
     const body = Buffer.from(JSON.stringify(payload), "utf8");
     if (body.length > this.maxResponseBytes) {
       throw new GatewayError("The chat is too long to send. Compact it or start a new chat.");
     }
     const started = Date.now();
     let streamed = false;
+    // A dead session answers like a backend hiccup (502): with a session, one more try at most, so the engine can
+    // carry the conversation over soon instead of waiting out every retry.
+    const retries = assist && session ? Math.min(this.maxRetries, 1) : this.maxRetries;
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) throw new Cancelled();
       try {
-        const result = await this._streamOnce(body, (text) => { streamed = true; onText(text); }, signal, onCalls);
+        const result = stream ? await this._streamOnce(body, (text) => { streamed = true; onText(text); }, signal, onCalls, block)
+          : await this._wholeOnce(body, signal, block);
         return { ...result, ms: Date.now() - started };
       } catch (error) {
         if (error instanceof Cancelled || !(error instanceof GatewayError)) throw error;
         // Never resend once words have reached the user, or when the model may have seen it.
-        if (!error.transient || error.uncertain || streamed || error.exhausted || attempt >= this.maxRetries) throw error;
+        if (!error.transient || error.uncertain || streamed || error.exhausted || attempt >= retries) throw error;
         const wait = /** @type {any} */ (error).retryAfterMs ?? BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)];
         await sleep(wait, signal);
       }
@@ -266,10 +317,40 @@ class GatewayClient {
   }
 
   /**
+   * One request answered whole (stream: false): an Assist side request, such as a title or a summary, which can't
+   * stream on some gateways. Slow backends take minutes over these, so the wait is long.
+   * @param {Buffer} body @param {AbortSignal | undefined} signal @param {string} block the session block's name ("" = none)
+   */
+  async _wholeOnce(body, signal, block) {
+    let answer;
+    try { answer = await this._request(this.endpoint, body, signal, SIDE_MS); }
+    catch (error) {
+      if (error instanceof Cancelled || error instanceof GatewayError) throw error;
+      throw this._transportFailure(error, true);
+    }
+    const { status, headers, text } = answer;
+    if (status !== 200) throw this._httpFailure(status, headers, text);
+    let value;
+    try { value = parseJson(text); } catch { throw new GatewayError("The gateway's answer wasn't JSON.", { transient: true, uncertain: true }); }
+    const choice = Array.isArray(value?.choices) ? value.choices[0] : null;
+    const content = typeof choice?.message?.content === "string" ? choice.message.content : "";
+    const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : "";
+    const usage = value?.usage && typeof value.usage === "object" ? value.usage : {};
+    if (!content.trim()) {
+      const error = new GatewayError("The model sent an empty reply.", { transient: finishReason !== "length", uncertain: true });
+      /** @type {any} */ (error).empty = true;
+      /** @type {any} */ (error).usage = usage;
+      throw error;
+    }
+    return { content, calls: [], finishReason, usage, session: block ? sessionOf(value, block) : null, credits: allowanceOf(headers) };
+  }
+
+  /**
    * @param {Buffer} body @param {(text: string) => void} emit @param {AbortSignal} [signal]
    * @param {(calls: {name: string, chars: number, path: string}[]) => void} [onCalls] tool calls as they're written
+   * @param {string} [block] the Assist session block's name, to look for in the stream ("" = none)
    */
-  _streamOnce(body, emit, signal, onCalls) {
+  _streamOnce(body, emit, signal, onCalls, block = "") {
     return new Promise((resolve, reject) => {
       const url = new URL(this.endpoint);
       const lib = url.protocol === "https:" ? https : http;
@@ -311,7 +392,7 @@ class GatewayClient {
           fail(new GatewayError("The gateway didn't answer with a stream. Check the endpoint."));
           return;
         }
-        const stream = reader = new ChatStream(emit, onCalls);
+        const stream = reader = new ChatStream(emit, onCalls, block);
         const sse = new SseParser(MAX_EVENT_BYTES);
         let total = 0;
         /** Feed events; true once the reply is complete (and resolved). @param {string[]} events */
@@ -452,9 +533,13 @@ class ChatStream {
    * @param {(calls: {name: string, chars: number, path: string}[]) => void} [onCalls] the tool calls so far, as
    *   pieces arrive (from gateways that stream them; others send each call whole, at the end)
    */
-  constructor(emit, onCalls = () => {}) {
+  constructor(emit, onCalls = () => {}, sessionBlock = "") {
     /** @type {Map<number, string>} each call's path, once found */
     this.paths = new Map();
+    /** The Assist session block's name ("" = don't look), and the session found in the stream. */
+    this.sessionBlock = sessionBlock;
+    /** @type {{block: string, fields: Record<string, string>} | null} */
+    this.session = null;
     this.emit = emit;
     this.onCalls = onCalls;
     this.text = "";
@@ -476,8 +561,12 @@ class ChatStream {
     }
     if (value.error) throw new GatewayError("The gateway's stream failed.", { transient: true, uncertain: true });
     if (value.usage && typeof value.usage === "object") this.usage = value.usage;
+    if (this.sessionBlock) {
+      const found = sessionOf(value, this.sessionBlock);
+      if (found) this.session = found;
+    }
     if (!Array.isArray(value.choices)) {
-      if (value.usage) return false; // a usage-only chunk
+      if (value.usage || this.session) return false; // a usage-only or session-only chunk
       throw new GatewayError("The gateway's stream wasn't Chat Completions events.");
     }
     for (const choice of value.choices) {
@@ -555,7 +644,7 @@ class ChatStream {
       /** @type {any} */ (error).usage = this.usage;
       throw error;
     }
-    return { content: this.text, calls, finishReason: this.reason, usage: this.usage };
+    return { content: this.text, calls, finishReason: this.reason, usage: this.usage, session: this.session };
   }
 }
 
@@ -700,4 +789,4 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { GatewayClient, GatewayError, Cancelled, credits, NATIVE_MAX_TOKENS, TOOL_QUIET_MS };
+module.exports = { sessionOf, sessionId, GatewayClient, GatewayError, Cancelled, credits, NATIVE_MAX_TOKENS, TOOL_QUIET_MS };

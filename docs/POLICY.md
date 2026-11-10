@@ -26,6 +26,8 @@ Solder reads two registry keys, both writable only by administrators:
 | `Endpoint` | REG_SZ | The gateway's Chat Completions URL, ending in `/chat/completions`. If it isn't valid, Solder won't connect (it doesn't fall back to the user's). |
 | `Model` | REG_SZ | The model id. Users can't pick another, for new chats or existing ones. |
 | `ModelFilter` | REG_SZ | A regular expression: only matching model ids are offered. |
+| `ToolModels` | REG_SZ | A regular expression: matching model ids are Tool models (system prompt, native tool calls); every other model is an Assist model (plain text, Solder's text protocol, the gateway's sessions). Empty: all are Tool models. |
+| `AssistSessionBlock` | REG_SZ | The name of the object in the gateway's responses that carries an Assist session. Empty: no sessions (every Assist request carries the conversation over). |
 | `ModelNames` | REG_SZ | Short names for the picker, as JSON: `{"model-a": "Model A"}`. |
 | `Effort` | REG_SZ | `default`, `low`, `medium` or `high`. Users can't change it, in settings or per chat. |
 | `DocsFolders` | REG_MULTI_SZ | Docs folders, one per line, each optionally followed by `\|` and a note on what's in it: `\\fileserver\docs\api\|The API reference`. |

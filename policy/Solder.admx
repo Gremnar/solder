@@ -34,6 +34,14 @@
       <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="ModelFilter" valueName="ModelFilter" maxLength="512" required="true" /></elements>
     </policy>
+    <policy name="ToolModels" class="Both" displayName="$(string.ToolModels)" explainText="$(string.ToolModels_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.ToolModels)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="ToolModels" valueName="ToolModels" maxLength="512" required="true" /></elements>
+    </policy>
+    <policy name="AssistSessionBlock" class="Both" displayName="$(string.AssistSessionBlock)" explainText="$(string.AssistSessionBlock_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.AssistSessionBlock)">
+      <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="AssistSessionBlock" valueName="AssistSessionBlock" maxLength="128" required="true" /></elements>
+    </policy>
     <policy name="ModelNames" class="Both" displayName="$(string.ModelNames)" explainText="$(string.ModelNames_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.ModelNames)">
       <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="ModelNames" valueName="ModelNames" maxLength="4096" required="true" /></elements>
