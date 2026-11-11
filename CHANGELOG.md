@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.9 (2026-11-11)
 
 - **Skills.** A skill is your instructions for a kind of task, in one Markdown file named after it, whose first line says when to use it (`When to use: Writing or changing a PowerShell script.`); a front-matter `description:`, as in Claude's and Codex's `SKILL.md` files, works too. Add folders of them in **Settings → Your skills** (or the **Skills folders** setting). The model is told each skill's name, file and when to use it, and reads one before a task it covers, with read_file: no new tool, no approval to read, and the skill comes back whole (no line numbers, whatever range was asked) and stays in the chat when old results are cut or its plan step is done. A skill the chat still holds isn't sent twice. Settings lists the skills found, flags one with no "When to use" line, and makes a new one with **New skill…**; ask the model to save one and it writes it to your first skills folder, after asking. Up to 50 skills are offered, and 20,000 characters of each are read.
 - **Making and managing skills.** **New skill…** (in Settings, and as **Solder: New skill** in the command palette) asks a skill's name and when to use it, then opens the file to write; with no skills folder yet it makes one, `.solder\skills` in your home folder. Settings lists your skills first, each with ✕ to delete it (to the recycle bin, after asking). **Use as Solder skills** on a folder in the Explorer adds a folder you already have, and the guided setup's summary mentions skills.

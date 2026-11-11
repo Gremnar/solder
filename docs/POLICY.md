@@ -49,8 +49,8 @@ A value of the wrong kind (a word where a number belongs, an unknown effort) isn
 
 **Folders on a share.** Solder opens network paths (`\\server\share`) only inside the workspace and inside the docs
 and skills folders you or the user set up, compared as written, so a path the model makes up can't send the user's
-Windows sign-in to another server. Users need read access to the share; a skills share can be read-only, with your
-skills managed centrally.
+Windows sign-in to another server. Users need read access to the share. Make a skills share read-only to everyone but its owners: a skill is
+instructions every user's chats may follow, so whoever can write there can steer them.
 
 ## Group Policy
 
