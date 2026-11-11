@@ -8,7 +8,6 @@ const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
 const { MAX_SKILLS } = require("./skills.js");
-const fs = require("node:fs");
 const path = require("node:path");
 
 class SettingsScreen {
@@ -16,7 +15,8 @@ class SettingsScreen {
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
    * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, refreshModels: () => Promise<void>,
-   *          skills: () => import("./skills.js").Skill[], skillsFolder?: () => string, policyChanged?: () => void,
+   *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>,
+   *          deleteSkill: (name: string) => Promise<boolean>, policyChanged?: () => void,
    *          testEmbedding: (model: string) => Promise<{dims: number, tokens: number}>}} hooks
    * @param {() => void} changed called whenever what the panel shows changes
    */
@@ -80,6 +80,7 @@ class SettingsScreen {
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
       skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
       orgSkills: policy.orgSkills(), skillsLocked: policy.locked("skillsFolders"), skills: this.skills(), skillsOffered: MAX_SKILLS,
+      skillsHome: this.hooks.skillsHome(),
     };
   }
 
@@ -222,19 +223,12 @@ class SettingsScreen {
         return;
       }
       case "newSkill": {
-        const folder = this.hooks.skillsFolder?.() ?? "";
-        if (!folder) { this.notice(this.view.skillsLocked ? "Your organization sets the skills folders." : "Add a skills folder first.", "bad"); return; }
-        const name = await vscode.window.showInputBox({ title: "Solder: a new skill", prompt: `Its name, which is its file's name in ${folder}`,
-          placeHolder: "python_scripts", validateInput: (text) => skillNameProblem(text, folder) });
-        if (!name) return;
-        const file = path.join(folder, name.trim() + ".md");
-        try { fs.writeFileSync(file, "When to use: \n\n", { flag: "wx" }); } catch (error) { this.notice(`The skill couldn't be made: ${messageOf(error)}`, "bad"); return; }
-        const editor = await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
-        // The cursor goes where the sentence on when to use it is written.
-        const end = new vscode.Position(0, "When to use: ".length);
-        editor.selection = new vscode.Selection(end, end);
-        Object.assign(this.view, { skills: this.skills() });
-        this.changed();
+        // Asks its name and when to use it, makes a skills folder if there's none yet, and opens the file to write.
+        if (await this.hooks.newSkill()) { Object.assign(this.view, await this.values(), { saved: "skills", notice: "", noticeKind: "" }); this.changed(); }
+        return;
+      }
+      case "deleteSkill": {
+        if (await this.hooks.deleteSkill(String(message.name || ""))) { Object.assign(this.view, { skills: this.skills() }); this.changed(); }
         return;
       }
       case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
@@ -252,15 +246,6 @@ class SettingsScreen {
       }
     }
   }
-}
-
-/** Why a new skill's name won't do, or null. @param {string} text @param {string} folder */
-function skillNameProblem(text, folder) {
-  const name = String(text || "").trim();
-  if (!name) return "Give it a name.";
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/.test(name)) return "Letters, digits, - and _ only, like python_scripts.";
-  if (fs.existsSync(path.join(folder, name + ".md"))) return "There's already a skill with that name.";
-  return null;
 }
 
 /** @param {{path: string, about: string}[]} docs */

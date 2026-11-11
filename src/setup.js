@@ -17,11 +17,13 @@ class SetupWizard {
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
    * @param {() => void} changed called whenever what the panel shows changes
+   * @param {{skills?: () => number}} [hooks] skills: how many skills the model is offered (for the summary)
    */
-  constructor(context, keyName, changed) {
+  constructor(context, keyName, changed, hooks = {}) {
     this.context = context;
     this.keyName = keyName;
     this.changed = changed;
+    this.hooks = hooks;
     /** @type {any} what the panel shows, or null when setup isn't running */
     this.view = null;
   }
@@ -41,7 +43,7 @@ class SetupWizard {
     this.view = {
       step: "", steps: stepsNow(), busy: false, error: "",
       endpoint: String(config.get("endpoint", "")), hasKey: !!key, models: [], model: String(config.get("model", "")),
-      docs: docsFrom(config.own("docsFolders", [])), rules: String(config.get("rules", "")),
+      docs: docsFrom(config.own("docsFolders", [])), rules: String(config.get("rules", "")), skills: this.hooks.skills?.() ?? 0,
     };
     this.view.step = this.view.steps[0];
     this.changed();

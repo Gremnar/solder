@@ -640,3 +640,6 @@ body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: no
 .settings .skill .skill-name { font-weight: 600; }
 .settings .skill .hint { margin: 1px 0 0; }
 .settings .hint.warn { color: var(--warn); }
+.settings .skill-head { display: flex; align-items: center; gap: 2px; }
+.settings .skill-delete { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.settings .skill-delete:hover { background: var(--hover); color: var(--fg); }

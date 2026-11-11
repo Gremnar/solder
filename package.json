@@ -35,6 +35,8 @@
       { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" },
       { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" },
       { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" },
+      { "command": "solder.useAsSkills", "title": "Use as Solder skills", "category": "Solder" },
+      { "command": "solder.newSkill", "title": "New skill", "category": "Solder" },
       { "command": "solder.setup", "title": "Guided setup", "category": "Solder" },
       { "command": "solder.openGuide", "title": "Guide", "category": "Solder" },
       { "command": "solder.feedback", "title": "Send feedback", "category": "Solder" },
@@ -53,7 +55,8 @@
         { "command": "solder.addSelection", "group": "2@1" }
       ],
       "explorer/context": [{ "command": "solder.useFolder", "when": "explorerResourceIsFolder", "group": "solder@1" },
-        { "command": "solder.useAsDocs", "when": "explorerResourceIsFolder", "group": "solder@2" }]
+        { "command": "solder.useAsDocs", "when": "explorerResourceIsFolder", "group": "solder@2" },
+        { "command": "solder.useAsSkills", "when": "explorerResourceIsFolder", "group": "solder@3" }]
     },
     "keybindings": [
       { "command": "solder.focus", "key": "ctrl+shift+;", "mac": "cmd+shift+;" }

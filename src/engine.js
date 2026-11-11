@@ -63,7 +63,8 @@ function estimate(text) {
 /**
  * @typedef {{role: string, content: string, tool_calls?: any[], tool_call_id?: string, meta?: any}} Stored
  * @typedef {{id: string, title: string, created: number, updated: number, messages: Stored[],
- *            compaction: {through: number, summary: string} | null, usage: {tokens: number},
+ *            compaction: {through: number, summary: string} | null,
+ *            usage: {tokens: number, assistTokens?: number, requests?: number, prompt?: number, output?: number, thinking?: number, side?: number, by?: Record<string, number>},
  *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number,
  *            titleSource?: "auto" | "user", titledAt?: number}} Chat
  * @typedef {{output: string, summary: string, failed?: boolean, change?: any, keep?: string, ms?: number}} ToolResult
@@ -102,7 +103,7 @@ class Engine {
   }
 
   /** Count a reply's tokens (a failed one that was billed too) and show them. @param {Chat} chat @param {any} usage @param {any} credits */
-  _spend(chat, usage, credits, free = false) {
+  _spend(chat, usage, credits, free = false, side = false) {
     const used = usage?.total_tokens || ((usage?.prompt_tokens || 0) + (usage?.completion_tokens || 0));
     if (free) {
       // An Assist model's tokens aren't billed: counted apart, and not in what this chat has cost.
@@ -112,6 +113,15 @@ class Engine {
     }
     this.answerTokens += used;
     chat.usage.tokens += used;
+    // Where they went, for Copy diagnostics (tokenReport): summaries and titles apart from the task's own requests.
+    const u = /** @type {any} */ (chat.usage);
+    if (side) u.side = (u.side || 0) + used;
+    else {
+      u.requests = (u.requests || 0) + 1;
+      u.prompt = (u.prompt || 0) + (usage?.prompt_tokens || 0);
+      u.output = (u.output || 0) + (usage?.completion_tokens || 0);
+      u.thinking = (u.thinking || 0) + (usage?.completion_tokens_details?.reasoning_tokens || 0);
+    }
     this.emit({ type: "usage", chat: chat.id, answer: this.answerTokens, total: chat.usage.tokens,
       prompt: usage?.prompt_tokens || 0, credits: credits || null });
   }
@@ -284,6 +294,7 @@ class Engine {
         trim(chat, settings.compactAt);
         const system = await this.host.systemPrompt(chat);
         const messages = outbound(chat, system);
+        const made = breakdown(chat, system, tools); // what this request is made of, as it goes out
         this.emit({ type: "thinking", chat: chat.id });
         reply = await this._patient(chat, { model, messages, tools,
           effort: effortOf(settings.effortLocked ? settings.effort : chat.effort || settings.effort), signal });
@@ -293,6 +304,7 @@ class Engine {
           chat.tokenRatio = Math.min(2, Math.max(0.75, reply.usage.prompt_tokens / sentEstimate));
         }
         this._spend(chat, reply.usage, reply.credits);
+        attribute(chat, made, reply.usage?.prompt_tokens || Math.round(sentEstimate * (chat.tokenRatio || 1)));
         this.emit({ type: "reply", chat: chat.id, model: modelOf(chat, settings), ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
           completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: reply.calls.length });
         assistant = { role: "assistant", content: reply.content };
@@ -562,7 +574,7 @@ class Engine {
         } });
       } catch (error) {
         const e = /** @type {any} */ (error);
-        if (e.usage) this._spend(chat, e.usage, e.credits); // an empty reply was still billed
+        if (e.usage) this._spend(chat, e.usage, e.credits, !!request.assist, !!side); // an empty reply was still billed (an Assist one is free, as ever)
         const stopped = error instanceof Cancelled || request.signal.aborted;
         const partial = e.partial || shown;
         if (partial && !side) {
@@ -644,7 +656,7 @@ class Engine {
       if (!force) failed.set(chat.id, attempt);
       return "failed";
     }
-    this._spend(chat, reply.usage, reply.credits, assistLane); // free on the Assist lane
+    this._spend(chat, reply.usage, reply.credits, assistLane, true); // free on the Assist lane
     if (!reply.content.trim()) { if (!force) failed.set(chat.id, attempt); return force ? "failed" : "skipped"; }
     chat.compaction = { through: cut, summary: reply.content.trim() };
     // The session no longer matches the chat: the next Assist message starts afresh, with the recap carried over.
@@ -674,7 +686,7 @@ class Engine {
     Promise.resolve().then(() => this.client.reply({ model: modelOf(chat, settings), signal: controller.signal,
       ...(assistLane ? { assist: true, stream: false } : {}), messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
       .then(async (/** @type {any} */ reply) => {
-        if (reply.usage) { this._spend(chat, reply.usage, reply.credits, assistLane); await this._save(chat); }
+        if (reply.usage) { this._spend(chat, reply.usage, reply.credits, assistLane, true); await this._save(chat); }
         const title = cleanTitle(reply.content || "");
         if (!title || chat.titleSource === "user" || title === chat.title) return;
         chat.title = title;
@@ -747,6 +759,132 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   // A recap's kept part may start with results whose calls were summarised away: drop those.
   const offered = new Set(out.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
   return out.filter((m) => m.role !== "tool" || offered.has(m.tool_call_id));
+}
+
+// ---------------------------------------------------------------- where the tokens go (Copy diagnostics) --
+
+/** What a request is made of. Numbers only ever leave this: no text, no paths. */
+const KINDS = /** @type {const} */ ({
+  results: "tool results", system: "the system prompt", tools: "the tool definitions", user: "your messages", text: "the model's own text",
+  calls: "its tool calls' arguments", signatures: "thought signatures", standIns: "stand-ins for cut results",
+  kept: "kept instructions, skills and notes", recap: "the summary of earlier turns",
+});
+
+/**
+ * The request as outbound() builds it, by kind, in characters.
+ * @param {Chat} chat @param {string} system @param {any[]} tools @returns {Record<keyof typeof KINDS, number>}
+ */
+function breakdown(chat, system, tools) {
+  const parts = /** @type {Record<keyof typeof KINDS, number>} */ (Object.fromEntries(Object.keys(KINDS).map((kind) => [kind, 0])));
+  parts.system = system.length;
+  parts.tools = JSON.stringify(tools).length;
+  let start = 0;
+  if (chat.compaction) {
+    parts.recap = TEXTS.compaction.length + chat.compaction.summary.length;
+    start = chat.compaction.through;
+  }
+  const current = lastUser(chat);
+  const offered = new Set();
+  for (const [offset, message] of chat.messages.slice(start).entries()) {
+    if (message.role === "user") parts.user += message.content.length;
+    else if (message.role === "assistant") {
+      parts.text += message.content.length;
+      for (const call of message.tool_calls || []) {
+        const sent = start + offset < current ? shortCall(call) : call;
+        const signature = sent.extra_content === undefined ? 0 : JSON.stringify(sent.extra_content).length;
+        offered.add(call.id);
+        parts.signatures += signature;
+        parts.calls += JSON.stringify(sent).length - signature;
+      }
+    } else if (message.role === "tool" && offered.has(message.tool_call_id)) {
+      const sent = resultText(message).length;
+      const keep = Math.min(sent, String(message.meta?.keep ?? "").length);
+      parts[message.meta?.stub ? "standIns" : "results"] += sent - keep;
+      parts.kept += keep;
+    }
+  }
+  return parts;
+}
+
+/** A request's prompt tokens, shared out by what it was made of, added to the chat's running totals. */
+function attribute(/** @type {Chat} */ chat, /** @type {Record<string, number>} */ made, /** @type {number} */ promptTokens) {
+  const total = Object.values(made).reduce((sum, chars) => sum + chars, 0);
+  if (!total || !(promptTokens > 0)) return;
+  const u = /** @type {any} */ (chat.usage);
+  u.by = u.by || {};
+  for (const [kind, chars] of Object.entries(made)) u.by[kind] = (u.by[kind] || 0) + promptTokens * chars / total;
+}
+
+/**
+ * read_file calls for lines the model had already read in the same task, with no change to the file in between:
+ * `again` while the first result was still whole in the chat (avoidable), `afterCut` once it had been left out
+ * (fair: the stand-in says to). By the paths as the model wrote them, so the same file spelled two ways isn't caught.
+ * @param {Chat} chat @returns {{reads: number, again: number, againTokens: number, afterCut: number}}
+ */
+function repeatReads(chat) {
+  /** @type {Map<string, {name: string, args: any}>} */
+  const calls = new Map();
+  /** @type {Map<string, {from: number, to: number, message: Stored}[]>} */
+  let seen = new Map();
+  const out = { reads: 0, again: 0, againTokens: 0, afterCut: 0 };
+  const ratio = chat.tokenRatio || 1;
+  for (const message of chat.messages) {
+    if (message.role === "user" && !message.meta?.resume) seen = new Map(); // a new task
+    for (const call of message.tool_calls || []) calls.set(call.id, { name: call.function?.name, args: argumentsOf(call) });
+    if (message.role !== "tool" || message.meta?.failed) continue;
+    const call = calls.get(String(message.tool_call_id));
+    if (!call) continue;
+    if (call.name === "read_file") {
+      const key = pathKey(call.args.path);
+      if (!key) continue;
+      out.reads++;
+      // The lines that came back: the summary says when it was part of the file, else all of it.
+      const part = /lines ([\d,]+)–([\d,]+) of/.exec(String(message.meta?.summary ?? ""));
+      const from = part ? Number(part[1].replace(/,/g, "")) : 1;
+      const to = part ? Number(part[2].replace(/,/g, "")) : Infinity;
+      const before = seen.get(key) || [];
+      const first = before.find((read) => read.from <= from && read.to >= to);
+      if (first?.message.meta?.stub) out.afterCut++;
+      else if (first) { out.again++; out.againTokens += Math.round(estimate(message.content) * ratio); }
+      seen.set(key, [...before, { from, to, message }]);
+    } else if (call.name === "edit_file" || call.name === "write_file" || call.name === "remove_item") seen.delete(pathKey(call.args.path));
+    else if (call.name === "move_item") { seen.delete(pathKey(call.args.from)); seen.delete(pathKey(call.args.to)); }
+  }
+  return out;
+}
+
+/**
+ * Where a chat's tokens went, as lines for Copy diagnostics: the billed totals, the prompt tokens by what they
+ * carried (recorded request by request, so re-sending shows), the next request as it stands, and repeat reads.
+ * @param {Chat} chat @param {string} system @param {any[]} tools @returns {string[]}
+ */
+function tokenReport(chat, system, tools) {
+  const n = (/** @type {number} */ x) => Math.round(x || 0).toLocaleString("en-US");
+  const u = /** @type {any} */ (chat.usage);
+  const table = (/** @type {Record<string, number>} */ amounts) => {
+    const total = Object.values(amounts).reduce((sum, x) => sum + x, 0);
+    return Object.entries(amounts).filter(([, amount]) => Math.round(amount) > 0).sort((a, b) => b[1] - a[1])
+      .map(([kind, amount]) => `  ${(/** @type {any} */ (KINDS)[kind] ?? kind).padEnd(36)} ${n(amount).padStart(11)}  ${String(Math.round(amount / total * 100)).padStart(3)}%`);
+  };
+  const lines = [];
+  if (u.requests) {
+    const counted = (u.prompt || 0) + (u.output || 0) + (u.side || 0);
+    lines.push(`Where this chat's tokens went: ${n(u.requests)} request${u.requests === 1 ? "" : "s"} · ${n(u.prompt)} in · ${n(u.output)} out` +
+      (u.thinking ? ` (${n(u.thinking)} of it thinking)` : "") + (u.side ? ` · ${n(u.side)} on summaries and titles` : "") +
+      (chat.usage.tokens - counted > 100 ? ` · ${n(chat.usage.tokens - counted)} from before this was recorded` : ""));
+    if (u.by) lines.push("What the tokens in carried, over every request:", ...table(u.by));
+  } else if (chat.usage.tokens) lines.push(`Where this chat's tokens went: not recorded (its ${n(chat.usage.tokens)} tokens were used before Solder kept count by kind).`);
+  if (u.assistTokens) lines.push(`Assist models (not billed): ${n(u.assistTokens)} tokens, not broken down.`);
+  const ratio = chat.tokenRatio || 1;
+  const next = Object.fromEntries(Object.entries(breakdown(chat, system, tools)).map(([kind, chars]) => [kind, chars / CHARS_PER_TOKEN * ratio]));
+  lines.push(`The next request as it stands, about ${n(Object.values(next).reduce((sum, x) => sum + x, 0))} tokens:`, ...table(next));
+  const results = chat.messages.slice(chat.compaction ? chat.compaction.through : 0).filter((m) => m.role === "tool");
+  const cut = results.filter((m) => m.meta?.stub).length;
+  const reads = repeatReads(chat);
+  lines.push(`Results in the chat: ${results.length - cut} whole, ${cut} cut to stand-ins${chat.compaction ? " (earlier turns are summarised)" : ""}.`,
+    `Reads: ${reads.reads}` + (reads.again ? ` · ${reads.again} of lines already read in the same task, unchanged and still in the chat (about ${n(reads.againTokens)} tokens each time they're sent)` : " · none repeated while the first was still in the chat") +
+    (reads.afterCut ? ` · ${reads.afterCut} again after the first read was cut` : "") + ".");
+  return lines;
 }
 
 /** A call's arguments, or {} when they aren't JSON. @param {any} call */
@@ -1138,5 +1276,5 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt,
+module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, tokenReport,
   KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

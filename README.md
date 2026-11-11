@@ -113,7 +113,9 @@ A skill is your instructions for a kind of task: how you write PowerShell script
   ```
 
   A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
-- **Where they go:** in **Settings → Your skills**, add a folder, then **New skill...** makes one and opens it to write. You can also ask Solder to save one ("save how we did that as a skill"); it writes it to your first skills folder, and asks first. Edit a skill like any file: changes count from your next message.
+- **Making one:** in **Settings → Your skills**, **New skill…** asks its name and when to use it, then opens the file for you to write the instructions (**Solder: New skill** in the command palette does the same). Click a skill there to edit it, or ✕ to delete it. Changes count from your next message.
+- **Where they're kept:** in `.solder\skills` in your home folder, which the first **New skill…** makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
+- **Saving one from a chat:** once you have a skills folder, you can ask Solder to save one ("save how we did that as a skill"). It writes the file there, and asks first.
 - **The rules:**
   - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
   - no scripts or other files: Solder doesn't run anything, so a skill is instructions only;
@@ -144,6 +146,8 @@ Each step sends the whole chat again, so long chats cost more per step. Solder k
 - it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default.
 
 The panel shows what the chat has used, and the status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
+
+**Where a chat's tokens went:** **⋯ → Copy diagnostics** breaks them down, in numbers only: how many requests, tokens in and out, and what the tokens in carried over every request (tool results, the system prompt, the tool definitions, thought signatures and so on). It also shows what the next request holds, and how often a file was read again while its first read was still in the chat.
 
 ## Settings
 

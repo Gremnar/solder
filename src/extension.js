@@ -10,6 +10,7 @@ const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { SolderPanel, KEY } = require("./panel.js");
 const os = require("node:os");
+const path = require("node:path");
 
 const FEEDBACK_TO = "support@gremnar.com";
 const FEEDBACK_SUBJECT = "VS Code Solder extension feedback or support";
@@ -88,6 +89,16 @@ async function activate(context) {
       await config.update("docsFolders", list, vscode.ConfigurationTarget.Global);
       vscode.window.showInformationMessage(`Solder will search ${folder} as docs. It's indexed in the background.`);
     }),
+    vscode.commands.registerCommand("solder.useAsSkills", async (/** @type {vscode.Uri | undefined} */ uri) => {
+      if (policy.locked("skillsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's skills folders."); return; }
+      const folder = uri?.fsPath ?? (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false,
+        openLabel: "Use as Solder skills", title: "Solder: a folder of your skills (one .md file each)" }))?.[0]?.fsPath;
+      if (!folder || !(await panel.addSkillsFolder(folder))) return;
+      const found = panel.tools.skills().filter((skill) => path.dirname(skill.path).toLowerCase() === path.resolve(folder).toLowerCase()).length;
+      vscode.window.showInformationMessage(found ? `Solder now offers the ${found === 1 ? "skill" : `${found} skills`} in ${folder}.`
+        : `Solder will offer the skills in ${folder}: there are none yet (each is a .md file starting with "When to use: …").`);
+    }),
+    vscode.commands.registerCommand("solder.newSkill", () => panel.newSkill()),
     vscode.commands.registerCommand("solder.newChat", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.onMessage({ type: "new" });

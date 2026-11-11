@@ -411,29 +411,32 @@
     return state?.settings?.locked?.[field] ? `<span class="org">Set by your organization</span>` : "";
   }
 
-  /** Settings' skills: the folders (the organisation's apart), and each skill found, with anything wrong with it. @param {any} s */
+  /** Settings' skills: each skill found (with anything wrong with it), then the folders they're in (the organisation's apart). @param {any} s */
   function skillsHtml(s) {
     const folderIcon = `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>`;
     const org = (s.orgSkills || []).map((/** @type {string} */ f) => `<div class="doc org-doc"><div class="doc-path" title="${escape(f)}">${folderIcon}` +
       `<span>${escape(f)}</span><span class="org">From your organization</span></div></div>`).join("");
     const mine = (s.skillsFolders || []).map((/** @type {string} */ f, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(f)}">${folderIcon}` +
-      `<span>${escape(f)}</span><button data-sact="removeSkills" data-index="${i}" title="Stop using this folder" aria-label="Remove ${escape(f)}">✕</button></div></div>`).join("");
+      `<span>${escape(f)}</span><button data-sact="removeSkills" data-index="${i}" title="Stop using this folder (its files stay)" aria-label="Stop using ${escape(f)}">✕</button></div></div>`).join("");
     const skills = s.skills || [];
     const list = skills.map((/** @type {any} */ k) => {
       const note = k.problem ? `<div class="hint warn">${escape(k.problem)}</div>`
         : `<div class="hint">${escape(k.when)}${k.cut ? " (Only its first 20,000 characters are used.)" : ""}</div>`;
-      return `<li class="skill"><button class="link skill-name" data-sact="openSkill" data-name="${escape(k.name)}" title="Open ${escape(k.name)}.md">${escape(k.name)}</button>` +
-        (k.org ? `<span class="org">From your organization</span>` : "") + (k.offered ? "" : `<span class="org">Not offered to the model</span>`) + note + `</li>`;
+      return `<li class="skill"><div class="skill-head"><button class="link skill-name" data-sact="openSkill" data-name="${escape(k.name)}" title="Open ${escape(k.name)}.md to edit it">${escape(k.name)}</button>` +
+        (k.org ? `<span class="org">From your organization</span>` : "") + (k.offered ? "" : `<span class="org">Not offered to the model</span>`) +
+        (k.org ? "" : `<span class="grow"></span><button class="skill-delete" data-sact="deleteSkill" data-name="${escape(k.name)}" title="Delete this skill" aria-label="Delete the skill ${escape(k.name)}">✕</button>`) +
+        `</div>${note}</li>`;
     }).join("");
     const over = skills.filter((/** @type {any} */ k) => !k.offered && !k.problem).length;
-    return (org ? `<div class="docs">${org}</div>` : "") +
-      (s.skillsLocked ? `<div class="hint">Your organization sets the skills folders.</div>`
-        : `<div class="docs">${mine}</div><button class="link-button" data-sact="addSkills">Add a folder…</button>` +
-          (s.skillsFolders?.length ? ` <button class="link-button" data-sact="newSkill">New skill…</button>` : "")) +
-      (list ? `<ul class="skills">${list}</ul>` : (s.skillsFolders?.length || org ? `<div class="hint">No skills in these folders yet.</div>` : "")) +
+    const folders = org + (s.skillsLocked ? "" : mine);
+    // The skills first (what you came for), then how to add one, then where they're kept.
+    return (list ? `<ul class="skills">${list}</ul>` : `<div class="hint">No skills yet.</div>`) +
       (over ? `<div class="hint warn">Only the first ${s.skillsOffered} skills are offered to the model.</div>` : "") +
-      `<div class="hint">A skill is instructions for a kind of task: one .md file, named after it, starting with a line "When to use: …". ` +
-      `The model reads a skill whole before a task it covers. Click a skill to edit it.</div>`;
+      (s.skillsLocked ? `<div class="hint">Your organization sets the skills.</div>`
+        : `<div class="actions-row"><button class="link-button" data-sact="newSkill">New skill…</button> <button class="link-button" data-sact="addSkills">Use a folder of skills…</button></div>`) +
+      `<div class="hint">A skill is your instructions for a kind of task. The model sees each skill's name and when to use it, and reads the whole skill before a task it covers.` +
+      (s.skillsLocked ? "" : ` New skills are saved in ${escape(s.skillsHome)}.`) + `</div>` +
+      (folders ? `<div class="field-label"><span>Skills folders</span></div><div class="docs">${folders}</div>` : "");
   }
 
   /** The docs folders the organisation sets, shown but not changeable. @param {any} s */
@@ -539,7 +542,9 @@
       try { host = new URL(s.endpoint).host; } catch { /* as typed */ }
       body = `<ul class="summary"><li><span>Gateway</span>${escape(host)}</li><li><span>Key</span>${s.hasKey ? "saved" : "none"}</li>` +
         `<li><span>Model</span>${escape(s.model)}</li><li><span>Docs</span>${s.docs.length ? s.docs.length + " folder" + (s.docs.length === 1 ? "" : "s") : "none"}</li>` +
-        `<li><span>Rules</span>${s.rules ? s.rules.split("\n").filter(Boolean).length + " line" + (s.rules.split("\n").filter(Boolean).length === 1 ? "" : "s") : "none"}</li></ul>`;
+        `<li><span>Rules</span>${s.rules ? s.rules.split("\n").filter(Boolean).length + " line" + (s.rules.split("\n").filter(Boolean).length === 1 ? "" : "s") : "none"}</li>` +
+        `<li><span>Skills</span>${s.skills ? s.skills + " skill" + (s.skills === 1 ? "" : "s") : "none yet"}</li></ul>` +
+        `<div class="hint">Skills are your instructions for a kind of task, such as how you write PowerShell scripts. The model reads one only when a task needs it. Make one any time in Settings → Your skills.</div>`;
     }
     const fresh = setupShown !== s.step;
     const shake = !!s.error && (fresh || s.error !== setupLast.error || setupLast.busy);

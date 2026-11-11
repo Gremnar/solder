@@ -881,3 +881,52 @@ test("plan steps: a read in the reply that finishes a step is the next step's (a
   ]);
   await engine(client, host).ask(Engine.newChat(), "fix them");
 });
+
+test("where the tokens went: every request's prompt tokens shared out by kind, side requests apart, repeat reads counted", async () => {
+  const { breakdown, repeatReads, tokenReport } = require("../src/engine.js");
+  const file = "x".repeat(4000);
+  const signature = { google: { thought_signature: "S".repeat(400) } };
+  const usage = (prompt, out) => ({ prompt_tokens: prompt, completion_tokens: out, total_tokens: prompt + out, completion_tokens_details: { reasoning_tokens: 5 } });
+  const client = fakeClient([
+    { calls: [{ ...call("a", "read_file", { path: "src/a.js" }), extra: signature }], usage: usage(100, 20) },
+    { calls: [call("b", "read_file", { path: ".\\SRC\\a.js", start_line: 3, end_line: 9 }), call("c", "read_file", { path: "src/b.js" })], usage: usage(1200, 20) },
+    { calls: [call("d", "edit_file", { path: "src/a.js", old_text: "x", new_text: "y" })], usage: usage(2400, 20) },
+    { calls: [call("e", "read_file", { path: "src/a.js" })], usage: usage(2500, 20) },
+    { content: "Done.", usage: usage(3600, 30) },
+    { content: "A title", usage: usage(40, 4) },
+  ]);
+  const host = fakeHost({ tools: {
+    read_file: (args) => ({ output: file, summary: args.start_line ? "Read src/a.js · lines 3–9 of 120" : "Read · 120 lines", ...(args.path === "src/b.js" ? { keep: "KEEP".repeat(50) } : {}) }),
+    edit_file: () => ({ output: "Edited.", summary: "Edited src/a.js" }),
+  } });
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "fix a");
+  await new Promise((resolve) => setTimeout(resolve, 20)); // the title, on its own
+  const u = chat.usage;
+  assert.deepEqual([u.requests, u.prompt, u.output, u.thinking, u.side], [5, 9800, 110, 25, 44]);
+  assert.equal(u.tokens, 9800 + 110 + 44);
+  assert.ok(Math.abs(Object.values(u.by).reduce((sum, x) => sum + x, 0) - 9800) < 1e-6, "every prompt token is attributed to something");
+  assert.ok(u.by.results > u.by.system && u.by.results > 0.8 * 9800 * 0.5, "the re-sent results are the big part");
+  assert.ok(u.by.signatures > 0 && u.by.kept > 0 && u.by.calls > 0 && u.by.user > 0 && u.by.tools > 0);
+
+  const now = breakdown(chat, "SYSTEM", [{ type: "function" }]);
+  assert.equal(now.system, 6);
+  assert.equal(now.results, 4 * 4000 + "Edited.".length + 2); // and the blank line before what's kept
+  assert.equal(now.kept, 200);
+  assert.equal(now.signatures, JSON.stringify(signature).length);
+
+  // b re-read lines of a that were still whole in the chat; e read a again after an edit (fair); c was new.
+  assert.deepEqual(repeatReads(chat), { reads: 4, again: 1, againTokens: 750, afterCut: 0 }); // 4,000 characters, at this chat's token ratio (0.75)
+  chat.messages.find((m) => m.tool_call_id === "a").meta.stub = true;
+  assert.deepEqual(repeatReads(chat), { reads: 4, again: 0, againTokens: 0, afterCut: 1 });
+
+  const report = tokenReport(chat, "SYSTEM", [{ type: "function" }]).join("\n");
+  assert.match(report, /5 requests · 9,800 in · 110 out \(25 of it thinking\) · 44 on summaries and titles/);
+  assert.match(report, /tool results\s+[\d,]+\s+\d+%/);
+  assert.match(report, /The next request as it stands, about [\d,]+ tokens:/);
+  assert.match(report, /Results in the chat: 4 whole, 1 cut to stand-ins/);
+  assert.match(report, /Reads: 4 · none repeated while the first was still in the chat · 1 again after the first read was cut\./);
+  assert.doesNotMatch(report, /src|a\.js|xxxx/, "numbers only: no paths, no text");
+  // An older chat: nothing recorded by kind.
+  assert.match(tokenReport({ ...Engine.newChat(), usage: { tokens: 5000 } }, "S", []).join("\n"), /not recorded \(its 5,000 tokens/);
+});

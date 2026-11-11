@@ -9,15 +9,33 @@ const { config: solderSettings, policy } = require("./config.js");
 const { laneOf, assistTwin } = require("./lanes.js");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Engine, labelOf, parseArguments } = require("./engine.js");
+const { Engine, labelOf, parseArguments, tokenReport } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { systemPrompt, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
+const { systemPrompt, toolDefinitions, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
 const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
 const { MAX_SKILLS } = require("./skills.js");
+const os = require("node:os");
+
+/** Where your skills go when you haven't chosen a folder: made by "New skill…", in your home folder. */
+const DEFAULT_SKILLS = () => path.join(os.homedir(), ".solder", "skills");
+
+/** A skill's file name from what was typed: lowercase words joined by underscores, .md. @param {string} text */
+function skillFileName(text) {
+  return String(text).trim().toLowerCase().replace(/\s+/g, "_") + ".md";
+}
+
+/** Why a new skill's name won't do, or null. @param {string} text @param {string} folder */
+function skillNameProblem(text, folder) {
+  const name = skillFileName(text).slice(0, -3);
+  if (!name) return "Give it a name.";
+  if (!/^[a-z0-9][a-z0-9_-]{0,59}$/.test(name)) return "Letters, digits, spaces, - and _ only (up to 60), like powershell scripts.";
+  if (fs.existsSync(path.join(folder, name + ".md"))) return "There's already a skill with that name.";
+  return null;
+}
 
 const KEY = "solder.apiKey";
 const MAX_SELECTION_CHARS = 12_000;
@@ -62,13 +80,14 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
-    this.setup = new SetupWizard(context, KEY, () => this.post());
+    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter((skill) => skill.text).length });
     // Docs search by meaning: embeddings from the same gateway, and what they cost in the log.
     this.tools.embedder = (/** @type {string} */ model, /** @type {string[]} */ input, /** @type {AbortSignal | undefined} */ signal) =>
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
-      skills: () => this.tools.skills(), skillsFolder: () => this.skillsFolder(),
+      skills: () => this.tools.skills(), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(),
+      deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name),
       policyChanged: () => { this.policyChanged(); },
       testEmbedding: async (/** @type {string} */ model) => {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
@@ -142,6 +161,65 @@ class SolderPanel {
   skillsFolder() {
     if (policy.locked("skillsFolders")) return "";
     return this.tools.skillsFolders(solderSettings().own("skillsFolders", []))[0] ?? "";
+  }
+
+  /** The user's own skills folders, as the setting holds them. @returns {string[]} */
+  ownSkillsFolders() {
+    const own = solderSettings().own("skillsFolders", []);
+    return (Array.isArray(own) ? own : []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "").trim()).filter(Boolean);
+  }
+
+  /** Add a folder to the user's skills folders (once). @param {string} folder @returns {Promise<boolean>} whether it could be */
+  async addSkillsFolder(folder) {
+    if (policy.locked("skillsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's skills folders."); return false; }
+    const own = this.ownSkillsFolders();
+    if (!own.some((item) => path.resolve(item).toLowerCase() === path.resolve(folder).toLowerCase())) {
+      await solderSettings().update("skillsFolders", [...own, folder], vscode.ConfigurationTarget.Global);
+    }
+    return true;
+  }
+
+  /**
+   * Make a new skill and open it to write: asked its name and when to use it, saved in your first skills folder.
+   * With no folder yet, one is made in your home folder (DEFAULT_SKILLS) and added to the setting.
+   * @returns {Promise<string>} the new file ("" when it wasn't made)
+   */
+  async newSkill() {
+    if (policy.locked("skillsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's skills, so you can't add your own."); return ""; }
+    const folder = this.skillsFolder() || DEFAULT_SKILLS();
+    const given = await vscode.window.showInputBox({ title: "Solder: a new skill (1 of 2)", prompt: `Its name: a few words for the kind of task. It's saved as a file in ${folder}`,
+      placeHolder: "powershell scripts", ignoreFocusOut: true, validateInput: (text) => skillNameProblem(text, folder) });
+    if (!given) return "";
+    const when = await vscode.window.showInputBox({ title: "Solder: a new skill (2 of 2)", ignoreFocusOut: true,
+      prompt: "When should the model use it? One sentence: it's all the model sees until it reads the skill.", placeHolder: "Writing or changing a PowerShell script." });
+    if (when === undefined) return "";
+    const file = path.join(folder, skillFileName(given));
+    try {
+      fs.mkdirSync(folder, { recursive: true });
+      fs.writeFileSync(file, `When to use: ${when.replace(/\s+/g, " ").trim()}\n\n`, { flag: "wx" });
+    } catch (error) {
+      vscode.window.showErrorMessage(`Solder: the skill couldn't be made (${/** @type {any} */ (error)?.code || error}).`);
+      return "";
+    }
+    if (!(await this.addSkillsFolder(folder))) return "";
+    // Open, with the cursor where the instructions go.
+    const editor = await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+    const end = new vscode.Position(editor.document.lineCount - 1, 0);
+    editor.selection = new vscode.Selection(end, end);
+    return file;
+  }
+
+  /** Delete one of the user's own skills (to the recycle bin), after asking. @param {string} name */
+  async deleteSkill(name) {
+    const skill = this.tools.skills().find((item) => item.name === name);
+    if (!skill) return false;
+    const org = policy.orgSkills().some((folder) => path.resolve(folder).toLowerCase() === path.dirname(skill.path).toLowerCase());
+    if (org) { vscode.window.showInformationMessage("That skill comes from your organization."); return false; }
+    const pick = await vscode.window.showWarningMessage(`Delete the skill ${skill.name}?`, { modal: true, detail: `${skill.path} goes to the recycle bin.` }, "Delete");
+    if (pick !== "Delete") return false;
+    try { await vscode.workspace.fs.delete(vscode.Uri.file(skill.path), { useTrash: true }); }
+    catch { await vscode.workspace.fs.delete(vscode.Uri.file(skill.path), { useTrash: false }); } // no recycle bin there (a share)
+    return true;
   }
 
   /** The instruction files (AGENTS.md by default) at the top of each workspace folder. */
@@ -651,6 +729,7 @@ class SolderPanel {
   diagnostics() {
     const config = solderSettings();
     const docs = this.tools.docsState();
+    const skills = this.tools.skills();
     let backups = 0;
     try { backups = this.tools.pruneBackups(Infinity).bytes; } catch { /* none */ }
     return [
@@ -661,7 +740,12 @@ class SolderPanel {
         (this.modelsProblem ? ` · models problem: ${this.modelsProblem === "setup" ? "not set up" : this.modelsProblem}` : ""),
       `Model: ${this.chat.model || config.get("model", "") || "(none)"} · effort: ${this.chat.effort || config.get("effort", "default")} · compact at: ${config.get("compactAtTokens", 100000)} · max rounds: ${config.get("maxRounds", 30)}`,
       `Docs: ${docs.folders} folder(s), ${docs.indexed} files indexed${docs.active ? ", indexing" : ""}${docs.available ? "" : ", no SQLite"} · backups: ${(backups / 1024 ** 2).toFixed(1)} MB`,
+      `Skills: ${this.tools.skillsFolders().length} folder(s), ${skills.length} found, ${Math.min(MAX_SKILLS, skills.filter((skill) => skill.text).length)} offered` +
+        (skills.some((skill) => skill.problem) ? `, ${skills.filter((skill) => skill.problem).length} with a problem` : ""),
       `This chat: ${this.chat.messages.length} messages, ${this.chat.usage.tokens} tokens, token ratio ${(this.chat.tokenRatio || 1).toFixed(2)}${this.chat.compaction ? ", compacted" : ""}`,
+      "",
+      // Numbers only, by kind: what the chat's tokens carried, so the biggest cost is plain.
+      ...tokenReport(this.chat, systemPrompt(this.promptContext()), toolDefinitions()),
       "",
       "Recent log:",
       ...this.log.recent(200),
