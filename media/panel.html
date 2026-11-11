@@ -14,6 +14,7 @@
   <div class="bar-actions">
     <button id="btn-done" class="link-button primary" data-sact="close" title="Close the settings">Done</button>
     <button id="btn-new" class="icon" title="New chat" aria-label="New chat"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
+    <button id="btn-settings" class="icon" data-action="settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16"><path d="M2.5 5h3.2M9.3 5h4.2M2.5 11h6.2M12.3 11h1.2"/><circle cx="7.5" cy="5" r="1.8"/><circle cx="10.5" cy="11" r="1.8"/></svg></button>
     <button id="btn-more" class="icon" title="More" aria-label="More" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/></svg></button>
   </div>
   <div id="chat-menu" class="menu hidden" role="menu" aria-label="Your chats"></div>
@@ -23,7 +24,6 @@
     <button role="menuitem" tabindex="-1" data-action="delete">Delete this chat</button>
     <button role="menuitem" tabindex="-1" data-action="refreshModels">Refresh models</button>
     <button role="menuitem" tabindex="-1" data-action="setKey">Set API key…</button>
-    <button role="menuitem" tabindex="-1" data-action="settings">Settings</button>
     <div class="sep" role="separator"></div>
     <button role="menuitem" tabindex="-1" data-setup="start">Guided setup…</button>
     <button role="menuitem" tabindex="-1" data-action="guide">Guide</button>

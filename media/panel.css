@@ -662,3 +662,11 @@ body.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: no
 .settings .skill-head { display: flex; align-items: center; gap: 2px; }
 .settings .skill-delete { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
 .settings .skill-delete:hover { background: var(--hover); color: var(--fg); }
+
+/* one Undo for everything a task changed, after its answer */
+.undo-all { margin: 8px 0 4px; }
+.undo-all .link-button { padding: 3px 10px; font-size: 0.9em; color: var(--muted); }
+.undo-all .link-button:hover { color: var(--fg); }
+.undo-all svg { width: 13px; height: 13px; }
+/* Settings sits in the bar beside More (it's the open screen while Settings or setup shows) */
+body.in-setup #btn-settings { display: none; }

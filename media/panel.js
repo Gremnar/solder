@@ -183,7 +183,7 @@
 
   /** What identifies an element across a redraw, most specific first. */
   const FOCUS_KEYS = ["data-step", "data-chip", "data-stab", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
-    "data-action", "data-switch", "data-review", "data-undo", "data-unsteer", "data-model", "data-open", "id"];
+    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
    * Runs a redraw of root; if it replaced the focused element, focus goes to its new copy (or to fallback).
@@ -707,6 +707,8 @@
         parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`);
       } else if (item.kind === "plan") {
         parts.push(planCard(item));
+      } else if (item.kind === "undoAll") {
+        parts.push(`<div class="undo-all"><button class="link-button" data-undo-task="${item.at}" title="Put back every file this task changed">${ICONS.undo}Undo all ${item.count} changes</button></div>`);
       } else if (item.kind === "note") {
         parts.push(`<div class="note" data-enter="i:n${index}">${escape(item.text)}</div>`);
       }
@@ -1471,10 +1473,11 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
+    if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
     else if (d.switch) { closeMenus(); vscode.postMessage({ type: "switch-and-resume", model: d.switch }); }

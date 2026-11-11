@@ -7,7 +7,7 @@ const Module = require("node:module");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { parse, readSkill, listSkills, isSkill, MAX_SKILL_CHARS, MAX_WHEN_CHARS } = require("../src/skills.js");
+const { parse, readSkill, listSkills, isSkill, offered, MAX_SKILL_CHARS, MAX_WHEN_CHARS } = require("../src/skills.js");
 
 test("a skill's first line says when to use it; the instructions follow", () => {
   assert.deepEqual(parse("When to use: Writing a PowerShell script.\n\nUse approved verbs.\nTest it first.\n"),
@@ -51,6 +51,7 @@ test("the skills folders: .md files only, the organisation's folder first, a nam
     assert.match(found[1].problem, /no "When to use:" line/);
     assert.equal(found[1].text, "No when line here.");
     assert.match(found[2].problem, /no instructions/);
+    assert.deepEqual(found.map(offered), [true, false, false, true], "the model is told only about skills that say when to use them (and have instructions)");
     assert.deepEqual([found[3].when, found[3].text], ["Notepad's Unicode.", "Ünïcode body"]);
     assert.ok(isSkill([org, mine], path.join(mine, "a_first.md")));
     assert.ok(isSkill([org], path.join(org.toUpperCase(), "Review.md")), "case doesn't matter on Windows paths");

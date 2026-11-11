@@ -17,7 +17,7 @@ const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
-const { MAX_SKILLS } = require("./skills.js");
+const { MAX_SKILLS, offered } = require("./skills.js");
 const os = require("node:os");
 
 /** Where your skills go when you haven't chosen a folder: made by "New skill…", in your home folder. */
@@ -80,7 +80,7 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
-    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter((skill) => skill.text).length });
+    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter(offered).length });
     // Docs search by meaning: embeddings from the same gateway, and what they cost in the log.
     this.tools.embedder = (/** @type {string} */ model, /** @type {string[]} */ input, /** @type {AbortSignal | undefined} */ signal) =>
       this.client().embed({ model, input, signal });
@@ -153,7 +153,7 @@ class SolderPanel {
     return { workspace: this.tools.root(), folders: this.tools.roots(), instructions: this.instructions(),
       // The organisation's rules go after the user's, so they read as the more recent instruction.
       rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders(),
-      skills: this.tools.skills().filter((skill) => skill.text).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
+      skills: this.tools.skills().filter(offered).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
       skillsFolder: this.skillsFolder() };
   }
 
@@ -442,6 +442,7 @@ class SolderPanel {
         if (policy.locked("effort")) { vscode.window.showInformationMessage("Your organization sets the effort Solder uses."); return; }
         this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
       case "undo": return this.undo(message.id);
+      case "undoTask": return this.undoTask(Number(message.at));
       case "review": {
         const change = this.change(message.id);
         if (change) await this.tools.review(change);
@@ -754,7 +755,7 @@ class SolderPanel {
         (this.modelsProblem ? ` · models problem: ${this.modelsProblem === "setup" ? "not set up" : this.modelsProblem}` : ""),
       `Model: ${this.chat.model || config.get("model", "") || "(none)"} · effort: ${this.chat.effort || config.get("effort", "default")} · compact at: ${config.get("compactAtTokens", 100000)} · max rounds: ${config.get("maxRounds", 30)}`,
       `Docs: ${docs.folders} folder(s), ${docs.indexed} files indexed${docs.active ? ", indexing" : ""}${docs.available ? "" : ", no SQLite"} · backups: ${(backups / 1024 ** 2).toFixed(1)} MB`,
-      `Skills: ${this.tools.skillsFolders().length} folder(s), ${skills.length} found, ${Math.min(MAX_SKILLS, skills.filter((skill) => skill.text).length)} offered` +
+      `Skills: ${this.tools.skillsFolders().length} folder(s), ${skills.length} found, ${Math.min(MAX_SKILLS, skills.filter(offered).length)} offered` +
         (skills.some((skill) => skill.problem) ? `, ${skills.filter((skill) => skill.problem).length} with a problem` : ""),
       `This chat: ${this.chat.messages.length} messages, ${this.chat.usage.tokens} tokens, token ratio ${(this.chat.tokenRatio || 1).toFixed(2)}${this.chat.compaction ? ", compacted" : ""}`,
       "",
@@ -783,6 +784,43 @@ class SolderPanel {
     this.chat.notes = [...(this.chat.notes || []), CONTEXT.undid(change.shown, message.meta.summary)];
     await this.store.save(this.chat);
     this.post();
+  }
+
+  /** A task's messages: from the message that began it (at `start`) up to the next one you typed. @param {number} start */
+  taskMessages(start) {
+    const messages = this.chat.messages;
+    let end = start + 1;
+    while (end < messages.length && !(messages[end].role === "user" && !messages[end].meta?.resume)) end++;
+    return messages.slice(start, end);
+  }
+
+  /**
+   * Undo everything a task changed, newest first (so each file goes back through the states it went through), after
+   * asking. It stops at the first change that can't be undone (a file edited since), and says how far it got.
+   * @param {number} start the index of the message that began the task
+   */
+  async undoTask(start) {
+    if (this.engine.busy) { vscode.window.showInformationMessage("Solder is working: undo a task's changes once it's done, or press Stop first."); return; }
+    const first = this.chat.messages[start];
+    if (!first || first.role !== "user") return;
+    const changed = this.taskMessages(start).filter((/** @type {any} */ m) => m.role === "tool" && m.meta?.change && !m.meta.undone).reverse();
+    if (!changed.length) return;
+    const names = [...new Set(changed.map((/** @type {any} */ m) => m.meta.change.shown))];
+    const pick = await vscode.window.showWarningMessage(`Undo all ${changed.length} changes this task made?`,
+      { modal: true, detail: names.slice(0, 12).join("\n") + (names.length > 12 ? `\nand ${names.length - 12} more` : "") }, "Undo all");
+    if (pick !== "Undo all") return;
+    let done = 0;
+    let problem = "";
+    for (const message of changed) {
+      try { await this.tools.undo(message.meta.change); } catch (error) { problem = error instanceof Error ? error.message : String(error); break; }
+      message.meta.undone = true;
+      // The model is told with your next message, so it doesn't build on changes that are gone.
+      this.chat.notes = [...(this.chat.notes || []), CONTEXT.undid(message.meta.change.shown, message.meta.summary)];
+      done++;
+    }
+    await this.store.save(this.chat);
+    this.post();
+    if (problem) vscode.window.showWarningMessage(`Solder undid ${done} of ${changed.length} changes, then stopped: ${problem}`);
   }
 
   /** @param {string} file @param {number} [line] */
@@ -878,7 +916,15 @@ class SolderPanel {
     for (const message of messages) for (const call of message.tool_calls || []) {
       if (call.function.name === "plan" && /"steps"\s*:/.test(call.function.arguments || "")) planAt = call.id;
     }
+    // A finished task that changed two or more things ends with one Undo for all of them.
+    let taskAt = -1;
+    const endTask = (/** @type {boolean} */ running) => {
+      if (taskAt < 0 || running) return;
+      const count = this.taskMessages(taskAt).filter((/** @type {any} */ m) => m.role === "tool" && m.meta?.change && !m.meta.undone).length;
+      if (count >= 2) items.push({ kind: "undoAll", at: taskAt, count });
+    };
     for (let index = 0; index < messages.length; index++) {
+      if (messages[index].role === "user" && !messages[index].meta?.resume) { endTask(false); taskAt = index; }
       if (this.chat.compaction && index === this.chat.compaction.through) {
         items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
       }
@@ -914,6 +960,7 @@ class SolderPanel {
     if (this.chat.compaction && this.chat.compaction.through >= messages.length) {
       items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
     }
+    endTask(this.engine.busy && !this.awayBusy());
     for (const step of steps.values()) {
       if (!step.pending) continue;
       step.running = !this.awayBusy() && step.id === this.running;

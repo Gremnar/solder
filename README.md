@@ -42,7 +42,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **The open file, or your selection:** click a chip to include it, or click it again to leave it out.
 - **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
 - **From the editor:** select some code, right-click, and choose **Solder → Explain this**, **Fix this** (it sends the problems VS Code shows in the selection too) or **Add to chat** (the selection goes with your next message).
-- **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. VS Code's own **Ctrl+Z** works too.
+- **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. When a task changed two or more things, **Undo all** under its answer puts every one back, after asking; a file you've changed since is left alone. VS Code's own **Ctrl+Z** works too.
 - **It asks first** before:
   - deleting anything;
   - changing a file outside the workspace, or one with unsaved changes;
@@ -59,7 +59,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **/settings** opens the settings (`/settings skills` opens them at that tab); **/help** opens this guide.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
-- **Settings** (⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. A dot on a tab means something there wants a look.
+- **Settings** (⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. The sliders button in the bar opens them from anywhere. A dot on a tab means something there wants a look.
 - **While Solder works,** you can open other chats from the title menu to read them. A banner says where it's working, or that it needs your approval or has finished, with a button back to it. New messages wait until it's done.
 - **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
 
@@ -122,7 +122,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
   - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
   - no scripts or other files: Solder doesn't run anything, so a skill is instructions only;
   - keep each to a page or two: the model reads up to 20,000 characters of one, and at most 50 skills are offered.
-- **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even after its plan steps are done. Reading your skills folders never needs your approval; changing a skill does. Settings flags a skill with no "When to use" line, since the model can't know when to read it.
+- **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even after its plan steps are done. Reading your skills folders never needs your approval; changing a skill does. A file with no "When to use" line isn't offered to the model (so a README in the same folder isn't mistaken for a skill), and Settings says so.
 - **For organizations:** the `SkillsFolders` policy gives everyone the same skills, from a share if you like; `AllowUserSkills` lets users add folders of their own beside them. See the [admin guide](docs/POLICY.md).
 
 ## Two kinds of model (optional)

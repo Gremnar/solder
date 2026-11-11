@@ -118,7 +118,7 @@ function readSkill(file) {
   const { when, text } = parse(decoded);
   const cut = text.length > MAX_SKILL_CHARS;
   return { ...skill, when, text: cut ? text.slice(0, MAX_SKILL_CHARS) : text, cut,
-    problem: !text ? "It has no instructions." : !when ? "It has no \"When to use:\" line, so the model doesn't know when to read it." : "" };
+    problem: !text ? "It has no instructions." : !when ? "It has no \"When to use:\" line, so the model isn't told about it. Add one as its first line." : "" };
 }
 
 /**
@@ -156,4 +156,14 @@ function isSkill(folders, file) {
   return folders.some((folder) => path.resolve(folder).toLowerCase() === parent);
 }
 
-module.exports = { parse, readSkill, listSkills, isSkill, nameOf, MAX_SKILLS, MAX_WHEN_CHARS, MAX_SKILL_CHARS, MAX_FILE_BYTES };
+/**
+ * Whether the model is told about a skill: it has instructions, and says when to use it. A file with no "when" is
+ * left out (a README or notes in the same folder would otherwise be offered by name); it's still read as a skill
+ * when asked for by path, and Settings says what's missing.
+ * @param {Skill} skill
+ */
+function offered(skill) {
+  return !!skill.text && !!skill.when;
+}
+
+module.exports = { offered, parse, readSkill, listSkills, isSkill, nameOf, MAX_SKILLS, MAX_WHEN_CHARS, MAX_SKILL_CHARS, MAX_FILE_BYTES };

@@ -45,7 +45,7 @@ function workspaceHost(root, S, hooks = {}, skillsFolder = "") {
   const ws = new Workspace(root, S, hooks, skillsFolder);
   const context = () => {
     if (!skillsFolder) return { workspace: root };
-    const skills = S.skills.listSkills([skillsFolder]).filter((/** @type {any} */ s) => s.text).map(({ name, path: file, when }) => ({ name, path: file, when }));
+    const skills = S.skills.listSkills([skillsFolder]).filter(S.skills.offered ?? ((/** @type {any} */ s) => s.text)).map(({ name, path: file, when }) => ({ name, path: file, when }));
     return { workspace: root, skills, skillsFolder };
   };
   return { ws, host: {

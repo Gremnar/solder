@@ -7,7 +7,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
-const { MAX_SKILLS } = require("./skills.js");
+const { MAX_SKILLS, offered: isOffered } = require("./skills.js");
 const path = require("node:path");
 
 class SettingsScreen {
@@ -96,7 +96,7 @@ class SettingsScreen {
     const org = policy.orgSkills().map((folder) => path.resolve(folder).toLowerCase());
     let offered = 0;
     return this.hooks.skills().map((skill) => ({ name: skill.name, when: skill.when, problem: skill.problem, cut: skill.cut,
-      org: org.includes(path.dirname(skill.path).toLowerCase()), offered: !!skill.text && ++offered <= MAX_SKILLS }));
+      org: org.includes(path.dirname(skill.path).toLowerCase()), offered: isOffered(skill) && ++offered <= MAX_SKILLS }));
   }
 
   /** @param {string} text @param {"ok" | "bad" | ""} [kind] */
