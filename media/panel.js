@@ -182,7 +182,7 @@
   }
 
   /** What identifies an element across a redraw, most specific first. */
-  const FOCUS_KEYS = ["data-step", "data-chip", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
+  const FOCUS_KEYS = ["data-step", "data-chip", "data-stab", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
     "data-action", "data-switch", "data-review", "data-undo", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
@@ -271,6 +271,7 @@
     // An open dropdown follows the chats (a pin or rename from its right-click menu), keeping its focus.
     if (!$("chat-menu").classList.contains("hidden")) keepFocus($("chat-menu"), renderChatMenu);
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
+    document.body.classList.toggle("in-settings", !state.setup && !!state.settings);
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
     if (state.setup) { shownParts = []; awayFromChat = true; renderSetup(); updateToBottom(); return; }
@@ -278,6 +279,7 @@
     // Back from settings or setup: the chat was redrawn from nothing, so it opens at its end, not its start.
     if (awayFromChat) { awayFromChat = false; stickToBottom = true; }
     settingsShape = "";
+    settingsTabShown = "";
     setupDraft = null;
     setupShown = "";
     renderTranscript();
@@ -292,11 +294,18 @@
   let settingsShape = "";
   let settingsValues = "";
   let settingsSaved = "";
+  /** The settings tabs, in order: id and label. Done is in the bar above, so it's always in reach. */
+  const SETTINGS_TABS = [["connection", "Connection"], ["docs", "Docs"], ["skills", "Skills"], ["rules", "Rules"], ["advanced", "Advanced"]];
+  /** The tab that's open (kept while the panel lives, so Settings reopens where you left it), and the one last drawn. */
+  let settingsTab = SETTINGS_TABS[0][0];
+  let settingsTabShown = "";
 
   function renderSettings() {
     const s = state.settings;
+    // Opened at a particular tab (/settings skills): once, as it opens.
+    if (!settingsShape && s.tab && SETTINGS_TABS.some(([id]) => id === s.tab)) settingsTab = s.tab;
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
-    const shape = JSON.stringify({ models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
+    const shape = JSON.stringify({ tab: settingsTab, noEndpoint: !s.endpoint, models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
       skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
@@ -348,11 +357,10 @@
       `<input class="field about" data-docs-about="${i}" aria-label="What's in ${escape(d.path)}" placeholder="What's in it? It tells the model when to look here" value="${escape(d.about)}">${saved("docs-" + i)}` +
       (/^[A-Za-z]:[\\/]?$|^\/$/.test(d.path.trim()) ? `<div class="hint">A whole drive is slow to index and fills the 20,000-file limit with unrelated files: the folder your docs are in works better.</div>` : "") +
       `</div>`).join("");
-    const html = `<div class="setup settings${fresh ? " enter" : ""}">` +
-      `<div class="settings-head"><h2 id="settings-title" tabindex="-1">Settings</h2><button class="link-button primary" data-sact="close">Done</button></div>` +
-      `<div id="settings-notice" class="settings-notice ${s.noticeKind || ""}" role="status">${escape(s.notice || "")}</div>` +
-      (s.policyError ? `<div class="settings-notice bad">${escape(s.policyError)}</div>` : "") +
-      section("Connection",
+    // One tab's worth at a time: what each tab holds (a tab with one subject has no heading of its own).
+    /** @type {Record<string, string>} */
+    const panels = {
+      connection: section("Gateway",
         label("Gateway address", "endpoint", saved("endpoint")) + `<input class="field" id="sf-endpoint" data-field="endpoint" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/chat/completions" value="${escape(s.endpoint)}">` +
         label("API key", "key", saved("key"), "settings-key") + `<div class="row-field"><input class="field" id="settings-key" type="password" placeholder="${s.hasKey ? "A key is saved: type a new one to replace it" : "Paste your key"}">` +
         `<button class="link-button" data-sact="key">Save</button></div>` +
@@ -360,8 +368,8 @@
         `<div class="actions-row"><button class="link-button" data-sact="check">Check connection</button></div>`) +
       section("Model",
         label("Default model", "model", saved("model")) + modelField +
-        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${orgMark("effort")}${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`) +
-      section("Your docs",
+        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${orgMark("effort")}${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`),
+      docs: section("",
         `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
         (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
         orgDocsHtml(s) +
@@ -374,31 +382,82 @@
           ? label("Embeddings model", "embeddingModel", saved("embeddingModel")) + `<div class="row-field"><input class="field" id="sf-embeddingModel" data-field="embeddingModel" spellcheck="false" placeholder="The gateway's embeddings model id" value="${escape(s.embeddingModel)}">` +
             `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
             `<div class="hint">Meaning search finds passages that say the same thing in other words. It sends every passage of your docs folders to the gateway once to be turned into numbers, then only changed files, and each search's words. The log (Copy diagnostics) shows the tokens each run used.</div>`
-          : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)) +
-      section("Your skills", skillsHtml(s)) +
-      section("Rules and instructions",
+          : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)),
+      skills: section("", skillsHtml(s)),
+      rules: section("",
         label("Your rules", "rules", saved("rules")) + `<textarea class="field area" id="sf-rules" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
         (s.orgRules ? `<div class="field-label"><span>Added by your organization</span></div><div class="org-rules">${escape(s.orgRules)}</div>` : "") +
         label("Instruction files", "instructionFiles", saved("instructionFiles")) + `<input class="field" id="sf-instructionFiles" data-field="instructionFiles" spellcheck="false" value="${escape(s.instructionFiles)}">` +
-        `<div class="hint">Files in the workspace the model follows, separated by commas, such as AGENTS.md, CLAUDE.md.</div>`) +
-      section("Cost",
+        `<div class="hint">Files in the workspace the model follows, separated by commas, such as AGENTS.md, CLAUDE.md.</div>` +
+        `<div class="hint">Rules and instruction files go into every chat. For instructions that only fit one kind of task, make <button class="link" data-stab="skills">a skill</button>: the model reads it only when a task needs it.</div>`),
+      advanced: section("Cost",
         `<div class="pair"><div>${label("Compact at tokens", "compactAt", saved("compactAt"))}<input class="field" id="sf-compactAt" data-field="compactAt" type="number" min="30000" step="10000" value="${s.compactAt}"></div>` +
         `<div>${label("Max rounds", "maxRounds", saved("maxRounds"))}<input class="field" id="sf-maxRounds" data-field="maxRounds" type="number" min="1" max="100" value="${s.maxRounds}"></div></div>` +
         `<div class="hint">Every step sends the whole chat again: compacting sooner costs less. Max rounds is the most steps with tool calls for one message.</div>`) +
-      section("Advanced",
+      section("Models",
         label("Model filter", "modelFilter", saved("modelFilter")) + `<input class="field" id="sf-modelFilter" data-field="modelFilter" spellcheck="false" placeholder="A regular expression, such as -tools$" value="${escape(s.modelFilter)}">` +
-        `<div class="hint">Only models whose id matches are offered. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div>`) +
-      `</div>`;
+        `<div class="hint">Only models whose id matches are offered.</div>` +
+        label("Tool models", "toolModels", saved("toolModels")) + `<input class="field" id="sf-toolModels" data-field="toolModels" spellcheck="false" placeholder="A regular expression: empty means every model" value="${escape(s.toolModels)}">` +
+        `<div class="hint">Models whose id matches take a system prompt and tool calls. Every other model is an Assist model: plain text only, and free on some gateways.</div>` +
+        label("Assist session block", "assistSessionBlock", saved("assistSessionBlock")) + `<input class="field" id="sf-assistSessionBlock" data-field="assistSessionBlock" spellcheck="false" placeholder="Empty: no sessions" value="${escape(s.assistSessionBlock)}">` +
+        `<div class="hint">The name of the object your gateway's responses carry an Assist session in. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div>`) +
+      section("Storage",
+        label("Undo's storage limit (GB)", "storageLimit", saved("storageLimit")) + `<input class="field" id="sf-storageLimit" data-field="storageLimit" type="number" min="0.1" step="0.5" value="${s.storageLimit}">` +
+        `<div class="hint">The most disk space the backups behind Review and Undo may use. Past it, the oldest go first.</div>`),
+    };
+    if (!panels[settingsTab]) settingsTab = SETTINGS_TABS[0][0];
+    // A tab that wants a look: no gateway or key yet, or a skill with something wrong with it.
+    /** @type {Record<string, string>} */
+    const attention = { connection: !s.endpoint || !s.hasKey || s.policyError ? "needs setting up" : "",
+      skills: s.skills.some((/** @type {any} */ k) => k.problem) ? "a skill needs a look" : "" };
+    const tabs = SETTINGS_TABS.map(([id, text]) => `<button role="tab" id="stab-${id}" class="stab${id === settingsTab ? " on" : ""}" data-stab="${id}" ` +
+      `aria-selected="${id === settingsTab}" aria-controls="settings-panel" tabindex="${id === settingsTab ? 0 : -1}"` +
+      (attention[id] ? ` aria-label="${text}: ${attention[id]}" title="${attention[id][0].toUpperCase() + attention[id].slice(1)}"` : "") +
+      `>${text}${attention[id] ? `<i class="stab-dot" aria-hidden="true"></i>` : ""}</button>`).join("");
+    const html = `<div class="setup settings${fresh ? " enter" : ""}">` +
+      `<div class="settings-top"><div class="stabs" role="tablist" aria-label="Settings">${tabs}</div></div>` +
+      `<div id="settings-panel" class="settings-panel${!fresh && settingsTabShown !== settingsTab ? " swap" : ""}" role="tabpanel" aria-labelledby="stab-${settingsTab}">` +
+      `<div id="settings-notice" class="settings-notice ${s.noticeKind || ""}" role="status">${escape(s.notice || "")}</div>` +
+      (s.policyError ? `<div class="settings-notice bad">${escape(s.policyError)}</div>` : "") +
+      panels[settingsTab] + `</div></div>`;
+    const before = transcript.scrollTop;
     keepFocus(transcript, () => { transcript.innerHTML = html; });
     for (const el of /** @type {NodeListOf<HTMLInputElement>} */ (transcript.querySelectorAll("[data-field], [data-sfield]"))) {
       if (s.locked?.[String(el.dataset.field || el.dataset.sfield)]) { el.disabled = true; el.title = "Set by your organization"; }
     }
-    if (fresh) /** @type {HTMLElement | null} */ (document.getElementById("settings-title"))?.focus();
+    // A new tab starts at its top; the same tab redrawn (a folder added, say) stays where you were.
+    transcript.scrollTop = settingsTabShown === settingsTab ? before : 0;
+    settingsTabShown = settingsTab;
+    // In a very narrow side bar the tab bar scrolls sideways: the open tab is kept in view.
+    const bar = /** @type {HTMLElement | null} */ (transcript.querySelector(".stabs"));
+    const open = /** @type {HTMLElement | null} */ (document.getElementById("stab-" + settingsTab));
+    if (bar && open) bar.scrollLeft = Math.max(0, Math.min(open.offsetLeft - 8, open.offsetLeft + open.offsetWidth + 8 - bar.clientWidth));
+    if (fresh) /** @type {HTMLElement | null} */ (document.getElementById("stab-" + settingsTab))?.focus();
   }
 
-  /** @param {string} title @param {string} body */
+  /** Show a settings tab (a click, or the arrow keys in the tab bar). @param {string} id @param {boolean} [focus] */
+  function showSettingsTab(id, focus = false) {
+    if (!state?.settings || !SETTINGS_TABS.some(([tab]) => tab === id)) return;
+    settingsTab = id;
+    renderSettings();
+    if (focus) /** @type {HTMLElement | null} */ (document.getElementById("stab-" + id))?.focus();
+  }
+
+  // The tab bar's keys, as a tab list has them: the arrows (and Home, End) move between tabs, Tab goes into the tab's fields.
+  transcript.addEventListener("keydown", (event) => {
+    const tab = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-stab]"));
+    if (!tab) return;
+    const at = SETTINGS_TABS.findIndex(([id]) => id === tab.dataset.stab);
+    const last = SETTINGS_TABS.length - 1;
+    const to = event.key === "ArrowRight" ? (at + 1) % (last + 1) : event.key === "ArrowLeft" ? (at + last) % (last + 1) : event.key === "Home" ? 0 : event.key === "End" ? last : -1;
+    if (to < 0) return;
+    event.preventDefault();
+    showSettingsTab(SETTINGS_TABS[to][0], true);
+  });
+
+  /** A titled group of settings (no title: the tab's name says it). @param {string} title @param {string} body */
   function section(title, body) {
-    return `<section class="settings-section"><h3>${escape(title)}</h3>${body}</section>`;
+    return `<section class="settings-section">${title ? `<h3>${escape(title)}</h3>` : ""}${body}</section>`;
   }
 
   /** A field's label, tied to its field (id sf-<field> unless given). @param {string} text @param {string} field @param {string} [extra] @param {string} [id] */
@@ -1234,6 +1293,7 @@
     { name: "model", hint: "name", about: "Switch this chat's model" },
     { name: "effort", hint: "low, medium or high", about: "How hard this chat thinks" },
     { name: "review", about: "Review what's changed since the last commit" },
+    { name: "skill", hint: "what it's for", about: "Save how this was done as a skill, for next time" },
     { name: "settings", about: "Open Solder's settings" },
     { name: "help", about: "Open Solder's guide" },
   ];
@@ -1288,7 +1348,7 @@
   function runCommand(name, arg) {
     if (name === "help") { vscode.postMessage({ type: "guide" }); return; }
     if (name === "model" && !arg) { if (!state?.locks?.model) toggle("model-menu"); return; }
-    if (name === "new" || name === "fork" || name === "review") stickToBottom = true;
+    if (name === "new" || name === "fork" || name === "review" || name === "skill") stickToBottom = true;
     vscode.postMessage({ type: "command", name, arg });
   }
   function clearBox() {
@@ -1411,10 +1471,11 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
+    if (d.stab) { showSettingsTab(d.stab); return; }
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
     else if (d.switch) { closeMenus(); vscode.postMessage({ type: "switch-and-resume", model: d.switch }); }
     else if (d.starter) { stickToBottom = true; vscode.postMessage({ type: "starter", id: d.starter }); }

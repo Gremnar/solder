@@ -54,10 +54,12 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **/new** starts a new chat, and **/fork** carries on in a copy of this one (the original stays as it was);
   - **/compact** summarises the chat now to save tokens; add what matters most, as in `/compact the API names`;
   - **/rename**, **/model** and **/effort** change this chat's name, model or effort, as in `/effort high`;
-  - **/review** reviews what's changed since the last commit; **/settings** opens the settings; **/help** opens this guide.
+  - **/review** reviews what's changed since the last commit;
+  - **/skill** saves how this chat's task was done as a skill, for next time; add what it's for to have one written from that, as in `/skill how we name branches` (see [Skills](#skills));
+  - **/settings** opens the settings (`/settings skills` opens them at that tab); **/help** opens this guide.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
-- **Settings** (⋯ → Settings) open right in the panel: the connection, the model and effort, your docs folders (with how far indexing has got), rules, and cost. Each field saves as you leave it.
+- **Settings** (⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. A dot on a tab means something there wants a look.
 - **While Solder works,** you can open other chats from the title menu to read them. A banner says where it's working, or that it needs your approval or has finished, with a button back to it. New messages wait until it's done.
 - **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
 
@@ -115,7 +117,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
   A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
 - **Making one:** in **Settings → Your skills**, **New skill…** asks its name and when to use it, then opens the file for you to write the instructions (**Solder: New skill** in the command palette does the same). Click a skill there to edit it, or ✕ to delete it. Changes count from your next message.
 - **Where they're kept:** in `.solder\skills` in your home folder, which the first **New skill…** makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
-- **Saving one from a chat:** once you have a skills folder, you can ask Solder to save one ("save how we did that as a skill"). It writes the file there, and asks first.
+- **Saving one from a chat:** after a task you'll do again, type **/skill**. Solder writes up how the task was done as a skill, and asks before it saves the file. `/skill` followed by what it's for (`/skill how we name branches: feature/<ticket>-<slug>`) writes one from that instead. You can also just ask in your own words.
 - **The rules:**
   - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
   - no scripts or other files: Solder doesn't run anything, so a skill is instructions only;

@@ -31,10 +31,11 @@ class SettingsScreen {
     this.timer = null;
   }
 
-  async open() {
+  /** @param {string} [tab] the tab to open at (connection, docs, skills, rules or advanced); the last one used otherwise */
+  async open(tab = "") {
     // Read the policy again; if it changed, the panel follows it too (its connection, models and docs).
     if (await policy.refresh().catch(() => false)) this.hooks.policyChanged?.();
-    this.view = { open: true, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
+    this.view = { open: true, tab, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
     // While it's open, the docs index's progress keeps the screen current, and so do skills added or edited elsewhere.
     clearInterval(this.timer);
     this.timer = setInterval(async () => {
@@ -73,9 +74,12 @@ class SettingsScreen {
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
+      toolModels: String(config.get("toolModels", "")), assistSessionBlock: String(config.get("assistSessionBlock", "")),
+      storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
-        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"]]
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"],
+        ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["storageLimit", "storageLimitGB"]]
         .map(([field, name]) => [field, policy.locked(name)])),
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
       skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
@@ -143,6 +147,18 @@ class SettingsScreen {
           const text = String(value || "").trim();
           try { if (text) new RegExp(text); } catch { this.notice("That model filter isn't a valid regular expression.", "bad"); return; }
           await save("modelFilter", text, field);
+        } else if (field === "toolModels") {
+          const text = String(value || "").trim();
+          try { if (text) new RegExp(text); } catch { this.notice("That Tool models pattern isn't a valid regular expression.", "bad"); return; }
+          await save("toolModels", text, field);
+        } else if (field === "assistSessionBlock") {
+          const text = String(value || "").trim();
+          if (text && !/^[A-Za-z_][\w.-]{0,63}$/.test(text)) { this.notice("The Assist session block is one name, such as session: letters, digits, _ . and -.", "bad"); return; }
+          await save("assistSessionBlock", text, field);
+        } else if (field === "storageLimit") {
+          const n = Number(value);
+          if (!Number.isFinite(n) || n < 0.1) { this.notice("The storage limit needs to be 0.1 GB or more.", "bad"); return; }
+          await save("storageLimitGB", n, field);
         }
         return;
       }

@@ -363,9 +363,28 @@ hr { border: 0; border-top: 1px solid var(--hairline); margin: 14px 0; }
 body.in-setup #composer { display: none; }
 
 /* ---- settings (in the panel) ---- */
-.settings-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.settings-head h2 { flex: 1; margin: 0; }
-.settings-notice { min-height: 1.2em; margin: 2px 0 6px; font-size: 0.88em; color: var(--muted); transition: color var(--t) var(--ease); }
+/* Done sits in the top bar, and the tabs stay under it however far a tab is scrolled. */
+#btn-done { display: none; padding: 3px 12px; }
+body.in-settings #btn-done { display: inline-flex; }
+body.in-settings #btn-new { display: none; }
+body.in-settings #transcript { padding-top: 0; -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent 100%); mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent 100%); }
+body.in-settings.vscode-high-contrast #transcript { -webkit-mask-image: none; mask-image: none; }
+.setup.settings { padding-top: 0; }
+.settings-top { position: sticky; top: 0; z-index: 3; margin: 0 -16px; padding: 6px 12px 0; background: var(--bg); border-bottom: 1px solid var(--hairline); }
+.stabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.stabs::-webkit-scrollbar { display: none; }
+.stab { position: relative; flex: 1 0 auto; padding: 6px 5px 8px; text-align: center; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.92em; cursor: pointer; border-radius: var(--r-sm) var(--r-sm) 0 0; white-space: nowrap; }
+.stab:hover { color: var(--fg); background: var(--hover); }
+.stab.on { color: var(--fg); font-weight: 600; }
+.stab.on::after { content: ""; position: absolute; left: 4px; right: 4px; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--vscode-panelTitle-activeBorder, var(--link)); }
+.stab:focus-visible { outline: 1px solid var(--focus); outline-offset: -2px; }
+.stab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--warn); vertical-align: 0.12em; }
+.settings-panel { padding-top: 10px; }
+.settings-panel.swap { animation: appear var(--t) ease; }
+.settings-panel > .settings-section:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (prefers-reduced-motion: reduce) { .settings-panel.swap { animation: none; } }
+.settings-notice:empty { margin: 0; }
+.settings-notice { margin: 0 0 10px; font-size: 0.88em; color: var(--muted); transition: color var(--t) var(--ease); }
 .settings-notice.ok { color: var(--ok); }
 .settings-notice.bad { color: var(--bad); }
 .settings-section { margin: 14px 0 0; padding: 12px 0 2px; border-top: 1px solid var(--hairline); }

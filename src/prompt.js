@@ -455,6 +455,16 @@ const SELECTION = {
   problems: (/** @type {string[]} */ lines) => `(VS Code's problems in the selection:)\n${lines.join("\n")}`,
 };
 
+/**
+ * /skill: what's sent, as the user's message, to have the model save a skill. Where it goes and how it's written
+ * is in the prompt's Skills section (there once the user has a skills folder, which /skill makes sure of first).
+ */
+const SKILL = {
+  fromChat: "Save a skill for the kind of task we just did, so a future chat can do it the same way: the steps that worked, the \
+names, paths and settings that matter, and the mistakes to avoid. Leave out what was particular to this one time.",
+  about: (/** @type {string} */ what) => `Save a skill for this: ${what}`,
+};
+
 /** "(Wednesday, 4 November 2026, 14:05)": what each user message starts with. @param {Date} [now] */
 function timeNote(now = new Date()) {
   const day = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -596,4 +606,4 @@ function assistText(text) {
   return out;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };

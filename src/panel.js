@@ -11,7 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments, tokenReport } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { systemPrompt, toolDefinitions, STARTERS, SELECTION, CONTEXT } = require("./prompt.js");
+const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
 const { WorkspaceTools, plainNames } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
@@ -534,7 +534,21 @@ class SolderPanel {
         if (starter) await this.send({ text: starter.prompt });
         return;
       }
-      case "settings": await this.settingsScreen.open(); return;
+      case "skill": {
+        if (this.engine.busy) return busy();
+        if (policy.locked("skillsFolders")) return info("Your organization sets Solder's skills, so you can't add your own.");
+        // Nothing to go on (a new chat, and nothing said about it): made by hand, as Settings' New skill does.
+        if (!arg && !this.chat.messages.length) { await this.newSkill(); return; }
+        // The model is told where skills go once you have a folder for them: yours is made now if there's none.
+        if (!this.skillsFolder()) {
+          const folder = DEFAULT_SKILLS();
+          try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { return info(`Solder couldn't make your skills folder (${/** @type {any} */ (error)?.code || error}).`); }
+          if (!(await this.addSkillsFolder(folder))) return;
+        }
+        await this.send({ text: arg ? SKILL.about(arg) : SKILL.fromChat });
+        return;
+      }
+      case "settings": await this.settingsScreen.open(arg.toLowerCase()); return;
       default: return info(`There's no /${name} command.`);
     }
   }

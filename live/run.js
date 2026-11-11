@@ -66,7 +66,7 @@ async function once(scenario, run) {
   scenario.setup(write);
   // A scenario's skills go in a folder beside the workspace (outside it, as a user's would be).
   let skillsFolder = "";
-  if (scenario.skills) {
+  if (scenario.skills) { // {} gives an empty skills folder: nothing offered, but somewhere to save one
     if (!S.skills) throw new Error("this src has no skills");
     skillsFolder = root + "-skills";
     fs.mkdirSync(skillsFolder, { recursive: true });
@@ -85,7 +85,10 @@ async function once(scenario, run) {
   const chat = S.Engine.newChat();
   const started = Date.now();
   let error = "";
-  try { await engine.ask(chat, scenario.task); } catch (e) { error = /** @type {any} */ (e)?.message || String(e); }
+  // A scenario's task, then any follow-up messages in the same chat (`then`). Each is a text, or a function of Solder's own
+  // texts (a slash command's message, as the panel would send it).
+  const texts = [scenario.task, ...(scenario.then || [])].map((/** @type {any} */ item) => typeof item === "function" ? item(S.prompt) : item);
+  try { for (const text of texts) await engine.ask(chat, text); } catch (e) { error = /** @type {any} */ (e)?.message || String(e); }
   const answer = [...chat.messages].reverse().find((/** @type {any} */ m) => m.role === "assistant" && (m.content || "").trim())?.content || "";
   let why;
   try {
@@ -109,7 +112,7 @@ async function once(scenario, run) {
       .map((/** @type {any} */ c) => path.basename(String(c.args.path), ".md")) : undefined,
     answer: answer.replace(/\s+/g, " ").slice(0, 300),
     // What an Assist model really wrote, when a run fails (its tool blocks included).
-    raw: why ? chat.messages.filter((/** @type {any} */ m) => m.meta?.raw).slice(-2).map((/** @type {any} */ m) => String(m.meta.raw).slice(0, 700)) : undefined,
+    raw: why ? chat.messages.filter((/** @type {any} */ m) => m.meta?.raw).slice(-4).map((/** @type {any} */ m) => String(m.meta.raw).slice(0, 700)) : undefined,
   };
   fs.appendFileSync(resultsFile, JSON.stringify(row) + "\n");
   fs.rmSync(root, { recursive: true, force: true });

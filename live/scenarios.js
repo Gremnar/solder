@@ -3,10 +3,10 @@
 /**
  * The live scenarios. Each sets up a small workspace, gives a task, and checks the result on disk (not just the
  * answer). `hooks` change things under the model (a file edited after it read it) to test recovery.
- * @typedef {{name: string, about: string, heavy?: boolean, setup: (write: (p: string, t: string) => void) => void, task: string,
- *   hooks?: any, skills?: Record<string, string>, check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
+ * @typedef {{name: string, about: string, heavy?: boolean, setup: (write: (p: string, t: string) => void) => void, task: string | ((prompt: any) => string),
+ *   hooks?: any, skills?: Record<string, string>, then?: (string | ((prompt: any) => string))[], check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
  *   load: (p: string, mocks?: Record<string, any>) => any, skillsFolder: string}) => string}} Scenario
- *   skills: name → file text, put in a skills folder beside the workspace
+ *   skills: name → file text, put in a skills folder beside the workspace; then: follow-up messages in the same chat
  * check returns "" when it passed, else what was wrong.
  */
 const fs = require("node:fs");
@@ -434,6 +434,48 @@ SCENARIOS.push({
     if (!/^when to use:\s*\S/i.test(text)) return "no When to use first line";
     if (!/feature\//.test(text) || !/fix\//.test(text)) return "instructions incomplete";
     return "";
+  },
+});
+
+SCENARIOS.push({
+  name: "skill-command",
+  about: "/skill after a task: the model saves how the task was done, from the chat (the first skill, in an empty skills folder)",
+  skills: {},
+  setup: (w) => {
+    w("src/trace.js", TRACE);
+    w("src/pricing.js", "\"use strict\";\nfunction total(items) {\n  return items.reduce((sum, item) => sum + item.price * item.qty, 0);\n}\nmodule.exports = { total };\n");
+  },
+  task: "Add a function tax(total, rate) to src/pricing.js that returns the tax owed (total times rate, where rate is a fraction such as 0.2), and export it. In this project every function starts with trace(\"<its name>\"), " +
+    "with trace required from ./trace at the top of the file, and each function added gets a line in CHANGES.md at the root: \"- added <name> to <file>\".",
+  then: [(/** @type {any} */ prompt) => prompt.SKILL.fromChat],
+  check: ({ ws, read, load, skillsFolder }) => {
+    // The task is only the lead-in here (skill-follow checks a task's result): tax is there, and traced.
+    if (typeof traced(load, "src/pricing.js").mod.tax !== "function" || !/trace\(\s*["'`]tax["'`]\s*\)/.test(read("src/pricing.js"))) return "the task itself wasn't done";
+    const files = fs.readdirSync(skillsFolder).filter((name) => name.toLowerCase().endsWith(".md"));
+    if (files.length !== 1) {
+      return files.length + " skills saved" + (ws.calls.some((/** @type {any} */ c) => c.name === "write_file" && /\.md$/i.test(String(c.args.path || ""))) ? " (a .md was written elsewhere)" : "");
+    }
+    if (!/^[a-z0-9][a-z0-9_-]*\.md$/.test(files[0])) return "odd file name: " + files[0];
+    const text = fs.readFileSync(require("node:path").join(skillsFolder, files[0]), "utf8").replace(/^\uFEFF/, "");
+    if (!/^when to use:\s*\S/i.test(text)) return "no When to use first line";
+    if (!/trace/i.test(text) || !/CHANGES\.md/i.test(text)) return "the skill leaves out how the task was done (trace, CHANGES.md): " + text.replace(/\s+/g, " ").slice(0, 500);
+    return "";
+  },
+});
+
+SCENARIOS.push({
+  name: "skill-about",
+  about: "/skill with what it's for, in a new chat: the skill is written from that alone",
+  skills: {},
+  setup: (w) => w("README.md", "# Demo\n"),
+  task: (/** @type {any} */ prompt) => prompt.SKILL.about("how we name git branches: feature/<ticket>-<short-slug> or fix/<ticket>-<short-slug>, all lowercase, " +
+    "where the ticket looks like abc-123 and the slug is two to four words joined by -"),
+  check: ({ skillsFolder }) => {
+    const files = fs.readdirSync(skillsFolder).filter((name) => name.toLowerCase().endsWith(".md"));
+    if (files.length !== 1) return files.length + " skills saved";
+    const text = fs.readFileSync(require("node:path").join(skillsFolder, files[0]), "utf8").replace(/^\uFEFF/, "");
+    if (!/^when to use:\s*\S/i.test(text)) return "no When to use first line";
+    return /feature\//.test(text) && /fix\//.test(text) ? "" : "instructions incomplete";
   },
 });
 
