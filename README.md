@@ -42,7 +42,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **The open file, or your selection:** click a chip to include it, or click it again to leave it out.
 - **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
 - **From the editor:** select some code, right-click, and choose **Solder → Explain this**, **Fix this** (it sends the problems VS Code shows in the selection too) or **Add to chat** (the selection goes with your next message).
-- **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. When a task changed two or more things, **Undo all** under its answer puts every one back, after asking; a file you've changed since is left alone. VS Code's own **Ctrl+Z** works too.
+- **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. Once a turn is done, its steps fold into one row: click it to see them. When a turn changed two or more things, **Undo all** on that row puts every one back, after asking; a file you've changed since is left alone. VS Code's own **Ctrl+Z** works too.
 - **It asks first** before:
   - deleting anything;
   - changing a file outside the workspace, or one with unsaved changes;

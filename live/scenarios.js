@@ -4,7 +4,7 @@
  * The live scenarios. Each sets up a small workspace, gives a task, and checks the result on disk (not just the
  * answer). `hooks` change things under the model (a file edited after it read it) to test recovery.
  * @typedef {{name: string, about: string, heavy?: boolean, setup: (write: (p: string, t: string) => void) => void, task: string | ((prompt: any) => string),
- *   hooks?: any, skills?: Record<string, string>, then?: (string | ((prompt: any) => string))[], check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
+ *   hooks?: any, maxRounds?: number, resumes?: number, skills?: Record<string, string>, then?: (string | ((prompt: any) => string))[], check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
  *   load: (p: string, mocks?: Record<string, any>) => any, skillsFolder: string}) => string}} Scenario
  *   skills: name → file text, put in a skills folder beside the workspace; then: follow-up messages in the same chat
  * check returns "" when it passed, else what was wrong.
@@ -493,6 +493,33 @@ SCENARIOS.push({
     if (!/\b0\b|zero/i.test(answer)) return "wrong answer";
     const read = ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && /\.md$/i.test(String(c.args.path || "")));
     return read.length ? "read a skill it didn't need" : "";
+  },
+});
+
+SCENARIOS.push({
+  name: "limit-resume",
+  about: "a planned task that runs into a small step limit: it pauses, and after Resume it carries on (no 'still blocked' answer)",
+  maxRounds: 4,
+  resumes: 3,
+  setup: (w) => {
+    w("src/math.js", "\"use strict\";\nfunction double(n) {\n  return n * 2;\n}\nmodule.exports = { double };\n");
+    w("src/text.js", "\"use strict\";\nfunction shout(text) {\n  return String(text).toUpperCase() + \"!\";\n}\nmodule.exports = { shout };\n");
+    w("src/list.js", "\"use strict\";\nfunction first(list) {\n  return list[0];\n}\nmodule.exports = { first };\n");
+  },
+  task: "Add three functions, each exported: clamp(n, lo, hi) to src/math.js; slugify(text) to src/text.js (lowercase words joined by -, " +
+    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Make a plan first, one step per file, and do one step at a time.",
+  check: ({ chat, load }) => {
+    if (!chat.messages.some((/** @type {any} */ m) => m.meta?.typed === "Carry on")) return "it never paused at the limit (the test needs a smaller limit)";
+    // After each Resume, the model's next reply acts (calls a tool) or finishes: it doesn't claim it's still blocked.
+    const replies = chat.messages.map((/** @type {any} */ m, /** @type {number} */ i) => [m, chat.messages[i + 1]]).filter(([m]) => m.meta?.typed === "Carry on").map(([, next]) => next);
+    const stuck = replies.find((/** @type {any} */ m) => m && !m.tool_calls?.length && /reject|blocked|limit|allowance|new chat/i.test(m.content || ""));
+    if (stuck) return "after Resume it said it was still blocked: " + String(stuck.content).slice(0, 200);
+    try {
+      if (load("src/math.js").clamp(15, 0, 10) !== 10) return "clamp wrong";
+      if (load("src/text.js").slugify("Hello, World 2!") !== "hello-world-2") return "slugify wrong";
+      if (load("src/list.js").sum([1, 2, 3.5]) !== 6.5) return "sum wrong";
+    } catch (e) { return "unfinished: " + /** @type {any} */ (e)?.message; }
+    return "";
   },
 });
 

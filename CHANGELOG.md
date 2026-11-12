@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **A finished turn folds up.** While Solder works, every step shows as it happens. Once the turn is done, its steps fold into one row (how many, how many changes, how long), with **Undo all** on it; click the row to see them again, with Review and Undo on each.
+- **The plan shows once.** While a planned task runs, its checklist is only above the box; when the turn is done, it's shown completed after the answer (it used to be in the chat and above the box at once).
+- **The step limit is a pause, not an error.** A turn that reaches the most steps for one message says "Paused after 30 steps", in a calm colour, with **Continue** and **Stop here**. It's no longer nudged to carry on right at the limit (which made it try one more step, refused), and **Continue** tells the model it has a fresh allowance (it sometimes read the refused step as still blocked).
+- **In Settings, the title closes them** (as Done does); it used to open a list of chats that did nothing there.
+- **Fix:** Undo all was hard to read in some themes.
+
 ## 0.2.9 (2026-11-11)
 
 - **Skills.** A skill is your instructions for a kind of task, in one Markdown file named after it, whose first line says when to use it (`When to use: Writing or changing a PowerShell script.`); a front-matter `description:`, as in Claude's and Codex's `SKILL.md` files, works too. Add folders of them in **Settings → Your skills** (or the **Skills folders** setting). The model is told each skill's name, file and when to use it, and reads one before a task it covers, with read_file: no new tool, no approval to read, and the skill comes back whole (no line numbers, whatever range was asked) and stays in the chat when old results are cut or its plan step is done. A skill the chat still holds isn't sent twice. Settings lists the skills found, flags one with no "When to use" line, and makes a new one with **New skill…**; ask the model to save one and it writes it to your first skills folder, after asking. Up to 50 skills are offered, and 20,000 characters of each are read.

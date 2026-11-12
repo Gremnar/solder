@@ -193,6 +193,9 @@ in your next step, before you answer: nothing is wrong with it.",
 to do: ${steps.map((step) => `${step.number}. ${step.goal}`).join("; ")}. Please carry on with ${steps.length === 1 ? "it" : "them"}. If you \
 stopped on purpose (it's done another way, or you need something from me), say so instead.`,
   planLeftShown: (/** @type {number} */ count) => `Carry on (the plan had ${count} step${count === 1 ? "" : "s"} left)`,
+  resumeLimit: (/** @type {number} */ steps) => `Please carry on from where you stopped. You reached the limit of ${steps} \
+replies with tool calls for one message, and that's reset now: you have ${steps} more. Run again anything that wasn't run, then \
+go on.`,
   resumeStopped: "Please carry on from where you stopped. I stopped it, but I didn't mean to cancel anything: run \
 again whatever was stopped or not run, then go on.",
   stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",

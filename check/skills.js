@@ -206,11 +206,16 @@ async function main() {
     await change("edit_file", { path: "ua2.txt", old_text: "two", new_text: "TWO" });
     await change("edit_file", { path: "ua2.txt", old_text: "TWO", new_text: "TWO again" });
     panel.chat.messages.push({ role: "assistant", content: "Done too." });
-    let offers = panel.items().filter((i) => i.kind === "undoAll");
-    check("each task that changed two or more things ends with Undo all", JSON.stringify(offers) === JSON.stringify([{ kind: "undoAll", at: 0, count: 3 }, { kind: "undoAll", at: 8, count: 2 }])
+    // Each finished turn folds into one row; the row carries Undo all when two or more changes can be undone.
+    const folds = () => panel.items().items.filter((i) => i.kind === "fold");
+    let offers = folds().map((f) => f.undoAll).filter(Boolean);
+    const shown = panel.items().items.map((i) => i.kind);
+    check("a finished turn folds its steps into one row, between your message and the answer", JSON.stringify(shown) === JSON.stringify(["user", "fold", "answer", "user", "fold", "answer"])
+      && folds()[0].steps === 3 && folds()[0].changes === 3 && folds()[0].items.every((i) => i.kind === "step"), shown);
+    check("each turn that changed two or more things has Undo all", JSON.stringify(offers) === JSON.stringify([{ at: 0, count: 3 }, { at: 8, count: 2 }])
       && fs.readFileSync(path.join(wsRoot, "ua1.txt"), "utf8") === "ONE and more\n" && fs.existsSync(path.join(wsRoot, "ua3.txt")), offers);
     await panel.onMessage({ type: "undoTask", at: 0 });
-    offers = panel.items().filter((i) => i.kind === "undoAll");
+    offers = folds().map((f) => f.undoAll).filter(Boolean);
     check("Undo all asks, then puts every file back (two edits to one file, and a new file gone)", fs.readFileSync(path.join(wsRoot, "ua1.txt"), "utf8") === "one\n"
       && !fs.existsSync(path.join(wsRoot, "ua3.txt")) && /Undo all 3 changes this task made\?/.test(told.join("\n")) && offers.length === 1 && offers[0].at === 8
       && (panel.chat.notes || []).length === 3 && fs.readFileSync(path.join(wsRoot, "ua2.txt"), "utf8") === "TWO again\n", [fs.readFileSync(path.join(wsRoot, "ua1.txt"), "utf8"), offers, (panel.chat.notes || []).length]);
@@ -224,6 +229,34 @@ async function main() {
     panel.chat.messages.length = 0;
     panel.chat.notes = [];
     for (const name of ["ua1.txt", "ua2.txt"]) fs.rmSync(path.join(wsRoot, name), { force: true });
+
+    // ---- the plan: in the dock while its turn runs, then once, completed, at the end of the turn
+    panel.chat.messages.push({ role: "user", content: "plan it" },
+      { role: "assistant", content: "", tool_calls: [{ id: "pl1", type: "function", function: { name: "plan", arguments: JSON.stringify({ steps: [{ goal: "A" }, { goal: "B" }] }) } }] },
+      { role: "tool", tool_call_id: "pl1", content: "Plan", meta: { name: "plan", summary: "Plan" } },
+      { role: "assistant", content: "", tool_calls: [{ id: "rd1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "notes.md" }) } }] },
+      { role: "tool", tool_call_id: "rd1", content: "1\t# Notes", meta: { name: "read_file", summary: "Read notes.md" } },
+      { role: "assistant", content: "Both done." });
+    panel.chat.plan = { steps: [{ goal: "A", state: "done", notes: "" }, { goal: "B", state: "done", notes: "" }] };
+    const finished = panel.items();
+    check("a finished turn's plan comes once, after its answer, and not in the dock", JSON.stringify(finished.items.map((i) => i.kind)) === JSON.stringify(["user", "fold", "answer", "plan"])
+      && finished.livePlan === null, finished.items.map((i) => i.kind));
+    const realBusy = Object.getOwnPropertyDescriptor(panel.engine, "busy");
+    panel.engine.busy = true; // as if the turn were still running, in this chat
+    panel.runId = panel.chat.id;
+    const live = panel.items();
+    check("while its turn runs, the plan is only in the dock, and the steps aren't folded", !live.items.some((i) => i.kind === "plan" || i.kind === "fold")
+      && Array.isArray(live.livePlan) && live.livePlan.length === 2, [live.items.map((i) => i.kind), live.livePlan]);
+    if (realBusy) Object.defineProperty(panel.engine, "busy", realBusy); else panel.engine.busy = false;
+    panel.chat.messages.length = 0;
+    panel.chat.plan = undefined;
+
+    // ---- the step limit: a pause with Continue and Stop here, not an error
+    panel.runId = panel.chat.id; // the chat the turn ran in
+    panel.onEvent({ type: "done", chat: panel.chat.id, limit: 30 });
+    check("a turn stopped at the step limit is a pause, and Stop here clears it", panel.error?.paused === true && /^Paused after 30 steps/.test(panel.error.message), panel.error);
+    await panel.onMessage({ type: "dismiss" });
+    check("... Stop here clears it", panel.error === null);
 
     // ---- Settings: opened at a tab, and the fields the Advanced tab gained
     await panel.onMessage({ type: "command", name: "settings", arg: "Skills" });

@@ -183,7 +183,7 @@
 
   /** What identifies an element across a redraw, most specific first. */
   const FOCUS_KEYS = ["data-step", "data-chip", "data-stab", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
-    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-unsteer", "data-model", "data-open", "id"];
+    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-turn", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
    * Runs a redraw of root; if it replaced the focused element, focus goes to its new copy (or to fallback).
@@ -221,6 +221,11 @@
     return (div.textContent || "").replace(/\s+/g, " ").trim();
   }
 
+  /** A chat's items with folded turns opened out. @param {any[]} items @returns {any[]} */
+  function flatItems(items) {
+    return items.flatMap((item) => item.kind === "fold" ? item.items : [item]);
+  }
+
   /** What changed between two states that a screen reader should hear. @param {any} was @param {any} now */
   function announceChanges(was, now) {
     if (!was || now.setup || was.chat.id !== now.chat.id) return;
@@ -228,18 +233,18 @@
     /** @type {Map<string, any>} */
     const before = new Map();
     const answers = new Set();
-    for (const item of was.chat.items) {
+    for (const item of flatItems(was.chat.items)) {
       if (item.kind === "step") before.set(item.id, item);
       else if (item.kind === "answer") answers.add(item.text);
     }
-    for (const item of now.chat.items) {
+    for (const item of flatItems(now.chat.items)) {
       if (item.kind !== "step" || item.pending) continue;
       const old = before.get(item.id);
       if (!old || old.pending) announce((item.failed ? "Failed: " : "") + (item.summary || item.label));
       else if (item.undone && !old.undone) announce("Undone: " + (item.summary || item.label));
     }
     // a whole chat that shifted at once (a summary) isn't read out again
-    const fresh = now.chat.items.filter((/** @type {any} */ i) => i.kind === "answer" && !answers.has(i.text));
+    const fresh = flatItems(now.chat.items).filter((/** @type {any} */ i) => i.kind === "answer" && !answers.has(i.text));
     if (fresh.length && fresh.length <= 2) announce("Solder: " + plain(fresh[fresh.length - 1].text));
     const asked = new Set(was.approvals.map((/** @type {any} */ a) => a.id));
     for (const a of now.approvals) if (!asked.has(a.id)) announce("Approval needed: " + a.label);
@@ -272,6 +277,10 @@
     if (!$("chat-menu").classList.contains("hidden")) keepFocus($("chat-menu"), renderChatMenu);
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
     document.body.classList.toggle("in-settings", !state.setup && !!state.settings);
+    // The title is the chats menu, except in Settings (it closes them) and the guided setup (it's only a title).
+    const title = $("chat-title");
+    title.title = state.setup ? "" : state.settings ? "Close the settings" : "Your chats";
+    if (state.setup || state.settings) title.removeAttribute("aria-haspopup"); else title.setAttribute("aria-haspopup", "menu");
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
     if (state.setup) { shownParts = []; awayFromChat = true; renderSetup(); updateToBottom(); return; }
@@ -693,25 +702,17 @@
     /** @type {string[]} consecutive steps share one timeline */
     let timeline = [];
     const endSteps = () => { if (timeline.length) parts.push(`<div class="steps">${timeline.join("")}</div>`); timeline = []; };
-    items.forEach((/** @type {any} */ item, /** @type {number} */ index) => {
+    items.forEach((/** @type {any} */ item) => {
       if (item.kind === "step") {
         timeline.push(step(item));
         return;
       }
       endSteps();
-      if (item.kind === "user") {
-        parts.push(`<div class="user${item.resume ? " resume" : ""}" data-enter="i:u${index}">${escape(item.text)}` +
-          (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c).replace(/^✂/, `<span aria-hidden="true">✂</span>`)}</span>`).join("")}</div>` : "") + "</div>");
-      } else if (item.kind === "answer") {
-        // no entrance: an answer arrives word by word, through the fade-in
-        parts.push(`<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`);
-      } else if (item.kind === "plan") {
-        parts.push(planCard(item));
-      } else if (item.kind === "undoAll") {
-        parts.push(`<div class="undo-all"><button class="link-button" data-undo-task="${item.at}" title="Put back every file this task changed">${ICONS.undo}Undo all ${item.count} changes</button></div>`);
-      } else if (item.kind === "note") {
-        parts.push(`<div class="note" data-enter="i:n${index}">${escape(item.text)}</div>`);
+      if (item.kind === "fold") {
+        parts.push(foldHtml(item));
+        return;
       }
+      parts.push(itemHtml(item));
     });
     if (state.busy) {
       const stepRunning = items.some((/** @type {any} */ i) => i.kind === "step" && i.running);
@@ -738,6 +739,52 @@
     if (atBottom || stickToBottom) transcript.scrollTop = transcript.scrollHeight;
     stickToBottom = false;
     updateToBottom();
+  }
+
+  /** One chat item (not a step: those share a timeline) as HTML. Its entrance key is its message's, so it's stable. @param {any} item */
+  function itemHtml(item) {
+    const key = "i:" + (item.key ?? "x");
+    if (item.kind === "user") {
+      return `<div class="user${item.resume ? " resume" : ""}" data-enter="${key}">${escape(item.text)}` +
+        (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c).replace(/^✂/, `<span aria-hidden="true">✂</span>`)}</span>`).join("")}</div>` : "") + "</div>";
+    }
+    // no entrance: an answer arrives word by word, through the fade-in
+    if (item.kind === "answer") return `<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`;
+    if (item.kind === "plan") return planCard(item);
+    if (item.kind === "note") return `<div class="note" data-enter="${key}">${escape(item.text)}</div>`;
+    return "";
+  }
+
+  /** Turns you've opened (by chat and turn): they stay open when the chat is redrawn. */
+  const openTurns = new Set();
+
+  /**
+   * A finished turn's steps as one row: how many, how many changed something, how long; click to see them (Review and
+   * Undo work as ever inside). Undo all sits on the row when two or more changes can still be undone. @param {any} item
+   */
+  function foldHtml(item) {
+    const key = state.chat.id + ":" + item.id;
+    const open = openTurns.has(key);
+    const seconds = Math.round(item.ms / 1000);
+    const time = !seconds ? "" : seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const facts = [`${item.steps} step${item.steps === 1 ? "" : "s"}`, item.changes ? `${item.changes} change${item.changes === 1 ? "" : "s"}` : "",
+      item.failed ? `${item.failed} failed` : "", time].filter(Boolean).join(" · ");
+    let inner = "";
+    if (open) {
+      /** @type {string[]} */
+      let run = [];
+      const flush = () => { if (run.length) inner += `<div class="steps">${run.join("")}</div>`; run = []; };
+      item.items.forEach((/** @type {any} */ sub) => {
+        if (sub.kind === "step") { run.push(step(sub)); return; }
+        flush();
+        inner += itemHtml(sub);
+      });
+      flush();
+    }
+    return `<div class="turn-fold${open ? " open" : ""}"><div class="fold-row">` +
+      `<button class="fold-head" data-turn="${escape(item.id)}" aria-expanded="${open}">${ICONS.more}<span>${escape(facts)}</span></button>` +
+      (item.undoAll ? `<button class="fold-undo" data-undo-task="${item.undoAll.at}" title="Put back every file this turn changed">${ICONS.undo}Undo all ${item.undoAll.count}</button>` : "") +
+      `</div>${open ? `<div class="fold-body">${inner}</div>` : ""}</div>`;
   }
 
   /** "Scroll to bottom": shown once the chat's end is more than about a screen's third away. */
@@ -877,8 +924,8 @@
   /** While a task with unfinished steps runs: its checklist, compact, above the box (the card in the chat scrolls away). */
   function renderPlanDock() {
     const dock = $("plan-dock");
-    const plan = state.busy ? [...state.chat.items].reverse().find((/** @type {any} */ item) => item.kind === "plan") : null;
-    const open = plan && plan.steps.some((/** @type {any} */ step) => step.state !== "done");
+    const plan = state.busy && state.chat.livePlan ? { steps: state.chat.livePlan } : null;
+    const open = !!plan;
     let html = "";
     if (open) {
       const done = plan.steps.filter((/** @type {any} */ step) => step.state === "done").length;
@@ -926,13 +973,14 @@
     const away = state.elsewhere;
     const awayText = !away ? "" : away.done ? (away.problem ? `"${away.title}" stopped: ${away.problem}` : `"${away.title}" is done.`)
       : away.waiting ? `"${away.title}" is waiting for your approval.` : `Solder is working in "${away.title}".`;
-    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped ? " soft" : "") + (state.error.switchTo ? " offer" : "")
+    const bannerClass = state.error && !state.busy ? "banner" + (state.error.stopped || state.error.paused ? " soft" : "") + (state.error.paused ? " paused" : "") + (state.error.switchTo ? " offer" : "")
       : away ? "banner soft" + (away.waiting ? " waiting" : "") : "banner hidden";
-    const bannerHtml = state.error && !state.busy ? (state.error.stopped ? ICONS.pause : ICONS.alert) + `<span class="msg">${escape(state.error.message)}` +
+    const bannerHtml = state.error && !state.busy ? (state.error.stopped || state.error.paused ? ICONS.pause : ICONS.alert) + `<span class="msg">${escape(state.error.message)}` +
       (state.error.switchTo ? ` Everything so far is saved. To carry on now, switch this chat to ${escape(state.error.switchTo.name)} (an Assist model, which doesn't use the allowance), then resume.`
         : state.error.exhausted ? " Resume once it resets; everything so far is saved." : "") + "</span>" +
       (state.error.switchTo && !(away && !away.done) ? `<button class="primary" data-switch="${escape(state.error.switchTo.model)}" title="Assist models don't use the daily allowance. Each step takes a few seconds longer, and there's no thinking level.">Switch to ${escape(state.error.switchTo.name)} and resume</button>` : "") +
-      (state.error.resumable && !(away && !away.done) ? `<button data-action="resume">Resume</button>` : "")
+      (state.error.paused && !(away && !away.done) ? `<button class="primary" data-action="resume" title="Carry on with another ${escape(String(state.error.message.match(/\d+/)?.[0] || ""))} steps">Continue</button><button class="quiet" data-action="dismiss">Stop here</button>`
+        : state.error.resumable && !(away && !away.done) ? `<button data-action="resume">Resume</button>` : "")
       : away ? (away.done ? (away.problem ? ICONS.pause : ICONS.check) : `<span class="spinner" aria-hidden="true"></span>`) + `<span class="msg">${escape(awayText)}</span>` +
         `<button data-open="${escape(away.id)}">${away.done ? "Open it" : "Go back"}</button>` : "";
     if (bannerClass + bannerHtml !== shownBanner) {
@@ -1448,7 +1496,13 @@
       /** @type {HTMLElement | undefined} */ (last ? items[items.length - 1] : menu.querySelector('[aria-checked="true"]') || items[0])?.focus();
     }
   }
-  $("chat-title").addEventListener("click", (e) => { e.stopPropagation(); toggle("chat-menu"); });
+  $("chat-title").addEventListener("click", (e) => {
+    e.stopPropagation();
+    // In Settings the title is "Settings": clicking it closes them (as Done does). In the guided setup it does nothing.
+    if (state?.settings && !state.setup) { focusInput = true; vscode.postMessage({ type: "settingsScreen", action: "close" }); return; }
+    if (state?.setup) return;
+    toggle("chat-menu");
+  });
   $("btn-more").addEventListener("click", (e) => { e.stopPropagation(); toggle("more-menu"); });
   $("model-button").addEventListener("click", (e) => { e.stopPropagation(); toggle("model-menu"); });
   for (const [menuId, openerId] of Object.entries(OPENERS)) {
@@ -1473,10 +1527,16 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
+    if (d.turn) {
+      const key = state.chat.id + ":" + d.turn;
+      if (openTurns.has(key)) openTurns.delete(key); else openTurns.add(key);
+      renderTranscript();
+      return;
+    }
     if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }

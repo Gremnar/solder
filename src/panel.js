@@ -350,7 +350,8 @@ class SolderPanel {
         if (event.credits) { this.credits = event.credits; this.updateStatusBar(); } // a used-up allowance shows as 0 left
         break;
       case "stopped": this.error = { message: "Stopped.", resumable: true, stopped: true }; this.errorChat = event.chat; break;
-      case "done": if (event.limit) { this.error = { message: `Stopped at the limit of ${event.limit} steps for one message.`, resumable: true }; this.errorChat = event.chat; } break;
+      // The step limit is a pause Solder chose, not a failure: Continue or Stop here.
+      case "done": if (event.limit) { this.error = { message: `Paused after ${event.limit} steps, the limit for one message. The work so far is saved.`, resumable: true, paused: true }; this.errorChat = event.chat; } break;
       case "steer-unsent":
         // Typed while it worked but never delivered: the next message (after a Stop, back into the box instead).
         if (event.send) { setImmediate(() => this.sendQueued(event)); return; }
@@ -381,6 +382,7 @@ class SolderPanel {
         await this.store.save(this.chat);
         this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
       }
+      case "dismiss": this.error = null; this.post(); return;
       case "resume":
         if (this.engine.busy) { vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Resume this one when it's done.`); return; }
         this.error = null; this.tools.useFolder(this.chat.folder); this.engine.resume(this.chat); return;
@@ -862,7 +864,7 @@ class SolderPanel {
     const current = (settings.modelLocked ? settings.model : chat.model || settings.model) || "";
     this.view.webview.postMessage({
       type: "state",
-      chat: { id: chat.id, title: chat.title, items: this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0 },
+      chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0 },
       chats: chatList(this.store.list()),
       // Assist models are tagged in the picker: free, slower, and no thinking level.
       models: (this.models.length || !current ? this.models : [{ id: current, name: current }]).map((m) => ({ ...m, assist: laneOf(m.id, settings) === "assist" })),
@@ -901,51 +903,43 @@ class SolderPanel {
     this.view?.webview.postMessage({ type: "editor", file, selection });
   }
 
-  /** The saved chat as what the panel shows. */
+  /**
+   * The saved chat as what the panel shows. A turn (your message, up to the next one you type) that's finished folds
+   * its steps into one row (with Undo all), then its answer, then its plan, completed. The turn that's running shows
+   * every step as it happens; its plan is in the dock above the box (livePlan), not in the chat.
+   * @returns {{items: any[], livePlan: any}}
+   */
   items() {
-    const items = [];
+    /** @type {any[]} */
+    const flat = [];
     /** @type {Map<string, any>} */
     const steps = new Map();
     const messages = this.chat.messages;
-    if (this.chat.forkedFrom) {
-      items.push({ kind: "note", text: `A copy of "${this.chat.forkedFrom.title}" to carry on in. The original is unchanged.` });
-    }
-    // The plan's card goes where the latest plan was set; its other calls (a step done) update it, not the timeline.
+    // The plan is the chat's latest: it belongs to the turn its steps were set in.
     const plan = /** @type {any} */ (this.chat).plan;
     let planAt = "";
     for (const message of messages) for (const call of message.tool_calls || []) {
       if (call.function.name === "plan" && /"steps"\s*:/.test(call.function.arguments || "")) planAt = call.id;
     }
-    // A finished task that changed two or more things ends with one Undo for all of them.
-    let taskAt = -1;
-    const endTask = (/** @type {boolean} */ running) => {
-      if (taskAt < 0 || running) return;
-      const count = this.taskMessages(taskAt).filter((/** @type {any} */ m) => m.role === "tool" && m.meta?.change && !m.meta.undone).length;
-      if (count >= 2) items.push({ kind: "undoAll", at: taskAt, count });
-    };
+    let turn = -1;
+    let planTurn = -1;
     for (let index = 0; index < messages.length; index++) {
-      if (messages[index].role === "user" && !messages[index].meta?.resume) { endTask(false); taskAt = index; }
-      if (this.chat.compaction && index === this.chat.compaction.through) {
-        items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
-      }
       const message = messages[index];
+      if (message.role === "user" && !message.meta?.resume) turn = index;
+      if (this.chat.compaction && index === this.chat.compaction.through) {
+        flat.push({ kind: "note", key: "n" + index, text: "Older messages were summarised here to save tokens.", turn });
+      }
       if (message.role === "user") {
-        items.push({ kind: "user", text: message.meta?.typed ?? message.content, chips: message.meta?.chips || [], resume: !!message.meta?.resume });
+        flat.push({ kind: "user", key: "u" + index, text: message.meta?.typed ?? message.content, chips: message.meta?.chips || [], resume: !!message.meta?.resume, turn });
       } else if (message.role === "assistant") {
-        if (message.content?.trim()) items.push({ kind: "answer", text: message.content, incomplete: !!message.meta?.incomplete });
+        if (message.content?.trim()) flat.push({ kind: "answer", text: message.content, incomplete: !!message.meta?.incomplete, turn });
         for (const call of message.tool_calls || []) {
-          if (call.function.name === "plan") {
-            if (call.id === planAt && plan?.steps?.length) {
-              items.push({ kind: "plan", id: call.id, active: this.engine.busy && !this.awayBusy(),
-                steps: plan.steps.map((/** @type {any} */ step) => ({ goal: step.goal, state: step.state, notes: step.notes || "" })) });
-            }
-            continue;
-          }
+          if (call.function.name === "plan") { if (call.id === planAt) planTurn = turn; continue; }
           const args = parseArguments(call.function.name, call.function.arguments, false).args;
           const step = { kind: "step", id: call.id, name: call.function.name, label: labelOf(call.function.name, args),
-            pending: true, path: args.path || "" };
+            pending: true, path: args.path || "", turn };
           steps.set(call.id, step);
-          items.push(step);
+          flat.push(step);
         }
       } else if (message.role === "tool") {
         const step = steps.get(message.tool_call_id);
@@ -958,15 +952,44 @@ class SolderPanel {
       }
     }
     if (this.chat.compaction && this.chat.compaction.through >= messages.length) {
-      items.push({ kind: "note", text: "Older messages were summarised here to save tokens." });
+      flat.push({ kind: "note", key: "n" + messages.length, text: "Older messages were summarised here to save tokens.", turn });
     }
-    endTask(this.engine.busy && !this.awayBusy());
     for (const step of steps.values()) {
       if (!step.pending) continue;
       step.running = !this.awayBusy() && step.id === this.running;
       if (step.running) step.since = this.runningSince; // the panel shows a clock on it
     }
-    return items;
+    // The turn that's running in this chat now (none when it's done, or when Solder works in another chat).
+    const running = this.engine.busy && !this.awayBusy() ? turn : -2;
+    const planned = plan?.steps?.length ? plan.steps.map((/** @type {any} */ step) => ({ goal: step.goal, state: step.state, notes: step.notes || "" })) : null;
+    /** @type {any[]} */
+    const items = [];
+    if (this.chat.forkedFrom) items.push({ kind: "note", key: "fork", text: `A copy of "${this.chat.forkedFrom.title}" to carry on in. The original is unchanged.` });
+    for (let from = 0; from < flat.length;) {
+      const at = flat[from].turn;
+      let to = from;
+      while (to < flat.length && flat[to].turn === at) to++;
+      const segment = flat.slice(from, to);
+      from = to;
+      if (at === running || at < 0) { items.push(...segment); continue; }
+      // A finished turn: your message, its steps (and any words between them) folded, then the answer and the plan.
+      const head = segment[0]?.kind === "user" ? 1 : 0;
+      const lastStep = segment.reduce((found, item, index) => item.kind === "step" ? index : found, -1);
+      const answerAt = segment.reduce((found, item, index) => item.kind === "answer" && index > lastStep ? index : found, -1);
+      const tail = answerAt >= 0 ? answerAt : segment.length;
+      const inner = segment.slice(head, tail);
+      const folded = inner.filter((item) => item.kind === "step");
+      items.push(...segment.slice(0, head));
+      if (folded.length) {
+        const changes = folded.filter((item) => item.change && !item.undone).length;
+        items.push({ kind: "fold", id: "t" + at, items: inner, steps: folded.length, changes,
+          failed: folded.filter((item) => item.failed).length, ms: folded.reduce((sum, item) => sum + (item.ms || 0), 0),
+          undoAll: changes >= 2 ? { at, count: changes } : null });
+      } else items.push(...inner);
+      items.push(...segment.slice(tail));
+      if (at === planTurn && planned) items.push({ kind: "plan", id: planAt, active: false, steps: planned });
+    }
+    return { items, livePlan: running >= 0 && planTurn === running && planned ? planned : null };
   }
 
   updateStatusBar() {

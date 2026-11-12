@@ -65,7 +65,7 @@ function estimate(text) {
  * @typedef {{id: string, title: string, created: number, updated: number, messages: Stored[],
  *            compaction: {through: number, summary: string} | null,
  *            usage: {tokens: number, assistTokens?: number, requests?: number, prompt?: number, output?: number, thinking?: number, side?: number, by?: Record<string, number>},
- *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number,
+ *            effort?: string, model?: string, agentsSeen?: string[], tokenRatio?: number, limitHit?: boolean,
  *            titleSource?: "auto" | "user", titledAt?: number}} Chat
  * @typedef {{output: string, summary: string, failed?: boolean, change?: any, keep?: string, ms?: number}} ToolResult
  *   keep: text that rides with the output but isn't output (a folder's AGENTS.md): never cut away
@@ -170,6 +170,7 @@ class Engine {
       // Saved first, so nothing that fails after this (compaction included) can lose what you typed.
       const content = `${timeNote(this.now())}\n\n${text}` + (extra.context ? `\n\n${extra.context}` : "");
       chat.messages.push({ role: "user", content, meta: { typed: text, chips: extra.chips || [] } });
+      delete chat.limitHit;
       if (chat.title === "New chat") chat.title = titleFrom(text);
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
@@ -187,10 +188,14 @@ class Engine {
       let tail = chat.messages.length - 1;
       while (tail >= 0 && chat.messages[tail].role === "tool") tail--;
       const stoppedSteps = chat.messages.slice(tail + 1).some((m) => m.content === TEXTS.stoppedRunning || m.content.startsWith(TEXTS.notRunStopped));
-      if (last.role === "assistant" || summarisedAll || stoppedSteps) {
+      // Stopped at the step limit: a call refused for it would otherwise read as still refused.
+      const limited = !!chat.limitHit;
+      delete chat.limitHit;
+      if (last.role === "assistant" || summarisedAll || stoppedSteps || limited) {
         // It stopped mid-answer (or all of it is in the recap): ask it to carry on, since the history
         // can't end with its own turn.
-        chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${stoppedSteps ? TEXTS.resumeStopped : TEXTS.resume}`,
+        const note = limited ? TEXTS.resumeLimit(this.settings().maxRounds) : stoppedSteps ? TEXTS.resumeStopped : TEXTS.resume;
+        chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${note}`,
           meta: { typed: "Carry on", resume: true } });
         await this._save(chat);
         this.emit({ type: "message", chat: chat.id });
@@ -320,8 +325,10 @@ class Engine {
       if (!reply.calls.length) {
         // A weak model sometimes ends a planned task partway, with steps still to do and nothing asked: once per
         // message, it's asked to carry on (or say why it stopped). Not when it asks something: that's a real stop.
+        // Its answer after the last reply with calls allowed: the turn ends here, paused (you choose whether to go on).
+        const atLimit = rounds >= settings.maxRounds;
         const left = unfinishedSteps(chat);
-        if (left.length && !nudged && !asksSomething(reply.content)) {
+        if (left.length && !nudged && !atLimit && !asksSomething(reply.content)) {
           nudged = true;
           chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${TEXTS.planLeft(left)}`,
             meta: { typed: TEXTS.planLeftShown(left.length), resume: true, nudge: true } });
@@ -329,13 +336,15 @@ class Engine {
           this.emit({ type: "message", chat: chat.id });
           continue;
         }
-        this.emit({ type: "done", chat: chat.id });
+        if (atLimit) { chat.limitHit = true; await this._save(chat); }
+        this.emit({ type: "done", chat: chat.id, ...(atLimit ? { limit: settings.maxRounds } : {}) });
         this._title(chat);
         return;
       }
       rounds += 1;
       if (rounds > settings.maxRounds) {
         this._settle(chat, TEXTS.notRunLimit);
+        chat.limitHit = true;
         await this._save(chat);
         this.emit({ type: "message", chat: chat.id });
         this.emit({ type: "done", chat: chat.id, limit: settings.maxRounds });

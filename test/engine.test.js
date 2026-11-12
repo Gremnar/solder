@@ -930,3 +930,48 @@ test("where the tokens went: every request's prompt tokens shared out by kind, s
   // An older chat: nothing recorded by kind.
   assert.match(tokenReport({ ...Engine.newChat(), usage: { tokens: 5000 } }, "S", []).join("\n"), /not recorded \(its 5,000 tokens/);
 });
+
+test("at the step limit: no plan nudge, the turn ends paused, and Resume says there's a fresh allowance", async () => {
+  const plan = (args, id) => call(id, "plan", args);
+  // It wraps up as told at the limit, with a plan step left: not nudged (you're asked instead), and paused.
+  const client = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
+    { calls: [plan({ done: 1, notes: "A fixed." }, "p2"), call("r2", "read_file", { path: "b.js" })] },
+    { content: "A is fixed; B is still to do." },
+    { content: "A title" }, // the chat's title, asked for after its first answer
+    (req) => {
+      assert.equal(req.messages.at(-1).content.split("\n\n").pop(), TEXTS.resumeLimit(2));
+      return { content: "Carrying on with B." };
+    },
+    { content: "B is done too." }, // the resumed run may be nudged once, as any run
+  ]);
+  const events = [];
+  const chat = Engine.newChat();
+  const e = engine(client, fakeHost(), events, { maxRounds: 2 });
+  await e.ask(chat, "fix a and b");
+  await new Promise((resolve) => setTimeout(resolve, 10)); // the title, on its own
+  assert.ok(!chat.messages.some((m) => m.meta?.nudge), "no nudge at the limit");
+  assert.equal(events.filter((x) => x.type === "done").at(-1).limit, 2, "it ends paused at the limit");
+  assert.equal(chat.limitHit, true);
+  await e.resume(chat);
+  assert.ok(chat.messages.some((m) => m.meta?.typed === "Carry on" && m.content.endsWith(TEXTS.resumeLimit(2))), "Resume's note says the allowance is reset");
+  assert.ok(!events.some((x) => x.type === "error"), "a fresh allowance: no errors");
+  assert.equal(chat.limitHit, undefined);
+  // A new message after a pause starts afresh: nothing about the limit.
+  chat.limitHit = true;
+  const fresh = fakeClient([{ content: "ok" }]);
+  await engine(fresh, fakeHost(), [], { maxRounds: 2 }).ask(chat, "something else");
+  assert.equal(chat.limitHit, undefined);
+
+  // It makes calls anyway after the last allowed reply: those are refused, and Resume still says the allowance is reset.
+  const pushy = fakeClient([
+    { calls: [call("1", "problems", {})] }, { calls: [call("2", "problems", { path: "a" })] }, { calls: [call("3", "problems", { path: "b" })] },
+    (req) => { assert.equal(req.messages.at(-1).content.split("\n\n").pop(), TEXTS.resumeLimit(2)); return { content: "done" }; },
+  ]);
+  const other = Engine.newChat();
+  const p = engine(pushy, fakeHost(), [], { maxRounds: 2 });
+  await p.ask(other, "go");
+  assert.equal(other.messages.filter((m) => m.role === "tool").at(-1).content, TEXTS.notRunLimit);
+  await p.resume(other);
+  assert.equal(other.messages.at(-1).content, "done");
+});

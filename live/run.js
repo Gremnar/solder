@@ -81,14 +81,21 @@ async function once(scenario, run) {
     if (!String(req.messages?.at(-1)?.content || "").startsWith("Give a short title")) requests++;
     return reply(req);
   };
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: 40, toolModels, assistSessionBlock: assistBlock }), onEvent: () => {} });
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock }), onEvent: () => {} });
   const chat = S.Engine.newChat();
   const started = Date.now();
   let error = "";
   // A scenario's task, then any follow-up messages in the same chat (`then`). Each is a text, or a function of Solder's own
   // texts (a slash command's message, as the panel would send it).
   const texts = [scenario.task, ...(scenario.then || [])].map((/** @type {any} */ item) => typeof item === "function" ? item(S.prompt) : item);
-  try { for (const text of texts) await engine.ask(chat, text); } catch (e) { error = /** @type {any} */ (e)?.message || String(e); }
+  // A scenario with `resumes` presses Resume (up to that many times) whenever the turn ends paused at the step limit.
+  let resumed = 0;
+  try {
+    for (const text of texts) {
+      await engine.ask(chat, text);
+      while (chat.limitHit && resumed < (scenario.resumes || 0)) { resumed++; await engine.resume(chat); }
+    }
+  } catch (e) { error = /** @type {any} */ (e)?.message || String(e); }
   const answer = [...chat.messages].reverse().find((/** @type {any} */ m) => m.role === "assistant" && (m.content || "").trim())?.content || "";
   let why;
   try {
