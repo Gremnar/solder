@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "88774bb1da55defb";
+const PINNED = "1f249983848d0dff";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -137,7 +137,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "439cce664f56ac84";
+const ASSIST_PINNED = "426c7e3192754274";
 
 function assistEverything() {
   return {

@@ -50,7 +50,8 @@ async function main() {
   const own = require("node:module").createRequire(path.join(REPO, "src", "panel.js"))("vscode");
   check("Solder's own API object is reached", typeof own.window.showInputBox === "function");
   const home = path.join(T, "home");
-  const mine = path.join(home, ".solder", "skills");
+  const appData = path.join(home, "AppData", "Roaming");
+  const mine = path.join(appData, "Solder", "skills");
   const shared = path.join(T, "skills-shared");
   const org = path.join(T, "skills-org");
   for (const dir of [home, shared, org]) fs.rmSync(dir, { recursive: true, force: true });
@@ -60,7 +61,9 @@ async function main() {
   fs.writeFileSync(path.join(org, "branching.md"), "When to use: Naming a git branch.\n\nfeature/<ticket>-<slug>\n");
   await settings().update("skillsFolders", undefined, vscode.ConfigurationTarget.Global);
   const realHome = process.env.USERPROFILE;
-  process.env.USERPROFILE = home; // "New skill" makes its default folder in the home folder: a throwaway one here
+  const realAppData = process.env.APPDATA;
+  process.env.USERPROFILE = home; // New skill makes its default folder in AppData: a throwaway one here
+  process.env.APPDATA = appData;
   check("the home folder is the throwaway one", os.homedir() === home, os.homedir());
 
   // VS Code's prompts, answered here.
@@ -75,22 +78,32 @@ async function main() {
   check("VS Code's prompts can be stood in for", undo.every(Boolean));
 
   try {
-    // ---- the command: New skill, with no skills folder yet
-    answers = ["PowerShell Scripts", "Writing or changing a PowerShell script."];
-    await vscode.commands.executeCommand("solder.newSkill");
+    // ---- a second panel, to send it what the Settings screen sends
+    const subscriptions = [];
+    const panel = new SolderPanel({ secrets: { get: async () => "", store: async () => {}, delete: async () => {} }, subscriptions, extension: ext,
+      globalStorageUri: vscode.Uri.file(path.join(T, "gs-skills")), storageUri: undefined, extensionUri: ext.extensionUri }, { appendLine() {}, show() {} });
+
+    // ---- New skill: the command opens Settings at the Skills tab with the form; the form makes it
+    await panel.newSkill();
+    check("New skill opens Settings at the Skills tab, with the form", panel.settingsScreen.view?.tab === "skills" && panel.settingsScreen.view?.skillForm === true, panel.settingsScreen.view?.tab);
+    const create = (name, when) => panel.onMessage({ type: "settingsScreen", action: "createSkill", name, when });
+    await create("PowerShell Scripts", "Writing or changing a PowerShell script.");
     const first = path.join(mine, "powershell_scripts.md");
-    check("New skill makes the default folder and the file", fs.existsSync(first) && fs.readFileSync(first, "utf8") === "When to use: Writing or changing a PowerShell script.\n\n",
+    check("Create makes the default folder (in AppData) and the file", fs.existsSync(first) && fs.readFileSync(first, "utf8") === "When to use: Writing or changing a PowerShell script.\n\n",
       fs.existsSync(first) ? fs.readFileSync(first, "utf8") : "no file");
-    check("... adds the folder to your settings", JSON.stringify(settings().get("skillsFolders")) === JSON.stringify([mine]), settings().get("skillsFolders"));
+    check("... adds the folder to your settings, and closes the form", JSON.stringify(settings().get("skillsFolders")) === JSON.stringify([mine]) && panel.settingsScreen.view.skillForm === false,
+      settings().get("skillsFolders"));
     const editor = vscode.window.activeTextEditor;
     check("... and opens it with the cursor where the instructions go", !!editor && editor.document.uri.fsPath.toLowerCase() === first.toLowerCase() && editor.selection.active.line === 2,
       editor ? [editor.document.uri.fsPath, editor.selection.active.line] : "no editor");
-    const validate = asked[0].validateInput;
-    check("a name that's taken, or has odd characters, is refused as you type", !!validate("powershell scripts") && !!validate("a/b") && !!validate("  ") && validate("new one") === null,
-      [validate("powershell scripts"), validate("a/b"), validate("new one")]);
-    answers = ["second", undefined]; // Escape at the second question
-    await vscode.commands.executeCommand("solder.newSkill");
-    check("cancelled at the second question: nothing made", !fs.existsSync(path.join(mine, "second.md")));
+    await create("powershell scripts", "Again.");
+    const taken = panel.settingsScreen.view.notice;
+    await create("a/b", "Odd.");
+    const odd = panel.settingsScreen.view.notice;
+    await create("second", "  ");
+    const noWhen = panel.settingsScreen.view.notice;
+    check("a taken name, odd characters, or no 'when' is refused with why, and nothing is made", /already a skill/.test(taken) && /Letters, digits/.test(odd) && /Say when/.test(noWhen)
+      && !fs.existsSync(path.join(mine, "second.md")), [taken, odd, noWhen]);
     await editor.edit((e) => e.insert(new vscode.Position(2, 0), "Use approved verbs.\nNo aliases.\n"));
     await editor.document.save();
 
@@ -101,21 +114,16 @@ async function main() {
     await vscode.commands.executeCommand("solder.useAsSkills", vscode.Uri.file(shared));
     check("... a folder isn't added twice", settings().get("skillsFolders").length === 2);
 
-    // ---- a second panel, to send it what the Settings screen sends
-    const subscriptions = [];
-    const panel = new SolderPanel({ secrets: { get: async () => "", store: async () => {}, delete: async () => {} }, subscriptions, extension: ext,
-      globalStorageUri: vscode.Uri.file(path.join(T, "gs-skills")), storageUri: undefined, extensionUri: ext.extensionUri }, { appendLine() {}, show() {} });
     await panel.onMessage({ type: "settings" });
     let view = panel.settingsScreen.view;
     check("Settings lists both skills, with what each is for", view && view.skills.map((s) => s.name).join() === "powershell_scripts,code_review"
       && view.skills[1].when === "Reviewing a change before it's committed." && view.skills.every((s) => s.offered && !s.org && !s.problem), view && view.skills);
     check("... and says where new ones go", view.skillsHome.toLowerCase() === mine.toLowerCase() && view.skillsFolders.length === 2, [view.skillsHome, view.skillsFolders]);
 
-    answers = ["api endpoints", ""];
-    await panel.onMessage({ type: "settingsScreen", action: "newSkill" });
+    await create("api endpoints", "Adding an API endpoint.");
     view = panel.settingsScreen.view;
     const third = path.join(mine, "api_endpoints.md");
-    check("Settings → New skill makes one, flagged until it says when to use it", fs.existsSync(third) && view.skills.some((s) => s.name === "api_endpoints" && /no instructions/.test(s.problem)),
+    check("Settings' form makes another, flagged until it has instructions", fs.existsSync(third) && view.skills.some((s) => s.name === "api_endpoints" && /no instructions/.test(s.problem)),
       view.skills.find((s) => s.name === "api_endpoints"));
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await panel.onMessage({ type: "settingsScreen", action: "openSkill", name: "code_review" });
@@ -274,6 +282,34 @@ async function main() {
       && /storage limit needs/.test(panel.settingsScreen.view.notice), panel.settingsScreen.view.notice);
     for (const name of ["toolModels", "assistSessionBlock", "storageLimitGB"]) await settings().update(name, undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- Advanced → Kinds of model: every model starts a Tool model; an arrow moves one across
+    // No gateway here: the model list stays as set (a settings change would otherwise ask the gateway for it again).
+    const realRefresh = panel.refreshModels;
+    panel.refreshModels = async () => {};
+    panel.models = [{ id: "model-a", name: "Model A" }, { id: "model-a-tools", name: "Model A (tools)" }];
+    await panel.onMessage({ type: "settings" });
+    check("every model starts as a Tool model", panel.settingsScreen.view.kinds.every((m) => !m.assist) && panel.settingsScreen.view.kinds.length === 2, panel.settingsScreen.view.kinds);
+    await panel.onMessage({ type: "settingsScreen", action: "moveModel", name: "model-a", index: 1 });
+    check("moving one makes it an Assist model, saved as the Assist models list", JSON.stringify(settings().get("assistModels")) === JSON.stringify(["model-a"])
+      && panel.settingsScreen.view.kinds.find((m) => m.id === "model-a").assist === true, settings().get("assistModels"));
+    const { laneOf, assistTwin } = require(path.join(REPO, "src", "lanes.js"));
+    check("... which the engine follows, with model-a as the Tool model's twin", laneOf("model-a", panel.settings()) === "assist" && laneOf("model-a-tools", panel.settings()) === "tool"
+      && assistTwin("model-a-tools", panel.settings(), ["model-a", "model-a-tools"]) === "model-a");
+    await panel.onMessage({ type: "settingsScreen", action: "moveModel", name: "model-a", index: 0 });
+    check("... and back", (settings().get("assistModels") || []).length === 0, settings().get("assistModels"));
+    await settings().update("assistModels", undefined, vscode.ConfigurationTarget.Global);
+    panel.models = [];
+    panel.refreshModels = realRefresh;
+
+    // ---- an enforced model filter applies to what's sent, and one that won't read offers nothing
+    await enforce({ ModelFilter: "^model-a$" });
+    check("an enforced filter refuses another model", panel.settings().modelAllowed?.("model-b") === false && panel.settings().modelAllowed?.("model-a") === true);
+    await enforce({ ModelFilter: "model-(a|b" });
+    check("... and one that won't read allows none (it fails closed), and is reported", panel.settings().modelAllowed?.("model-a") === false
+      && policy.problems.some((p) => /ModelFilter/.test(p)), policy.problems);
+    policy.read = realRead;
+    await policy.refresh();
+
     // ---- /skill: by hand in a new chat, else a message to the model (with a skills folder made first if there's none)
     const { SKILL } = require(path.join(REPO, "src", "prompt.js"));
     /** @type {any[]} */ const sent = [];
@@ -283,9 +319,8 @@ async function main() {
     await panel.onMessage({ type: "command", name: "skill", arg: "how we name branches" });
     check("/skill with what it's for makes your skills folder and asks the model", fs.existsSync(mine) && JSON.stringify(settings().get("skillsFolders")) === JSON.stringify([mine])
       && sent.length === 1 && sent[0].text === SKILL.about("how we name branches") && panel.promptContext().skillsFolder.toLowerCase() === mine.toLowerCase(), [sent, settings().get("skillsFolders")]);
-    answers = ["by hand", "Doing it by hand."];
     await panel.onMessage({ type: "command", name: "skill", arg: "" });
-    check("/skill alone in a new chat asks you for it instead", sent.length === 1 && fs.existsSync(path.join(mine, "by_hand.md")));
+    check("/skill alone in a new chat opens Settings' New skill form instead", sent.length === 1 && panel.settingsScreen.view?.skillForm === true, panel.settingsScreen.view?.tab);
     panel.chat.messages.push({ role: "user", content: "x" }, { role: "assistant", content: "y" });
     await panel.onMessage({ type: "command", name: "skill", arg: "" });
     check("/skill alone after a task asks the model to save how it was done", sent.length === 2 && sent[1].text === SKILL.fromChat, sent[1]);
@@ -326,6 +361,7 @@ async function main() {
   } finally {
     for (const back of undo) back?.();
     process.env.USERPROFILE = realHome;
+    process.env.APPDATA = realAppData;
     await settings().update("skillsFolders", undefined, vscode.ConfigurationTarget.Global);
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await sleep(300);

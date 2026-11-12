@@ -59,7 +59,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **/settings** opens the settings (`/settings skills` opens them at that tab); **/help** opens this guide.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
-- **Settings** (⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. The sliders button in the bar opens them from anywhere. A dot on a tab means something there wants a look.
+- **Settings** (the sliders button in the bar, or ⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs / RAG** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered and which kind each is, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. A dot on a tab means something there wants a look.
 - **While Solder works,** you can open other chats from the title menu to read them. A banner says where it's working, or that it needs your approval or has finished, with a button back to it. New messages wait until it's done.
 - **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
 
@@ -80,7 +80,7 @@ Solder has eleven tools, and no shell. It never runs commands: when something ne
 | `move_item` | Moves, renames or copies a file or folder, creating any folders it needs. It never overwrites, and lists the lines that still use the old path so they get fixed. It can be undone. |
 | `remove_item` | Deletes a file or folder, after asking. It can be undone. |
 | `problems` | Lists the errors and warnings VS Code shows. |
-| `plan` | For a task of two or more steps: a checklist you see in the chat, and above the box while it works (each step's goal, ticked off as it's done). When a step is done, its notes replace its tool output in the chat, so long tasks stay small. |
+| `plan` | For a task of two or more steps: a checklist above the box while it works (each step's goal, ticked off as it's done), shown completed after the answer. What the model read stays in the chat as with any task; only if a long task outgrows its room do finished steps' results go first, their notes standing in. |
 
 ## Your docs
 
@@ -115,8 +115,8 @@ A skill is your instructions for a kind of task: how you write PowerShell script
   ```
 
   A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
-- **Making one:** in **Settings → Your skills**, **New skill…** asks its name and when to use it, then opens the file for you to write the instructions (**Solder: New skill** in the command palette does the same). Click a skill there to edit it, or ✕ to delete it. Changes count from your next message.
-- **Where they're kept:** in `.solder\skills` in your home folder, which the first **New skill…** makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
+- **Making one:** in **Settings → Skills**, **New skill…** opens a short form there: its name, and when the model should use it. **Create** makes it and opens it in the editor for you to write the instructions (**Solder: New skill** in the command palette opens the same form). Click a skill to edit it, or ✕ to delete it. Changes count from your next message.
+- **Where they're kept:** in `Solder\skills` in your AppData folder (`%APPDATA%`), which the guided setup makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
 - **Saving one from a chat:** after a task you'll do again, type **/skill**. Solder writes up how the task was done as a skill, and asks before it saves the file. `/skill` followed by what it's for (`/skill how we name branches: feature/<ticket>-<slug>`) writes one from that instead. You can also just ask in your own words.
 - **The rules:**
   - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
@@ -129,7 +129,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
 
 Some gateways offer two kinds of model: **Tool models**, which take a system prompt and native tool calls (what Solder uses by default), and **Assist models**, which take plain text only and often keep the conversation on their side. Solder can use both.
 
-- **Tell them apart:** set **Tool models** to a pattern that matches your Tool models' ids. Every other model is then an Assist model, tagged **Assist** in the picker.
+- **Tell them apart:** in **Settings → Advanced → Kinds of model**, every model starts on the right as a Tool model; move an Assist model to the left with its arrow (**Refresh models** asks the gateway for the list). Assist models are tagged **Assist** in the picker. Admins can set the list by policy (`AssistModels`), or a pattern (**Tool models**, under *For admins*).
 - **How Assist models work in Solder:** Solder tells them about your workspace and its tools in plain words, and they ask for a tool by writing a short request in their reply. Steps, approvals, Review and Undo work the same. Assist models take no thinking level.
 - **Sessions:** if your gateway keeps Assist conversations in a session, set **Assist session block** to the name of the object its responses carry it in. Solder then sends only each new message.
 - **Switching:** a chat can move between the two at any point. If your Tool models' daily allowance runs out mid-task, Solder offers to switch the chat to the Assist version of the same model and carry on.
@@ -147,7 +147,7 @@ Each step sends the whole chat again, so long chats cost more per step. Solder k
 - it leaves out earlier turns' big file writes;
 - it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default.
 
-The panel shows what the chat has used, and the status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
+Under the box, the chat shows what it has **spent** (every request added up) and how much is **in context** (what each step sends now, as your gateway counted it): older turns are summarised once that passes **Compact at tokens**. The status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
 
 **Where a chat's tokens went:** **⋯ → Copy diagnostics** breaks them down, in numbers only: how many requests, tokens in and out, and what the tokens in carried over every request (tool results, the system prompt, the tool definitions, thought signatures and so on). It also shows what the next request holds, and how often a file was read again while its first read was still in the chat.
 

@@ -36,8 +36,8 @@ not one per reply. Batch edits only when you know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
 - For a task of two or more steps, call plan first, then do one step at a time. When a step is done, call plan \
-with done and notes on what you did and what later steps need: that step's results are then left out of the chat. \
-Call it alongside your other calls; skip it for small tasks.
+with done and notes for later steps, alongside your next calls. What you read stays in the chat: don't read it again. \
+Skip plan for small tasks.
 - If a change could lose the user's work, or the request is unclear and reading the code can't settle \
 it, ask first: one to three short questions, each with the choice you'd recommend.
 
@@ -155,8 +155,8 @@ linters), for one file or the whole workspace.", {
     path: { type: "string", description: `Just this file: ${RELATIVE}.` },
   }, []],
   plan: ["Sets out a task of several steps, or marks one finished. The user sees each step's goal as a checklist. \
-With steps: the plan (replacing any earlier one; steps already done stay done). With done: that step is finished, \
-and its notes are kept in place of its tool results, which are left out of the chat from then on.", {
+With steps: the plan (replacing any earlier one; steps already done stay done). With done: that step is finished; \
+its notes stand in for its results if the chat later needs the room.", {
     steps: { type: "array", description: "The plan, in order.", items: { type: "object", properties: {
       goal: { type: "string", description: "One sentence the user sees, such as \"Fix the date parsing in Get-Report\"." },
       work: { type: "string", description: "What the step needs: files, functions, what to check. Only you see it." } },

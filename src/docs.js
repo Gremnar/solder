@@ -186,14 +186,39 @@ function decode(text) {
 function attributes(tag) {
   /** @type {Record<string, string>} */
   const out = {};
-  for (const match of tag.matchAll(/([\w:.-]+)\s*=\s*"([^"]*)"/g)) out[match[1]] = decode(match[2]);
+  for (const match of tag.matchAll(/([\w:.-]+)\s*=\s*"([^"<>]*)"/g)) out[match[1]] = decode(match[2]);
   return out;
 }
 
 /** The text of every <tag>…</tag> in `xml`, joined. @param {string} xml @param {string} tag */
 function textsOf(xml, tag) {
-  const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?>([^<]*)</${tag}>`, "g");
+  const pattern = new RegExp(`<${tag}(?:\\s[^<>]*)?>([^<]*)</${tag}>`, "g");
   return [...xml.matchAll(pattern)].map((match) => decode(match[1])).join("");
+}
+
+/**
+ * Each <name …>…</name> in `xml`, in order: [the whole element, what's inside it]. Linear time: it stops at the first
+ * one with no closing tag (a lazy regex would scan to the end again from every start, which a crafted file can make
+ * take hours). @param {string} xml @param {string} name such as w:p
+ * @returns {Generator<[string, string]>}
+ */
+function* elements(xml, name) {
+  const open = "<" + name;
+  const close = "</" + name + ">";
+  let at = 0;
+  for (;;) {
+    const start = xml.indexOf(open, at);
+    if (start < 0) return;
+    const next = xml[start + open.length];
+    // <w:p> or <w:p …>, not <w:pPr> or <w:p/>
+    if (next !== ">" && next !== " " && next !== "\t" && next !== "\r" && next !== "\n") { at = start + open.length; continue; }
+    const headEnd = xml.indexOf(">", start);
+    if (headEnd < 0) return;
+    const end = xml.indexOf(close, headEnd);
+    if (end < 0) return;
+    yield [xml.slice(start, end + close.length), xml.slice(headEnd + 1, end)];
+    at = end + close.length;
+  }
 }
 
 /** A .docx, .xlsx or .pptx as text. @param {Buffer} data @param {string} ext */
@@ -207,11 +232,11 @@ function officeText(data, ext) {
 function wordText(files) {
   const xml = files.get("word/document.xml")?.toString("utf8") ?? "";
   const lines = [];
-  for (const [paragraph] of xml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)) {
-    const style = /<w:pStyle\s+w:val="([^"]+)"/.exec(paragraph)?.[1] ?? "";
+  for (const [paragraph] of elements(xml, "w:p")) {
+    const style = /<w:pStyle\s+w:val="([^"<>]+)"/.exec(paragraph)?.[1] ?? "";
     const level = /^heading\s?(\d)$/i.exec(style)?.[1] ?? (/^title$/i.test(style) ? "1" : "");
     let text = "";
-    for (const match of paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:(?:br|cr)\/>/g)) {
+    for (const match of paragraph.matchAll(/<w:t(?:\s[^<>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:(?:br|cr)\/>/g)) {
       text += match[1] !== undefined ? decode(match[1]) : match[0].startsWith("<w:tab") ? "\t" : " ";
     }
     text = text.replace(/[  ]+$/, "");
@@ -223,27 +248,26 @@ function wordText(files) {
 /** Excel: "## Sheet: name", then one line per row, cells separated by " | ". @param {Map<string, Buffer>} files */
 function excelText(files) {
   const read = (/** @type {string} */ name) => files.get(name)?.toString("utf8") ?? "";
-  const shared = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)].map((match) => textsOf(match[1], "t"));
+  const shared = [...elements(read("xl/sharedStrings.xml"), "si")].map(([, inside]) => textsOf(inside, "t"));
   /** @type {Map<string, string>} */
   const targets = new Map();
-  for (const [tag] of read("xl/_rels/workbook.xml.rels").matchAll(/<Relationship\s[^>]*>/g)) {
+  for (const [tag] of read("xl/_rels/workbook.xml.rels").matchAll(/<Relationship\s[^<>]*>/g)) {
     const a = attributes(tag);
     if (a.Id && a.Target) targets.set(a.Id, a.Target.startsWith("/") ? a.Target.slice(1) : "xl/" + a.Target.replace(/^\.\//, ""));
   }
   const out = [];
-  for (const [tag] of read("xl/workbook.xml").matchAll(/<sheet\s[^>]*>/g)) {
+  for (const [tag] of read("xl/workbook.xml").matchAll(/<sheet\s[^<>]*>/g)) {
     const a = attributes(tag);
     const target = targets.get(a["r:id"] ?? "");
     const xml = target ? read(target) : "";
     if (!xml) continue;
     out.push(`## Sheet: ${a.name ?? "?"}`);
     let rows = 0;
-    for (const [, row] of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    for (const [, row] of elements(xml, "row")) {
       if (++rows > MAX_SHEET_ROWS) break;
       const cells = [];
-      for (const match of row.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-        const type = attributes(match[1]).t ?? "";
-        const body = match[2] ?? "";
+      for (const [head, body] of cellsOf(row)) {
+        const type = attributes(head).t ?? "";
         const value = decode(/<v>([^<]*)<\/v>/.exec(body)?.[1] ?? "");
         cells.push(type === "s" ? shared[Number(value)] ?? "" : type === "inlineStr" ? textsOf(body, "t")
           : type === "b" ? (value === "1" ? "TRUE" : "FALSE") : value);
@@ -255,6 +279,28 @@ function excelText(files) {
   return out.join("\n");
 }
 
+/**
+ * A sheet row's cells: [their attributes, what's inside] for <c …>…</c> and <c …/>. Linear, as elements().
+ * @param {string} row @returns {Generator<[string, string]>}
+ */
+function* cellsOf(row) {
+  let at = 0;
+  for (;;) {
+    const start = row.indexOf("<c", at);
+    if (start < 0) return;
+    const next = row[start + 2];
+    if (next !== ">" && next !== " " && next !== "/" && next !== "\t" && next !== "\r" && next !== "\n") { at = start + 2; continue; }
+    const headEnd = row.indexOf(">", start);
+    if (headEnd < 0) return;
+    const head = row.slice(start + 2, headEnd);
+    if (head.endsWith("/")) { yield [head.slice(0, -1), ""]; at = headEnd + 1; continue; }
+    const end = row.indexOf("</c>", headEnd);
+    if (end < 0) return;
+    yield [head, row.slice(headEnd + 1, end)];
+    at = end + 4;
+  }
+}
+
 /** PowerPoint: "## Slide n", then one line per paragraph. @param {Map<string, Buffer>} files */
 function slidesText(files) {
   const names = [...files.keys()].sort((a, b) => Number(/(\d+)\.xml$/.exec(a)?.[1]) - Number(/(\d+)\.xml$/.exec(b)?.[1]));
@@ -262,7 +308,7 @@ function slidesText(files) {
   for (const name of names) {
     out.push(`## Slide ${/(\d+)\.xml$/.exec(name)?.[1]}`);
     const xml = files.get(name)?.toString("utf8") ?? "";
-    for (const [paragraph] of xml.matchAll(/<a:p>[\s\S]*?<\/a:p>/g)) {
+    for (const [paragraph] of elements(xml, "a:p")) {
       const text = textsOf(paragraph, "a:t").trim();
       if (text) out.push(text);
     }
@@ -314,8 +360,9 @@ function queryTerms(text) {
   if (/\b(AND|OR|NOT)\b/.test(trimmed)) return null;
   /** @type {string[]} */
   const terms = [];
-  for (const [, phrase, word] of trimmed.matchAll(/"([^"]*)"|([\w$][\w$.\-\\:]*)/gu)) {
-    const term = phrase !== undefined ? (phrase.match(/[\w$][\w$.\-\\:]*/gu) ?? []).join(" ") : word;
+  // Words in any language (\p{L}, \p{N}): \w is ASCII only, which cut "Übersicht" to "bersicht" and dropped "東京".
+  for (const [, phrase, word] of trimmed.matchAll(/"([^"]*)"|([\p{L}\p{N}_$][\p{L}\p{N}_$.\-\\:]*)/gu)) {
+    const term = phrase !== undefined ? (phrase.match(/[\p{L}\p{N}_$][\p{L}\p{N}_$.\-\\:]*/gu) ?? []).join(" ") : word;
     const quoted = `"${term}"`;
     if (term && !terms.includes(quoted)) terms.push(quoted);
   }

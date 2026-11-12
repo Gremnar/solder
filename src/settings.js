@@ -8,6 +8,7 @@ const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
 const { MAX_SKILLS, offered: isOffered } = require("./skills.js");
+const { laneOf } = require("./lanes.js");
 const path = require("node:path");
 
 class SettingsScreen {
@@ -16,7 +17,8 @@ class SettingsScreen {
    * @param {string} keyName the secret's name
    * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, refreshModels: () => Promise<void>,
    *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>,
-   *          deleteSkill: (name: string) => Promise<boolean>, policyChanged?: () => void,
+   *          createSkill: (name: string, when: string) => Promise<{file: string} | {problem: string}>,
+   *          deleteSkill: (name: string) => Promise<boolean>, orgSkillsFolders: () => string[], policyChanged?: () => void,
    *          testEmbedding: (model: string) => Promise<{dims: number, tokens: number}>}} hooks
    * @param {() => void} changed called whenever what the panel shows changes
    */
@@ -32,10 +34,10 @@ class SettingsScreen {
   }
 
   /** @param {string} [tab] the tab to open at (connection, docs, skills, rules or advanced); the last one used otherwise */
-  async open(tab = "") {
+  async open(tab = "", extra = {}) {
     // Read the policy again; if it changed, the panel follows it too (its connection, models and docs).
     if (await policy.refresh().catch(() => false)) this.hooks.policyChanged?.();
-    this.view = { open: true, tab, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()) };
+    this.view = { open: true, tab, skillForm: false, notice: "", noticeKind: "", checking: false, saved: "", ...(await this.values()), ...extra };
     // While it's open, the docs index's progress keeps the screen current, and so do skills added or edited elsewhere.
     clearInterval(this.timer);
     this.timer = setInterval(async () => {
@@ -75,11 +77,15 @@ class SettingsScreen {
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
       toolModels: String(config.get("toolModels", "")), assistSessionBlock: String(config.get("assistSessionBlock", "")),
+      // Each model offered, and its kind as it is now (from the Assist models list, or else the Tool models pattern).
+      kinds: this.hooks.models().map((m) => ({ id: m.id, name: m.name, assist: laneOf(m.id, { toolModels: String(config.get("toolModels", "")),
+        assistModels: config.get("assistModels", []) || [] }) === "assist" })),
+      kindsListed: (config.get("assistModels", []) || []).length > 0,
       storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
         ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"],
-        ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["storageLimit", "storageLimitGB"]]
+        ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"]]
         .map(([field, name]) => [field, policy.locked(name)])),
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
       skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
@@ -93,7 +99,7 @@ class SettingsScreen {
    * offered it (as the prompt does: those with instructions, up to MAX_SKILLS).
    */
   skills() {
-    const org = policy.orgSkills().map((folder) => path.resolve(folder).toLowerCase());
+    const org = this.hooks.orgSkillsFolders().map((folder) => folder.toLowerCase());
     let offered = 0;
     return this.hooks.skills().map((skill) => ({ name: skill.name, when: skill.when, problem: skill.problem, cut: skill.cut,
       org: org.includes(path.dirname(skill.path).toLowerCase()), offered: isOffered(skill) && ++offered <= MAX_SKILLS }));
@@ -238,9 +244,30 @@ class SettingsScreen {
         if (skill) await vscode.window.showTextDocument(vscode.Uri.file(skill.path), { preview: false });
         return;
       }
-      case "newSkill": {
-        // Asks its name and when to use it, makes a skills folder if there's none yet, and opens the file to write.
-        if (await this.hooks.newSkill()) { Object.assign(this.view, await this.values(), { saved: "skills", notice: "", noticeKind: "" }); this.changed(); }
+      case "newSkill": Object.assign(this.view, { skillForm: true, notice: "", noticeKind: "" }); this.changed(); return;
+      case "cancelSkill": Object.assign(this.view, { skillForm: false, notice: "", noticeKind: "" }); this.changed(); return;
+      case "moveModel": {
+        // A model moved to the other kind: the Assist models list is saved whole (made from the current kinds the first time).
+        if (this.view.locked?.kinds) { this.notice("Your organization sets which models are which.", "bad"); return; }
+        const id = String(message.name || "");
+        const assist = new Set(this.view.kinds.filter((/** @type {any} */ m) => m.assist).map((/** @type {any} */ m) => m.id));
+        if (message.index === 1) assist.add(id); else assist.delete(id);
+        await save("assistModels", [...assist], "kinds");
+        return;
+      }
+      case "refreshModels": {
+        this.notice("Asking the gateway for its models…");
+        await this.hooks.refreshModels();
+        Object.assign(this.view, await this.values(), { models: this.hooks.models() });
+        this.notice(`The gateway lists ${this.view.models.length} model${this.view.models.length === 1 ? "" : "s"}.`, "ok");
+        return;
+      }
+      case "createSkill": {
+        // Its name and when to use it, from the form; the skills folder is made if there's none yet.
+        const made = await this.hooks.createSkill(String(message.name || ""), String(message.when || ""));
+        if ("problem" in made) { this.notice(made.problem, "bad"); return; }
+        Object.assign(this.view, await this.values(), { skillForm: false, saved: "skills", notice: "Made: write its instructions in the editor.", noticeKind: "ok" });
+        this.changed();
         return;
       }
       case "deleteSkill": {

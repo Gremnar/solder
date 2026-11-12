@@ -28,6 +28,8 @@ class ChatStore {
     this.cache = new Map();
     /** @type {Map<string, Promise<void>>} each chat's save in progress, so the next waits for it */
     this.saving = new Map();
+    /** Chats deleted in this window: a save that was waiting (or writing) when one went doesn't bring it back. */
+    this.removed = new Set();
     /** @type {Map<string, {stamp: string, summary: any}>} each file's list entry, until the file changes */
     this.summaries = new Map();
   }
@@ -88,9 +90,11 @@ class ChatStore {
     // each writes the chat as it is when its turn comes, so the newest state is what lands.
     const prior = this.saving.get(chat.id) || Promise.resolve();
     const mine = prior.catch(() => {}).then(async () => {
+      if (this.removed.has(chat.id)) return; // deleted while this save waited: it doesn't come back
       const target = this.file(chat.id);
       const temporary = target + ".tmp";
       await fs.promises.writeFile(temporary, JSON.stringify(chat), "utf8");
+      if (this.removed.has(chat.id)) { await fs.promises.rm(temporary, { force: true }); return; }
       await fs.promises.rename(temporary, target);
     });
     this.saving.set(chat.id, mine);
@@ -100,6 +104,7 @@ class ChatStore {
 
   /** @param {string} id */
   remove(id) {
+    this.removed.add(id);
     this.cache.delete(id);
     this.summaries.delete(id + ".json");
     fs.rmSync(this.file(id), { force: true });

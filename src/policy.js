@@ -29,6 +29,7 @@ const SETTINGS = {
   model: { value: "Model", kind: "text" },
   modelFilter: { value: "ModelFilter", kind: "text" },
   toolModels: { value: "ToolModels", kind: "text" },
+  assistModels: { value: "AssistModels", kind: "list" },
   assistSessionBlock: { value: "AssistSessionBlock", kind: "text" },
   modelNames: { value: "ModelNames", kind: "names" },
   effort: { value: "Effort", kind: "choice", choices: ["default", "low", "medium", "high"] },
@@ -177,6 +178,10 @@ class Policy {
       // The gateway is enforced even when it's malformed: connecting then fails, rather than falling back to the user's.
       if (read === undefined && setting !== "endpoint") { this.problems.push(`${value}: not a usable ${kind}`); continue; }
       this.values.set(setting, read === undefined ? String(given) : read);
+      // A pattern that won't read is still enforced (it then matches nothing), and reported.
+      if ((setting === "modelFilter" || setting === "toolModels") && typeof read === "string" && read) {
+        try { new RegExp(read); } catch { this.problems.push(`${value}: not a valid regular expression`); }
+      }
     }
     const on = (/** @type {any} */ value) => value !== undefined && (typeof value === "number" ? value !== 0 : /^(1|true|yes)$/i.test(String(value).trim()));
     this.allowUserDocs = on(raw.get(ALLOW_USER_DOCS.toLowerCase()));

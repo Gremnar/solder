@@ -68,6 +68,8 @@
           "markdownDescription": "The full Chat Completions address, ending in `/chat/completions`. The key is set with **Solder: Set API key**." },
         "solder.model": { "type": "string", "default": "", "order": 2,
           "description": "The model new chats use (each chat can pick its own beside Send)." },
+        "solder.assistModels": { "type": "array", "default": [], "items": { "type": "string" }, "scope": "machine", "order": 11.9,
+          "markdownDescription": "The Assist models, by id: plain-text models reached through Solder's text protocol (and the gateway's sessions). Every other model is a Tool model. Easiest to set in Solder's Settings (Advanced → Kinds of model). When this is empty, **Tool models** decides instead." },
         "solder.toolModels": { "type": "string", "default": "", "scope": "machine", "order": 12,
           "markdownDescription": "A regular expression: models whose id matches are **Tool models** (a system prompt and native tool calls); every other model is an **Assist model**, which takes plain text only and is reached through Solder's text protocol and the gateway's sessions. Empty: every model is a Tool model." },
         "solder.assistSessionBlock": { "type": "string", "default": "", "scope": "machine", "order": 13,

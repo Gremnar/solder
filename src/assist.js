@@ -32,14 +32,18 @@ const CLOSING_FENCE = /\n[ \t]*`{2,}[ \t]*(?=\n|$)/g;
 function findRequests(text) {
   /** @type {{start: number, call: any, problem: string, tagged: boolean}[]} */
   const found = [];
+  // A fence inside a request already found (an example in a file it writes) is part of that request, never another.
+  let inside = -1;
   for (const match of text.matchAll(FENCE)) {
+    if (/** @type {number} */ (match.index) < inside) continue;
     const tag = match[1].toLowerCase();
     const body = text.slice(/** @type {number} */ (match.index) + match[0].length);
     if (tag.startsWith("tool") || SURELY_TOOL.test(body)) {
       found.push({ start: /** @type {number} */ (match.index), ...attempt(body), tagged: true });
+      inside = requestEnd(text, /** @type {number} */ (match.index));
     } else if (PLAIN_TAGS.has(tag) && TOOLISH.test(body)) {
       const tried = attempt(body);
-      if (tried.call) found.push({ start: /** @type {number} */ (match.index), ...tried, tagged: false });
+      if (tried.call) { found.push({ start: /** @type {number} */ (match.index), ...tried, tagged: false }); inside = requestEnd(text, /** @type {number} */ (match.index)); }
     }
   }
   if (!found.length) {
@@ -74,8 +78,13 @@ function requestEnd(text, start) {
   open.lastIndex = start;
   const fenced = open.exec(text);
   if (fenced) {
+    // The closing fence after its JSON, not the first one: the JSON may hold a fenced example of its own.
+    const from = start + fenced[0].length;
+    const body = text.slice(from);
+    let after = from;
+    try { after = from + (body.length - body.trimStart().length) + balanced(body.trimStart()).length; } catch { /* unreadable: the first fence */ }
     const close = new RegExp(CLOSING_FENCE.source, "g");
-    close.lastIndex = start + fenced[0].length;
+    close.lastIndex = after;
     const found = close.exec(text);
     return found ? found.index + found[0].length : text.length;
   }
@@ -268,7 +277,7 @@ function parseReply(reply, { cutOff = false } = {}) {
   // The same tool with the same arguments twice (written twice) runs once.
   const seen = new Set();
   const unique = calls.filter((c) => {
-    const k = c.name + JSON.stringify(c.args, Object.keys(c.args).sort());
+    const k = c.name + stableJson(c.args); // every level kept (a replacer array would drop nested keys)
     return !seen.has(k) && seen.add(k);
   });
   const visible = found.length ? String(reply).slice(0, found[0].start).trimEnd() : String(reply || "");
@@ -481,6 +490,13 @@ function holdSession(chat, model, plan, reply, sessionId) {
   chat.assist = { fields: reply.session.fields, startedAt: same ? old.startedAt : now, ...held };
   if (plan.kind === "stateful" && !same) return `replaced ${fp(sessionId(old.fields || {}))} by ${fp(id)} after ${Math.round((now - (old.startedAt || now)) / 60000)} min`;
   return same ? `continued ${fp(id)}, ${Math.round((now - (old.startedAt || now)) / 60000)} min old` : `started ${fp(id)} (${plan.kind})`;
+}
+
+/** JSON with object keys in order at every level, to tell two requests apart. @param {any} value @returns {string} */
+function stableJson(value) {
+  if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + stableJson(value[key])).join(",") + "}";
+  return JSON.stringify(value);
 }
 
 module.exports = { findRequests, parseReply, visibleText, decode, salvage, canonical, fence, resultMessage, requestBlock,

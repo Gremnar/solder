@@ -76,7 +76,7 @@ function estimate(text) {
  *   needsApproval(name: string, args: any): string | null,
  *   save(chat: Chat): Promise<void>,
  * }} Host
- * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number}} Settings
+ * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, modelAllowed?: ((id: string) => boolean) | null}} Settings
  */
 
 class Engine {
@@ -121,6 +121,8 @@ class Engine {
       u.prompt = (u.prompt || 0) + (usage?.prompt_tokens || 0);
       u.output = (u.output || 0) + (usage?.completion_tokens || 0);
       u.thinking = (u.thinking || 0) + (usage?.completion_tokens_details?.reasoning_tokens || 0);
+      // How big the chat is now, as the gateway counted it: the last request and its reply (shown as "in context").
+      if (usage?.prompt_tokens) u.context = usage.prompt_tokens + (usage.completion_tokens || 0);
     }
     this.emit({ type: "usage", chat: chat.id, answer: this.answerTokens, total: chat.usage.tokens,
       prompt: usage?.prompt_tokens || 0, credits: credits || null });
@@ -187,7 +189,7 @@ class Engine {
       // Results that say a step was stopped read like "the user said no": say plainly to run them again.
       let tail = chat.messages.length - 1;
       while (tail >= 0 && chat.messages[tail].role === "tool") tail--;
-      const stoppedSteps = chat.messages.slice(tail + 1).some((m) => m.content === TEXTS.stoppedRunning || m.content.startsWith(TEXTS.notRunStopped));
+      const stoppedSteps = chat.messages.slice(tail + 1).some((m) => m.content.startsWith(TEXTS.stoppedRunning) || m.content.startsWith(TEXTS.notRunStopped));
       // Stopped at the step limit: a call refused for it would otherwise read as still refused.
       const limited = !!chat.limitHit;
       delete chat.limitHit;
@@ -283,6 +285,8 @@ class Engine {
     let repairs = 0;
     for (;;) {
       const model = modelOf(chat, settings);
+      // Your organization's model filter applies to what's sent, not only to what the picker offers.
+      if (settings.modelAllowed && !settings.modelAllowed(model)) throw new Error(`Your organization doesn't allow the model ${model || "(none chosen)"}. Pick another in the model menu.`);
       /** @type {any} */
       let reply;
       /** @type {Stored} */
@@ -291,6 +295,7 @@ class Engine {
         // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
         const step = await this._assistStep(chat, model, settings, signal, repairs);
         if (step.repair) { repairs++; continue; }
+        repairs = 0; // the allowance of asking again is for each request, not the whole turn
         ({ reply, assistant } = step);
       } else {
         // Before every step, not just a new message, so a long task can't run far past the limit. Only
@@ -494,7 +499,7 @@ class Engine {
     const last = added[added.length - 1];
     if (last) {
       const notes = [];
-      if (roundsLeft <= WRAP_UP_ROUNDS) notes.push(TEXTS.wrapUp(roundsLeft));
+      if (roundsLeft <= WRAP_UP_ROUNDS && !signal.aborted) notes.push(TEXTS.wrapUp(roundsLeft)); // not on a step you stopped
       if (this.steers.length && !signal.aborted) {
         const queued = this._queued();
         const text = queued.text;
@@ -852,7 +857,9 @@ function repeatReads(chat) {
       const from = part ? Number(part[1].replace(/,/g, "")) : 1;
       const to = part ? Number(part[2].replace(/,/g, "")) : Infinity;
       const before = seen.get(key) || [];
-      const first = before.find((read) => read.from <= from && read.to >= to);
+      // A covering read still whole in the chat makes this one avoidable, whatever older ones were cut.
+      const covers = (/** @type {{from: number, to: number}} */ read) => read.from <= from && read.to >= to;
+      const first = before.find((read) => covers(read) && !read.message.meta?.stub) ?? before.find(covers);
       if (first?.message.meta?.stub) out.afterCut++;
       else if (first) { out.again++; out.againTokens += Math.round(estimate(message.content) * ratio); }
       seen.set(key, [...before, { from, to, message }]);
@@ -1090,15 +1097,19 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
     if (chat.messages[index].role === "assistant" && chat.messages[index].tool_calls?.length) { latest = index; break; }
   }
   const fresh = new Set(chat.messages.slice(latest + 1));
-  const finished = trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
+  // Older states of a plan the newest holds all of: nothing is lost by leaving them out.
   const superseded = supersedePlans(chat, start);
-  const stepped = finished || superseded;
-  const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const ratio = chat.tokenRatio || 1;
-  const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
-  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return stepped;
   const thisTask = new Set(chat.messages.slice(Math.max(start, taskStart(chat))));
   const ceiling = compactAt * IN_TASK_CEILING;
+  // A planned task trims as any task does: what it read stays whole (cutting it mid-task makes models read it again).
+  // Only once this task's results pass the in-task ceiling are finished steps' results cut, first, their notes standing in.
+  const inTask = chat.messages.filter((m) => thisTask.has(m) && m.role === "tool" && !m.meta?.stub).reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
+  const finished = inTask > ceiling && trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
+  const stepped = finished || superseded;
+  const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
+  const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
+  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return stepped;
   let kept = 0;
   let cut = false;
   for (let index = results.length - 1; index >= 0; index--) {

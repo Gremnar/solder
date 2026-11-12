@@ -7,9 +7,17 @@
  */
 const MAX_LINES = 500;
 
-/** An error's text with any file path or address taken out (a file-system error names the file). @param {unknown} text */
+/**
+ * An error's text with any file path or address taken out (a file-system error names the file). A quoted one goes
+ * whole, to its closing quote (folder names have spaces: C:\Users\Jo Smith\My Docs); an unquoted one to the next
+ * space; and any word that still holds a backslash goes too. @param {unknown} text
+ */
 function pathless(text) {
-  return String(text ?? "").replace(/(?:[a-z][\w+.-]*:\/\/|[A-Za-z]:[\\/]|\\\\|\/)[^\s'"`,;)]*/g, "<path>");
+  const start = String.raw`(?:[a-z][\w+.-]*:\/\/|[A-Za-z]:[\\/]|\\\\|\/)`;
+  return String(text ?? "")
+    .replace(new RegExp(String.raw`(['"\`])` + start + String.raw`[^'"\`\r\n]*\1`, "g"), "$1<path>$1")
+    .replace(new RegExp(start + String.raw`[^\s'"\`,;)]*`, "g"), (found) => found === "/" ? found : "<path>")
+    .replace(/[^\s'"`]*\\[^\s'"`]*/g, "<path>");
 }
 
 class Log {

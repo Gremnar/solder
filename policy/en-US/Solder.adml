@@ -5,7 +5,7 @@
   <description>Settings for Solder, the coding agent in VS Code, enforced by your organization.</description>
   <resources>
     <stringTable>
-      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later)</string>
+      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later; Assist models: 0.2.10 or later)</string>
       <string id="Cat_Solder">Solder</string>
       <string id="Cat_Connection">Connection</string>
       <string id="Cat_Model">Model</string>
@@ -26,6 +26,10 @@ Each user still sets their own API key: keys are never set by policy.</string>
       <string id="Model_Help">The model id Solder uses. Enabled: users can't pick another model, for new chats or existing ones.</string>
       <string id="ModelFilter">Models offered</string>
       <string id="ModelFilter_Help">A regular expression: only models whose id matches are offered in the model picker, for example -tools$ or ^(model-a|model-b)$.</string>
+      <string id="AssistModels">Assist models</string>
+      <string id="AssistModels_Help">The Assist models, by id, one per line: plain-text models Solder reaches through its written protocol (and the gateway's sessions). Every other model is a Tool model (a system prompt and native tool calls). This is what users set in Settings → Advanced → Kinds of model.
+
+Enabled: these are the Assist models, and users can't change which models are which. Not configured: users choose, or "Tool models" (a pattern) decides.</string>
       <string id="ToolModels">Tool models</string>
       <string id="ToolModels_Help">A regular expression: models whose id matches are Tool models (a system prompt and native tool calls). Every other model is an Assist model, which takes plain text only and is reached through Solder's text protocol and the gateway's sessions. Not configured or empty: every model is a Tool model.</string>
       <string id="AssistSessionBlock">Assist session block</string>
@@ -89,6 +93,7 @@ Not configured: feedback goes to Solder's support address.</string>
       <presentation id="Endpoint"><textBox refId="Endpoint"><label>Gateway address:</label></textBox></presentation>
       <presentation id="Model"><textBox refId="Model"><label>Model id:</label></textBox></presentation>
       <presentation id="ModelFilter"><textBox refId="ModelFilter"><label>Regular expression:</label></textBox></presentation>
+      <presentation id="AssistModels"><multiTextBox refId="AssistModels">Model ids, one per line:</multiTextBox></presentation>
       <presentation id="ToolModels"><textBox refId="ToolModels"><label>Regular expression:</label></textBox></presentation>
       <presentation id="AssistSessionBlock"><textBox refId="AssistSessionBlock"><label>Block name:</label></textBox></presentation>
       <presentation id="ModelNames"><textBox refId="ModelNames"><label>JSON:</label></textBox></presentation>

@@ -304,10 +304,11 @@
   let settingsValues = "";
   let settingsSaved = "";
   /** The settings tabs, in order: id and label. Done is in the bar above, so it's always in reach. */
-  const SETTINGS_TABS = [["connection", "Connection"], ["docs", "Docs"], ["skills", "Skills"], ["rules", "Rules"], ["advanced", "Advanced"]];
+  const SETTINGS_TABS = [["connection", "Connection"], ["docs", "Docs / RAG"], ["skills", "Skills"], ["rules", "Rules"], ["advanced", "Advanced"]];
   /** The tab that's open (kept while the panel lives, so Settings reopens where you left it), and the one last drawn. */
   let settingsTab = SETTINGS_TABS[0][0];
   let settingsTabShown = "";
+  let skillFormShown = false;
 
   function renderSettings() {
     const s = state.settings;
@@ -316,7 +317,7 @@
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
     const shape = JSON.stringify({ tab: settingsTab, noEndpoint: !s.endpoint, models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
-      skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills,
+      skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills, skillForm: s.skillForm, kinds: s.kinds,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
     const values = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
     const savedNow = s.saved && (s.saved !== settingsSaved || values !== settingsValues) ? s.saved : "";
@@ -406,10 +407,15 @@
       section("Models",
         label("Model filter", "modelFilter", saved("modelFilter")) + `<input class="field" id="sf-modelFilter" data-field="modelFilter" spellcheck="false" placeholder="A regular expression, such as -tools$" value="${escape(s.modelFilter)}">` +
         `<div class="hint">Only models whose id matches are offered.</div>` +
-        label("Tool models", "toolModels", saved("toolModels")) + `<input class="field" id="sf-toolModels" data-field="toolModels" spellcheck="false" placeholder="A regular expression: empty means every model" value="${escape(s.toolModels)}">` +
-        `<div class="hint">Models whose id matches take a system prompt and tool calls. Every other model is an Assist model: plain text only, and free on some gateways.</div>` +
-        label("Assist session block", "assistSessionBlock", saved("assistSessionBlock")) + `<input class="field" id="sf-assistSessionBlock" data-field="assistSessionBlock" spellcheck="false" placeholder="Empty: no sessions" value="${escape(s.assistSessionBlock)}">` +
-        `<div class="hint">The name of the object your gateway's responses carry an Assist session in. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div>`) +
+        `<div class="field-label"><span>Kinds of model</span>${orgMark("kinds")}${saved("kinds")}</div>` + kindsHtml(s) +
+        `<div class="hint"><b>Tool models</b> work with Solder's tools directly: use these when you can. <b>Assist models</b> take plain text only; ` +
+        `Solder reaches them through a written protocol, a little slower, and on some gateways they don't use your allowance. ` +
+        `Most gateways have only Tool models: then leave every model on the right.</div>` +
+        `<details class="more-settings"${s.toolModels || s.assistSessionBlock ? " open" : ""}><summary>For admins: by pattern, and Assist sessions</summary>` +
+        label("Tool models pattern", "toolModels", saved("toolModels")) + `<input class="field" id="sf-toolModels" data-field="toolModels" spellcheck="false" placeholder="A regular expression, such as -tools$" value="${escape(s.toolModels)}">` +
+        `<div class="hint">Used when no model has been moved above: models whose id matches are Tool models, the rest Assist models.</div>` +
+        label("Assist session field", "assistSessionBlock", saved("assistSessionBlock")) + `<input class="field" id="sf-assistSessionBlock" data-field="assistSessionBlock" spellcheck="false" placeholder="Empty: no sessions" value="${escape(s.assistSessionBlock)}">` +
+        `<div class="hint">Only if your gateway keeps Assist conversations in a session: the name of the field its answers carry it in (your gateway's admin knows it). Empty, Solder sends the whole conversation each time. Short names for models are set in <button class="link" data-sact="vscodeSettings">VS Code's settings</button>.</div></details>`) +
       section("Storage",
         label("Undo's storage limit (GB)", "storageLimit", saved("storageLimit")) + `<input class="field" id="sf-storageLimit" data-field="storageLimit" type="number" min="0.1" step="0.5" value="${s.storageLimit}">` +
         `<div class="hint">The most disk space the backups behind Review and Undo may use. Past it, the oldest go first.</div>`),
@@ -442,7 +448,23 @@
     const open = /** @type {HTMLElement | null} */ (document.getElementById("stab-" + settingsTab));
     if (bar && open) bar.scrollLeft = Math.max(0, Math.min(open.offsetLeft - 8, open.offsetLeft + open.offsetWidth + 8 - bar.clientWidth));
     if (fresh) /** @type {HTMLElement | null} */ (document.getElementById("stab-" + settingsTab))?.focus();
+    // The New skill form, as it opens: the cursor goes to its name.
+    if (s.skillForm && !skillFormShown) /** @type {HTMLElement | null} */ (document.getElementById("sf-skillName"))?.focus();
+    skillFormShown = !!s.skillForm;
   }
+
+  /** Settings' New skill form: what's typed goes to the extension, which makes the skill (or says what's wrong). */
+  function createSkill() {
+    const value = (/** @type {string} */ id) => /** @type {HTMLInputElement | null} */ (document.getElementById(id))?.value ?? "";
+    vscode.postMessage({ type: "settingsScreen", action: "createSkill", name: value("sf-skillName"), when: value("sf-skillWhen") });
+  }
+  // Enter in the form's fields creates it; Escape closes it.
+  transcript.addEventListener("keydown", (event) => {
+    const field = /** @type {HTMLElement} */ (event.target);
+    if (field.id !== "sf-skillName" && field.id !== "sf-skillWhen") return;
+    if (event.key === "Enter") { event.preventDefault(); createSkill(); }
+    else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); vscode.postMessage({ type: "settingsScreen", action: "cancelSkill" }); }
+  });
 
   /** Show a settings tab (a click, or the arrow keys in the tab bar). @param {string} id @param {boolean} [focus] */
   function showSettingsTab(id, focus = false) {
@@ -454,7 +476,7 @@
 
   // The tab bar's keys, as a tab list has them: the arrows (and Home, End) move between tabs, Tab goes into the tab's fields.
   transcript.addEventListener("keydown", (event) => {
-    const tab = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-stab]"));
+    const tab = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest('[role="tab"][data-stab]')); // a link in a tab's text isn't a tab
     if (!tab) return;
     const at = SETTINGS_TABS.findIndex(([id]) => id === tab.dataset.stab);
     const last = SETTINGS_TABS.length - 1;
@@ -479,6 +501,25 @@
     return state?.settings?.locked?.[field] ? `<span class="org">Set by your organization</span>` : "";
   }
 
+  /**
+   * Which models are which: Assist models on the left, Tool models on the right (where every model starts), each with an
+   * arrow to move it across. Refresh asks the gateway for its models. @param {any} s
+   */
+  function kindsHtml(s) {
+    const locked = !!s.locked?.kinds;
+    const row = (/** @type {any} */ m) => `<li><span class="kind-name" title="${escape(m.id)}">${escape(m.name)}</span>` +
+      (locked ? "" : m.assist
+        ? `<button class="kind-move" data-sact="moveModel" data-name="${escape(m.id)}" data-index="0" title="Make it a Tool model" aria-label="Make ${escape(m.name)} a Tool model">→</button>`
+        : `<button class="kind-move" data-sact="moveModel" data-name="${escape(m.id)}" data-index="1" title="Make it an Assist model" aria-label="Make ${escape(m.name)} an Assist model">←</button>`) + `</li>`;
+    const kinds = s.kinds || [];
+    const assist = kinds.filter((/** @type {any} */ m) => m.assist);
+    const tool = kinds.filter((/** @type {any} */ m) => !m.assist);
+    if (!kinds.length) return `<div class="hint">No models yet: set up the connection, then <button class="link" data-sact="refreshModels">get the models</button>.</div>`;
+    return `<div class="kinds"><div class="kind-col"><div class="kind-head">Assist models</div><ul>${assist.map(row).join("") || `<li class="empty">None</li>`}</ul></div>` +
+      `<div class="kind-col"><div class="kind-head">Tool models</div><ul>${tool.map(row).join("") || `<li class="empty">None</li>`}</ul></div></div>` +
+      `<div class="actions-row"><button class="link-button" data-sact="refreshModels">Refresh models</button></div>`;
+  }
+
   /** Settings' skills: each skill found (with anything wrong with it), then the folders they're in (the organisation's apart). @param {any} s */
   function skillsHtml(s) {
     const folderIcon = `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>`;
@@ -501,7 +542,15 @@
     return (list ? `<ul class="skills">${list}</ul>` : `<div class="hint">No skills yet.</div>`) +
       (over ? `<div class="hint warn">Only the first ${s.skillsOffered} skills are offered to the model.</div>` : "") +
       (s.skillsLocked ? `<div class="hint">Your organization sets the skills.</div>`
-        : `<div class="actions-row"><button class="link-button" data-sact="newSkill">New skill…</button> <button class="link-button" data-sact="addSkills">Use a folder of skills…</button></div>`) +
+        : s.skillForm
+          // New skill: its name and when to use it, here; then it opens in the editor for the instructions.
+          ? `<div class="skill-form"><label class="field-label" for="sf-skillName"><span>Name</span></label>` +
+            `<input class="field" id="sf-skillName" spellcheck="false" placeholder="powershell scripts" maxlength="60">` +
+            `<label class="field-label" for="sf-skillWhen"><span>When the model should use it</span></label>` +
+            `<input class="field" id="sf-skillWhen" placeholder="Writing or changing a PowerShell script.">` +
+            `<div class="hint">One sentence: it's all the model sees until it reads the skill. After Create, write the instructions in the editor.</div>` +
+            `<div class="actions-row"><button class="link-button primary" data-sact="createSkill">Create</button> <button class="link-button" data-sact="cancelSkill">Cancel</button></div></div>`
+          : `<div class="actions-row"><button class="link-button" data-sact="newSkill">New skill…</button> <button class="link-button" data-sact="addSkills">Use a folder of skills…</button></div>`) +
       `<div class="hint">A skill is your instructions for a kind of task. The model sees each skill's name and when to use it, and reads the whole skill before a task it covers.` +
       (s.skillsLocked ? "" : ` New skills are saved in ${escape(s.skillsHome)}.`) + `</div>` +
       (folders ? `<div class="field-label"><span>Skills folders</span></div><div class="docs">${folders}</div>` : "");
@@ -734,7 +783,11 @@
     }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
     if (quiet) { transcript.innerHTML = ""; shownParts = []; }
-    keepFocus(transcript, () => patch(transcript, parts));
+    // An empty part draws nothing, so it would throw the patch's count out and redraw everything each time.
+    const drawn = parts.filter(Boolean);
+    keepFocus(transcript, () => patch(transcript, drawn));
+    // The starter cards come in one after another (set here: the CSP drops a style attribute set through innerHTML).
+    transcript.querySelectorAll(".starter").forEach((el, i) => /** @type {HTMLElement} */ (el).style.setProperty("--i", String(i)));
     entrances(transcript, bornInTranscript, quiet);
     if (atBottom || stickToBottom) transcript.scrollTop = transcript.scrollHeight;
     stickToBottom = false;
@@ -904,7 +957,7 @@
     }
     // Starter cards: each sends its prompt (from prompt.js, through the extension) and starts the chat.
     const cards = (state.starters || []).map((/** @type {any} */ s, /** @type {number} */ i) =>
-      `<button class="starter" data-starter="${escape(s.id)}" style="--i:${i}"><span class="starter-title">${escape(s.title)}</span>` +
+      `<button class="starter" data-starter="${escape(s.id)}"><span class="starter-title">${escape(s.title)}</span>` +
       `<span class="starter-blurb">${escape(s.blurb)}</span></button>`).join("");
     return `<div class="welcome" data-enter="w:${state.chat.id}"><div class="logo">${ICONS.solder}</div><h2>Solder</h2>` +
       `<p class="lead">Ask about your code, or for a change. Every edit can be reviewed and undone.</p>` +
@@ -1032,7 +1085,12 @@
     $("send").title = state.busy ? "Send with the next step (Enter)" : "Send (Enter)";
     // footer
     const footer = [];
-    if (state.chat.tokens) footer.push(`<span title="Tokens this chat has used">${compact(state.chat.tokens)} tokens</span>`);
+    // What the chat has spent, and how big it is now (its last request, as the gateway counted it): it's summarised once
+    // that passes Compact at. One item: "41k spent · 13k in context".
+    if (state.chat.tokens || state.chat.context) {
+      footer.push(`<span title="Spent: tokens over all this chat's requests. In context: what each step sends now; older turns are summarised past ${Number(state.chat.compactAt).toLocaleString()}.">` +
+        [state.chat.tokens ? `${compact(state.chat.tokens)} spent` : "", state.chat.context ? `${compact(state.chat.context)} in context` : ""].filter(Boolean).join(" · ") + `</span>`);
+    }
     if (state.chat.freeTokens) footer.push(`<span title="Tokens on Assist models, which don't use the allowance">${compact(state.chat.freeTokens)} free</span>`);
     const share = state.credits && state.credits.limit ? Math.max(0, Math.min(1, state.credits.remaining / state.credits.limit)) : 0;
     if (state.credits) footer.push(`<span class="left" title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">` +
@@ -1549,6 +1607,7 @@
         const key = /** @type {HTMLInputElement | null} */ (document.getElementById("settings-key"))?.value ?? "";
         if (key.trim()) vscode.postMessage({ type: "settingsScreen", action: "key", key });
       } else if (d.sact === "clearKey") vscode.postMessage({ type: "settingsScreen", action: "key", key: "" });
+      else if (d.sact === "createSkill") createSkill();
       else vscode.postMessage({ type: "settingsScreen", action: d.sact, index: d.index !== undefined ? Number(d.index) : undefined, name: d.name });
     } else if (d.sfield) vscode.postMessage({ type: "settingsScreen", action: "set", field: d.sfield, value: d.value });
     else if (d.setup) {

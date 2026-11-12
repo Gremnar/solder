@@ -20,8 +20,25 @@ const { Log } = require("./log.js");
 const { MAX_SKILLS, offered } = require("./skills.js");
 const os = require("node:os");
 
-/** Where your skills go when you haven't chosen a folder: made by "New skill…", in your home folder. */
-const DEFAULT_SKILLS = () => path.join(os.homedir(), ".solder", "skills");
+const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
+
+/**
+ * Which models a request may use: any, unless your organization enforces a model filter, when only those it matches
+ * (none, if the filter won't read). null when there's no such rule.
+ * @returns {((id: string) => boolean) | null}
+ */
+function modelAllowed() {
+  if (!policy.locked("modelFilter")) return null;
+  const filter = String(solderSettings().get("modelFilter", "") || "");
+  if (!filter) return null;
+  try { const pattern = new RegExp(filter, "i"); return (id) => pattern.test(id); } catch { return () => false; }
+}
+
+/**
+ * Where your skills go when you haven't chosen a folder: %APPDATA%\Solder\skills on Windows (it roams with your
+ * profile), ~/.solder/skills elsewhere. The guided setup makes it.
+ */
+const DEFAULT_SKILLS = () => process.env.APPDATA ? path.join(process.env.APPDATA, "Solder", "skills") : path.join(os.homedir(), ".solder", "skills");
 
 /** A skill's file name from what was typed: lowercase words joined by underscores, .md. @param {string} text */
 function skillFileName(text) {
@@ -80,14 +97,19 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
-    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter(offered).length });
+    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter(offered).length,
+      // Your skills folder, ready (and in the setting) once setup is done, so New skill and /skill need no folder picking.
+      skillsHome: async () => {
+        if (policy.locked("skillsFolders") || this.skillsFolder()) return;
+        try { fs.mkdirSync(DEFAULT_SKILLS(), { recursive: true }); await this.addSkillsFolder(DEFAULT_SKILLS()); } catch { /* made later, when it's needed */ }
+      } });
     // Docs search by meaning: embeddings from the same gateway, and what they cost in the log.
     this.tools.embedder = (/** @type {string} */ model, /** @type {string[]} */ input, /** @type {AbortSignal | undefined} */ signal) =>
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
-      skills: () => this.tools.skills(), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(),
-      deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name),
+      skills: () => this.tools.skills(), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(), createSkill: (/** @type {string} */ name, /** @type {string} */ when) => this.createSkill(name, when),
+      deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name), orgSkillsFolders: () => this.tools.skillsFolders(policy.orgSkills()),
       policyChanged: () => { this.policyChanged(); },
       testEmbedding: async (/** @type {string} */ model) => {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
@@ -179,41 +201,47 @@ class SolderPanel {
     return true;
   }
 
-  /**
-   * Make a new skill and open it to write: asked its name and when to use it, saved in your first skills folder.
-   * With no folder yet, one is made in your home folder (DEFAULT_SKILLS) and added to the setting.
-   * @returns {Promise<string>} the new file ("" when it wasn't made)
-   */
+  /** New skill, from the command palette or /skill: Settings opens at the Skills tab, with the form to fill in. */
   async newSkill() {
     if (policy.locked("skillsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's skills, so you can't add your own."); return ""; }
+    await vscode.commands.executeCommand("solder.chat.focus");
+    await this.settingsScreen.open("skills", { skillForm: true });
+    return "";
+  }
+
+  /**
+   * Make a skill from Settings' form: its name and when to use it, saved in your first skills folder (the default one,
+   * made if you have none), then opened to write the instructions. A problem comes back as a sentence, nothing made.
+   * @param {string} name @param {string} when @returns {Promise<{file: string} | {problem: string}>}
+   */
+  async createSkill(name, when) {
+    if (policy.locked("skillsFolders")) return { problem: "Your organization sets the skills, so you can't add your own." };
     const folder = this.skillsFolder() || DEFAULT_SKILLS();
-    const given = await vscode.window.showInputBox({ title: "Solder: a new skill (1 of 2)", prompt: `Its name: a few words for the kind of task. It's saved as a file in ${folder}`,
-      placeHolder: "powershell scripts", ignoreFocusOut: true, validateInput: (text) => skillNameProblem(text, folder) });
-    if (!given) return "";
-    const when = await vscode.window.showInputBox({ title: "Solder: a new skill (2 of 2)", ignoreFocusOut: true,
-      prompt: "When should the model use it? One sentence: it's all the model sees until it reads the skill.", placeHolder: "Writing or changing a PowerShell script." });
-    if (when === undefined) return "";
-    const file = path.join(folder, skillFileName(given));
+    const problem = skillNameProblem(name, folder);
+    if (problem) return { problem };
+    const sentence = String(when || "").replace(/\s+/g, " ").trim();
+    if (!sentence) return { problem: "Say when the model should use it: it's all the model sees until it reads the skill." };
+    const file = path.join(folder, skillFileName(name));
     try {
       fs.mkdirSync(folder, { recursive: true });
-      fs.writeFileSync(file, `When to use: ${when.replace(/\s+/g, " ").trim()}\n\n`, { flag: "wx" });
+      fs.writeFileSync(file, `When to use: ${sentence}\n\n`, { flag: "wx" });
     } catch (error) {
-      vscode.window.showErrorMessage(`Solder: the skill couldn't be made (${/** @type {any} */ (error)?.code || error}).`);
-      return "";
+      return { problem: `The skill couldn't be made (${/** @type {any} */ (error)?.code || error}).` };
     }
-    if (!(await this.addSkillsFolder(folder))) return "";
+    if (!(await this.addSkillsFolder(folder))) return { problem: "Your organization sets the skills folders." };
     // Open, with the cursor where the instructions go.
     const editor = await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
     const end = new vscode.Position(editor.document.lineCount - 1, 0);
     editor.selection = new vscode.Selection(end, end);
-    return file;
+    return { file };
   }
 
   /** Delete one of the user's own skills (to the recycle bin), after asking. @param {string} name */
   async deleteSkill(name) {
     const skill = this.tools.skills().find((item) => item.name === name);
     if (!skill) return false;
-    const org = policy.orgSkills().some((folder) => path.resolve(folder).toLowerCase() === path.dirname(skill.path).toLowerCase());
+    // The organization's folders as the listing has them (~ expanded, resolved), so the check can't be dodged.
+    const org = this.tools.skillsFolders(policy.orgSkills()).some((folder) => folder.toLowerCase() === path.dirname(skill.path).toLowerCase());
     if (org) { vscode.window.showInformationMessage("That skill comes from your organization."); return false; }
     const pick = await vscode.window.showWarningMessage(`Delete the skill ${skill.name}?`, { modal: true, detail: `${skill.path} goes to the recycle bin.` }, "Delete");
     if (pick !== "Delete") return false;
@@ -243,7 +271,8 @@ class SolderPanel {
     const config = solderSettings();
     return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
       compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)),
-      toolModels: String(config.get("toolModels", "") || ""), assistSessionBlock: String(config.get("assistSessionBlock", "") || "") };
+      toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
+      modelAllowed: modelAllowed() };
   }
 
   /**
@@ -296,7 +325,11 @@ class SolderPanel {
       let ids = await this.client().models();
       const filter = config.get("modelFilter", "");
       if (filter) {
-        try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); } catch { /* shown in settings */ }
+        try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); }
+        catch {
+          // Your own filter that won't read is shown in Settings; your organization's offers nothing (it fails closed).
+          if (policy.locked("modelFilter")) { this.models = []; this.modelsProblem = MODEL_FILTER_BROKEN; this.post(); return; }
+        }
       }
       /** @type {Record<string, string>} */
       const names = config.get("modelNames", {});
@@ -562,7 +595,8 @@ class SolderPanel {
    */
   async chatAction(action, id) {
     const current = id === this.chat.id;
-    const chat = current ? this.chat : this.store.load(id);
+    // The chat a task runs (or last ran) in is the copy the engine saves: changed anywhere else, its next save would undo it.
+    const chat = current ? this.chat : id === this.runId && this.runChat ? this.runChat : this.store.load(id);
     if (!chat) return;
     const busy = () => vscode.window.showInformationMessage("Solder is working on a reply. That can wait until it's done, or press Stop first.");
     switch (action) {
@@ -672,7 +706,7 @@ class SolderPanel {
     this.chat.notes = [];
     const editor = message.editor ?? vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
-      const shown = vscode.workspace.asRelativePath(editor.document.uri, false);
+      const shown = this.tools.shown(editor.document.uri.fsPath);
       const picked = message.picked ?? (message.selection ? this.selectionBlock(editor) : null);
       if (picked) {
         parts.push(picked.block);
@@ -689,7 +723,9 @@ class SolderPanel {
   /** The selected text as context for the model, and its chip ("cart.js:12–18"), or null with nothing selected. @param {vscode.TextEditor} editor */
   selectionBlock(editor) {
     if (!editor || editor.selection.isEmpty || editor.document.uri.scheme !== "file") return null;
-    const shown = vscode.workspace.asRelativePath(editor.document.uri, false);
+    this.tools.useFolder(this.chat.folder);
+    // As the tools name paths (relative to the working folder, or in full), so the model can use it as it's given.
+    const shown = this.tools.shown(editor.document.uri.fsPath);
     const first = editor.selection.start.line + 1;
     const last = editor.selection.end.line + (editor.selection.end.character === 0 ? 0 : 1);
     let selected = editor.document.getText(editor.selection);
@@ -864,7 +900,8 @@ class SolderPanel {
     const current = (settings.modelLocked ? settings.model : chat.model || settings.model) || "";
     this.view.webview.postMessage({
       type: "state",
-      chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0 },
+      chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0,
+        context: /** @type {any} */ (chat.usage).context || 0, compactAt: this.settings().compactAt },
       chats: chatList(this.store.list()),
       // Assist models are tagged in the picker: free, slower, and no thinking level.
       models: (this.models.length || !current ? this.models : [{ id: current, name: current }]).map((m) => ({ ...m, assist: laneOf(m.id, settings) === "assist" })),
@@ -973,7 +1010,8 @@ class SolderPanel {
       from = to;
       if (at === running || at < 0) { items.push(...segment); continue; }
       // A finished turn: your message, its steps (and any words between them) folded, then the answer and the plan.
-      const head = segment[0]?.kind === "user" ? 1 : 0;
+      // Up to and including your message (a "summarised here" note can come before it).
+      const head = segment.findIndex((item) => item.kind === "user" && !item.resume) + 1;
       const lastStep = segment.reduce((found, item, index) => item.kind === "step" ? index : found, -1);
       const answerAt = segment.reduce((found, item, index) => item.kind === "answer" && index > lastStep ? index : found, -1);
       const tail = answerAt >= 0 ? answerAt : segment.length;

@@ -17,7 +17,8 @@ class SetupWizard {
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
    * @param {() => void} changed called whenever what the panel shows changes
-   * @param {{skills?: () => number}} [hooks] skills: how many skills the model is offered (for the summary)
+   * @param {{skills?: () => number, skillsHome?: () => Promise<void>}} [hooks] skills: how many skills the model is offered
+   *   (for the summary); skillsHome: makes your skills folder, if you have none
    */
   constructor(context, keyName, changed, hooks = {}) {
     this.context = context;
@@ -38,6 +39,7 @@ class SetupWizard {
 
   /** Start (or restart) at the first step, with what's already set filled in. */
   async start() {
+    await this.hooks.skillsHome?.(); // your skills folder, ready before the summary counts your skills
     const config = solderSettings();
     const key = (await this.context.secrets.get(this.keyName)) ?? "";
     this.view = {

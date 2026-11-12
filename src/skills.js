@@ -47,9 +47,10 @@ const MAX_FILE_BYTES = 1024 * 1024;
 function parse(raw) {
   let text = String(raw).replace(/^﻿/, "").replace(/\r\n?/g, "\n");
   let when = "";
-  // Front matter: a --- line, then lines up to the next --- line.
+  // Front matter: a --- line, then lines up to the next --- line, every one of them "key: value" (or indented, or
+  // blank): a skill that just opens with a --- rule isn't front matter.
   const front = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(text);
-  if (front) {
+  if (front && front[1].split("\n").every((line) => !line.trim() || /^\s/.test(line) || /^[A-Za-z_][\w-]*\s*:/.test(line))) {
     when = frontDescription(front[1]);
     text = text.slice(front[0].length);
   }

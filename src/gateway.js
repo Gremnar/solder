@@ -85,6 +85,18 @@ class Cancelled extends GatewayError {
  * Every allowance the server reports (x-ratelimit-limit-<bucket> with its -remaining-, and -reset- when sent).
  * @param {import("node:http").IncomingHttpHeaders} headers @returns {Credits[]}
  */
+/**
+ * A reset header's value in seconds: plain seconds ("42", "1.5"), or a duration ("6m0s", "1h2m", "20ms", "23h59m").
+ * NaN for anything else, so a value that can't be read isn't taken for a few seconds. @param {string} text
+ */
+function resetSeconds(text) {
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Number(text);
+  const parts = /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$/.exec(text);
+  if (!parts || !text) return NaN;
+  const [, h, m, s, ms] = parts.map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60 + (s || 0) + (ms || 0) / 1000;
+}
+
 function allowances(headers) {
   /** @type {Map<string, any>} */
   const buckets = new Map();
@@ -92,7 +104,7 @@ function allowances(headers) {
     const match = RATE_HEADER.exec(name.toLowerCase());
     if (!match) continue;
     const text = String(Array.isArray(raw) ? raw[0] : raw ?? "").trim();
-    const value = match[1] === "reset" ? Number.parseFloat(text) : Number.parseInt(text, 10);
+    const value = match[1] === "reset" ? resetSeconds(text) : Number.parseInt(text, 10);
     if (!Number.isFinite(value) || value < 0) continue;
     const bucket = buckets.get(match[2]) ?? { bucket: match[2] };
     bucket[match[1] === "reset" ? "resetSeconds" : match[1]] = value;
@@ -440,7 +452,8 @@ class GatewayClient {
       const req = lib.request(url, { method: body ? "POST" : "GET", signal,
         headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}),
           ...(this.apiKey ? { Authorization: "Bearer " + this.apiKey } : {}) } });
-      req.setTimeout(ms, () => req.destroy(new GatewayError("The gateway took too long to answer.", { transient: true })));
+      // A request that went out may have been seen (and billed): never sent again on its own.
+      req.setTimeout(ms, () => req.destroy(new GatewayError("The gateway took too long to answer.", { transient: true, uncertain: !!body })));
       req.on("error", (error) => reject(signal?.aborted ? new Cancelled()
         : error instanceof GatewayError ? error : this._transportFailure(error)));
       req.on("response", (res) => collect(res, this.maxResponseBytes)

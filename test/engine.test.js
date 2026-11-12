@@ -637,19 +637,20 @@ test("/fork copies the chat to carry on in: its own id and title, the same histo
   assert.equal(Engine.fork(copy).title, "Fix the cart (fork)", "a fork of a fork isn't (fork) (fork)");
 });
 
-test("plan: steps, then a finished step's results leave the chat for its notes; the newest reply's results stay", async () => {
+test("plan: a finished step's results stay while the task is small, and go first (notes standing in) once it's big", async () => {
   const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
   const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
   const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
   const client = fakeClient([
     { calls: [plan({ steps: [{ goal: "Fix A", work: "a.js, the null check" }, { goal: "Fix B", work: "b.js" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
     { calls: [call("r2", "read_file", { path: "a2.js" })] },
-    // Step 1 done, in the same reply as step 2's first read: that read is step 2's, and new, so it stays.
+    // Step 1 done, in the same reply as step 2's first read.
     { calls: [plan({ done: 1, notes: "a.js: defaulted $Path." }, "p2"), call("r3", "read_file", { path: "b.js" })] },
     (req) => {
       const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      assert.match(results.r1, /^\(Step 1 is done; this result \(Read a\.js\) is left out/);
-      assert.match(results.r2, /^\(Step 1 is done/);
+      // A small task: what step 1 read stays whole, so step 2 needn't read it again.
+      assert.match(results.r1, /^a\.js x/, "a finished step's read stays while the task is small");
+      assert.match(results.r2, /^a2\.js x/);
       assert.match(results.r3, /^b\.js x/, "step 2's read stays whole");
       assert.match(results.p2, /\[done\] Fix A\n   Notes: a\.js: defaulted \$Path\./);
       assert.match(results.p2, /\[now\] Fix B\n   Work: b\.js/);
@@ -667,6 +668,27 @@ test("plan: steps, then a finished step's results leave the chat for its notes; 
   assert.deepEqual(chat.plan.steps.map((step) => [step.goal, step.state]), [["Fix A", "done"], ["Fix C", "doing"]]);
   const p5 = chat.messages.find((m) => m.tool_call_id === "p5");
   assert.match(p5.content, /done needs a step number from 1 to 2/);
+
+  // A big task (past the in-task ceiling): finished steps' results are cut first, their notes standing in.
+  const huge = (/** @type {string} */ what) => ({ output: what + " " + "y".repeat(80_000), summary: "Read " + what });
+  const bigHost = fakeHost({ tools: { read_file: (args) => huge(args.path) } });
+  // Results are kept to about 30,000 characters each, so it takes a few to pass the ceiling (45k tokens at 30k).
+  const bigClient = fakeClient([
+    { calls: [plan({ steps: [{ goal: "Read A" }, { goal: "Read B" }] }, "q1"), call("s1", "read_file", { path: "a.js" }), call("s1b", "read_file", { path: "a2.js" }),
+      call("s1c", "read_file", { path: "a3.js" })] },
+    { calls: [plan({ done: 1, notes: "A read." }, "q2"), call("s2", "read_file", { path: "b.js" }), call("s2b", "read_file", { path: "b2.js" })] },
+    { calls: [call("s3", "read_file", { path: "c.js" }), call("s3b", "read_file", { path: "c2.js" })] },
+    (req) => {
+      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
+      assert.match(results.s1, /^\(Step 1 is done; this result \(Read a\.js\) is left out/, "the finished step's read goes first");
+      assert.match(results.s3, /^c\.js y/, "the newest stays");
+      return { content: "done" };
+    },
+    { content: "B read too." }, // the nudge about step 2, still to do
+  ]);
+  const bigEvents = [];
+  await engine(bigClient, bigHost, bigEvents, { compactAt: 30_000 }).ask(Engine.newChat(), "read them");
+  assert.deepEqual(bigEvents.filter((e) => e.type === "error").map((e) => e.message), [], "the checks in the scripted reply passed");
 });
 
 test("plan: done before any plan says so; a plan alone isn't a step to approve", async () => {

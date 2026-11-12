@@ -81,7 +81,11 @@ async function once(scenario, run) {
     if (!String(req.messages?.at(-1)?.content || "").startsWith("Give a short title")) requests++;
     return reply(req);
   };
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock }), onEvent: () => {} });
+  let failure = "";
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock }),
+    // The engine reports a failed reply as an event, not a throw: a run that ended on one is an error (a 429, say),
+    // not a model that got the task wrong.
+    onEvent: (/** @type {any} */ event) => { if (event.type === "error") failure = event.message || "error"; } });
   const chat = S.Engine.newChat();
   const started = Date.now();
   let error = "";
@@ -101,7 +105,7 @@ async function once(scenario, run) {
   try {
     why = await scenario.check({ ws, chat, answer, read: (/** @type {string} */ p) => fs.readFileSync(path.join(root, p), "utf8"), load: loader(root), skillsFolder });
   } catch (e) { why = "check failed: " + /** @type {any} */ (e)?.message; }
-  if (error) why = "error: " + error;
+  if (error || failure) why = "error: " + (error || failure);
   const replies = chat.messages.filter((/** @type {any} */ m) => m.role === "assistant");
   const withCalls = replies.filter((/** @type {any} */ m) => m.tool_calls?.length);
   const plan = /** @type {any} */ (chat).plan;
@@ -115,6 +119,8 @@ async function once(scenario, run) {
     maxReads: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => c.function.name === "read_file").length)),
     planned: !!plan, planLeft: plan ? plan.steps.filter((/** @type {any} */ s) => s.state !== "done").length : 0,
     nudges: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
+    // Reads of lines already read in the same task: still in the chat (avoidable), or after the first was cut.
+    rereads: S.repeatReads ? S.repeatReads(chat).again : undefined, rereadsAfterCut: S.repeatReads ? S.repeatReads(chat).afterCut : undefined,
     skillsRead: skillsFolder ? ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && path.resolve(root, String(c.args.path || "")).startsWith(skillsFolder))
       .map((/** @type {any} */ c) => path.basename(String(c.args.path), ".md")) : undefined,
     answer: answer.replace(/\s+/g, " ").slice(0, 300),
@@ -125,7 +131,7 @@ async function once(scenario, run) {
   fs.rmSync(root, { recursive: true, force: true });
   if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +
-    (row.nudges ? `  nudged ${row.nudges}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
+    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.nudges ? `  nudged ${row.nudges}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
   return row;
 }
 

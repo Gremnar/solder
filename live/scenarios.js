@@ -523,4 +523,15 @@ SCENARIOS.push({
   },
 });
 
+SCENARIOS.push({
+  name: "walkthrough",
+  about: "explain a long file section by section, with a plan (the case where plans used to cut what was read, so it was read again)",
+  setup: (w) => w("src/inventory-sync.js", fs.readFileSync(require("node:path").join(__dirname, "fixtures", "walk-app.js"), "utf8")),
+  task: "Explain what src/inventory-sync.js does and how it does it, section by section. Use a plan, one step per section.",
+  check: ({ answer }) => {
+    const named = ["fetchStockLevels", "reconcileOrders", "sendShortfallAlert", "startScheduler"].filter((name) => answer.includes(name)).length;
+    return named >= 3 ? "" : `the answer names ${named} of the 4 sections' main functions`;
+  },
+});
+
 module.exports = { SCENARIOS };

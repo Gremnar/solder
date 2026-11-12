@@ -181,12 +181,12 @@ class WorkspaceTools {
       // Anything that leaves the workspace, or lands outside it, is asked about.
       let from, to;
       try { from = this.resolve(args.from); to = this.resolve(args.to); } catch { return null; }
-      const risky = runsPrograms(from.full) || runsPrograms(to.full);
+      const risky = programRisk(from.full) || programRisk(to.full);
       if (risky) return RUNS_PROGRAMS(risky);
       if (from.inside && to.inside) return null;
       return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
     }
-    if (name === "read_file" || name === "symbols") {
+    if (name === "read_file" || name === "symbols" || name === "problems") {
       if (!args.path) return null;
       let file;
       try { file = this.resolve(args.path); } catch { return null; }
@@ -212,7 +212,7 @@ class WorkspaceTools {
       return what + (target.inside ? "." : ", outside the workspace folder.") + unsaved;
     }
     if (name !== "write_file" && name !== "edit_file") return null;
-    const risky = runsPrograms(target.full);
+    const risky = programRisk(target.full);
     if (risky) return RUNS_PROGRAMS(risky);
     if (!target.inside) return "It changes a file outside the workspace folder.";
     // Solder saves what it changes: unsaved typing in that file would be saved along with it.
@@ -548,7 +548,8 @@ class WorkspaceTools {
     }
     const scope = target ? target.full : this.base();
     const spec = path.relative(top, scope).split(path.sep).join("/");
-    const pathspec = ["--", spec && spec !== "." ? spec : "."];
+    // Literal, so a folder like app/[slug] isn't read as a pattern.
+    const pathspec = ["--", spec && spec !== "." ? ":(literal)" + spec : "."];
     const where = target ? target.shown : (this.folder || "");
     const hasHead = await runGit(git, top, ["rev-parse", "--verify", "--quiet", "HEAD"], signal).then(() => true, () => false);
     const fail = (/** @type {any} */ error) => { throw new ToolError(RESULTS.gitFailed(error.message)); };
@@ -997,11 +998,14 @@ class WorkspaceTools {
     } catch (error) { if (error instanceof ToolError) throw error; }
     const open = vscode.workspace.textDocuments.find((doc) => doc.uri.scheme === "file" && doc.uri.fsPath.toLowerCase() === file.full.toLowerCase());
     // #5: a file that isn't open is read as its encoding says (UTF-16 included), so its backup is its text.
-    const previous = exists ? (open ? open.getText() : decodeText(fs.readFileSync(file.full))) : "";
+    const raw = exists && !open ? fs.readFileSync(file.full) : null;
+    const previous = exists ? (open ? open.getText() : decodeText(/** @type {Buffer} */ (raw))) : "";
     const backup = exists ? await this.backup(chat, file, previous) : "";
     const before = exists ? problemKeys(file.uri) : new Set();
     if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
     const madeFolder = exists ? "" : firstMissing(path.dirname(file.full));
+    /** @type {Buffer | null} what went to disk, for a file that wasn't open */
+    let written = null;
     if (open) {
       stale(open, file);
       const edit = new vscode.WorkspaceEdit();
@@ -1010,7 +1014,10 @@ class WorkspaceTools {
       await saveOrRevert(open, file, previous);
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file.full)));
-      try { await vscode.workspace.fs.writeFile(file.uri, Buffer.from(content, "utf8")); }
+      // A file that's there keeps its encoding (a UTF-8 BOM, which Windows PowerShell 5.1 needs for non-ASCII text, or
+      // UTF-16) and its line endings; a new one is UTF-8 as written.
+      written = raw ? encodedLike(raw, previous, content) : Buffer.from(content, "utf8");
+      try { await vscode.workspace.fs.writeFile(file.uri, written); }
       catch { throw new ToolError(RESULTS.notWritable(file.shown)); }
       await vscode.workspace.openTextDocument(file.uri).then(() => {}, () => {}); // lets language servers look
     }
@@ -1019,7 +1026,7 @@ class WorkspaceTools {
     return { output: RESULTS.written(exists, file.shown, lines) + problems.text + (exists && SIGNED.test(previous) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder,
-        after: hash(open ? open.getText() : content) } };
+        after: hash(open ? open.getText() : written ? String(decodeText(written)) : content) } };
   }
 
   // ------------------------------------------------------------------- problems --
@@ -1183,7 +1190,9 @@ class WorkspaceTools {
     const { files, bytes } = folder ? measure(target.full) : { files: 1, bytes: stat.size };
     // A copy first, so Undo can put it back (the Recycle Bin isn't there on every drive).
     let backup = "";
-    if (bytes <= MAX_REMOVE_BACKUP_BYTES && files <= MAX_REMOVE_BACKUP_FILES) {
+    // Only a copy that fits under the storage limit: one over it would be pruned straight away, after the delete.
+    const limit = Math.max(0.1, Number(solderSettings().get("storageLimitGB", 5)) || 5) * 1024 ** 3;
+    if (bytes <= Math.min(MAX_REMOVE_BACKUP_BYTES, limit * 0.5) && files <= MAX_REMOVE_BACKUP_FILES) {
       const store = path.join(this.backupsRoot(), chat.id);
       this.pruneSoon();
       fs.mkdirSync(store, { recursive: true });
@@ -1217,7 +1226,8 @@ class WorkspaceTools {
       }
       return !!change.stamp && fs.existsSync(change.path) && stampOf(change.path) !== change.stamp;
     };
-    if ((change.after || change.stamp) && changedSince()) throw new Error(`${change.shown} has changed since that step, so undoing it would lose those changes. Use Review to compare, and change it by hand.`);
+    // A move is put back whatever happened since: moving it back loses nothing.
+    if ((change.after || change.stamp) && !(change.moved && !change.copied) && changedSince()) throw new Error(`${change.shown} has changed since that step, so undoing it would lose those changes. Use Review to compare, and change it by hand.`);
     if (change.moved) {
       if (fs.existsSync(change.from)) throw new Error(`Something is already at ${change.fromShown}; move it first.`);
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.from)));
@@ -1478,12 +1488,14 @@ function runGit(git, cwd, args, signal) {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { if (out.length < 4_000_000) out += chunk; });
     child.stderr.on("data", (chunk) => { if (errors.length < 10_000) errors += chunk; });
-    const timer = setTimeout(() => child.kill(), GIT_MS);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, GIT_MS);
     child.on("error", (error) => { clearTimeout(timer); reject(error); });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve(out);
-      else reject(Object.assign(new Error(errors.trim().split(/\r?\n/)[0] || `git stopped (exit ${code})`), { exit: code }));
+      else reject(Object.assign(new Error(timedOut ? `git took longer than ${GIT_MS / 1000} seconds, so it was stopped`
+        : errors.trim().split(/\r?\n/)[0] || `git stopped (exit ${code})`), { exit: code }));
     });
   });
 }
@@ -1637,8 +1649,16 @@ function treeStamp(full) {
   return "tree:" + hash(parts.join("\n"));
 }
 
+/**
+ * What a file holds, to tell later whether it's been changed: a hash of its content (up to 5 MB; past that, its size).
+ * By content, not time, so a file put back as it was (Undo all undoing a later edit first) counts as unchanged.
+ * @param {string} full
+ */
 function stampOf(full) {
-  try { const stat = fs.statSync(full); return `${stat.mtimeMs}:${stat.size}`; } catch { return ""; }
+  try {
+    const stat = fs.statSync(full);
+    return stat.size <= 5 * 1024 * 1024 ? "c:" + hash(fs.readFileSync(full).toString("latin1")) : `s:${stat.size}`;
+  } catch { return ""; }
 }
 
 /** Lines in a piece of text, not counting the empty one after a final newline. @param {string} text */
@@ -1668,7 +1688,15 @@ const PROGRAM_FILES = [".gitattributes", ".gitmodules", ".gitconfig"];
 const RUNS_PROGRAMS = (/** @type {string} */ what) =>
   `It changes ${what}, where a change can make programs run (git's hooks and filters, VS Code's tasks and settings).`;
 
-/** The git or VS Code folder or file a path is in, or "". @param {string} full */
+/**
+ * The git or VS Code folder or file a path is in, as written or once Windows has resolved it: an 8.3 short name
+ * (GIT~1 for .git) or a link to it counts too. "" when it's neither. @param {string} full
+ */
+function programRisk(full) {
+  return runsPrograms(full) || runsPrograms(realPath(full));
+}
+
+/** The git or VS Code folder or file a path is in, as written, or "". @param {string} full */
 function runsPrograms(full) {
   const parts = path.resolve(full).split(/[\\/]/).map((part) => part.toLowerCase());
   const folder = parts.slice(0, -1).find((part) => PROGRAM_FOLDERS.includes(part));
@@ -1713,6 +1741,24 @@ function withoutSignatureLines(diff) {
 const SIGNATURE_LINE = /^[ +-]\s*(?:#|''|\/\/) [A-Za-z0-9+/=]{16,}\s*$/;
 
 /** Whether `full` is `folder` or inside it. @param {string} full @param {string} folder */
+/**
+ * New text, written as an existing file was: the same byte-order mark and encoding (UTF-8, UTF-8 with BOM, UTF-16 LE
+ * or BE), and its line endings when it used CRLF throughout. @param {Buffer} raw the file as it was
+ * @param {string | null} previous its text @param {string} text the new text @returns {Buffer}
+ */
+function encodedLike(raw, previous, text) {
+  const crlf = typeof previous === "string" && previous.includes("\r\n") && !/(^|[^\r])\n/.test(previous);
+  const body = crlf ? text.replace(/\r?\n/g, "\r\n") : text;
+  if (raw[0] === 0xff && raw[1] === 0xfe) return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(body, "utf16le")]);
+  if (raw[0] === 0xfe && raw[1] === 0xff) {
+    const le = Buffer.from(body, "utf16le");
+    for (let i = 0; i + 1 < le.length; i += 2) { const b = le[i]; le[i] = le[i + 1]; le[i + 1] = b; }
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), le]);
+  }
+  const bom = raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf;
+  return Buffer.concat([bom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0), Buffer.from(body, "utf8")]);
+}
+
 /** A network path (\\server\share or //server/share). @param {string} full */
 function isNetwork(full) {
   return /^(\\\\|\/\/)/.test(full);
@@ -1775,7 +1821,9 @@ function around(line, pattern) {
  * @param {string} query @param {boolean} regex @param {boolean} caseSensitive
  */
 function aroundLongMatches(lines, root, query, regex, caseSensitive) {
-  const pattern = searchPattern(query, regex, caseSensitive);
+  // A model's regular expression is never run in JavaScript on a long line: ripgrep's engine is linear, JavaScript's
+  // can backtrack for hours on a pattern like (a+)+b, with no way to stop it. Plain text is safe to look for.
+  const pattern = regex ? null : searchPattern(query, regex, caseSensitive);
   if (!pattern) return lines.map((line) => line.replace(RG_OMITTED, "…"));
   /** @type {Map<string, string[] | null>} */
   const files = new Map();
@@ -1827,7 +1875,8 @@ function globPattern(glob) {
     else if (char === "," && depth) out += "|";
     else out += char.replace(/[.+^$()|\\]/g, "\\$&");
   }
-  return new RegExp("^" + out + "$", "i");
+  // A { left open (**/*.{ts,tsx) is closed, so the pattern always reads.
+  return new RegExp("^" + out + ")".repeat(depth) + "$", "i");
 }
 
 /** Folders a direct walk never goes into. */
@@ -2110,4 +2159,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
