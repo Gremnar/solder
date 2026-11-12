@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.10 (2026-11-12)
 
 - **A finished turn folds up.** While Solder works, every step shows as it happens. Once the turn is done, its steps fold into one row (how many, how many changes, how long), with **Undo all** on it; click the row to see them again, with Review and Undo on each.
 - **The plan shows once.** While a planned task runs, its checklist is only above the box; when the turn is done, it's shown completed after the answer (it used to be in the chat and above the box at once).
 - **The step limit is a pause, not an error.** A turn that reaches the most steps for one message says "Paused after 30 steps", in a calm colour, with **Continue** and **Stop here**. It's no longer nudged to carry on right at the limit (which made it try one more step, refused), and **Continue** tells the model it has a fresh allowance (it sometimes read the refused step as still blocked).
 - **In Settings, the title closes them** (as Done does); it used to open a list of chats that did nothing there.
 - **Fix:** Undo all was hard to read in some themes.
-
 - **Security fixes from a twelve-reviewer bug hunt.** A path written with a Windows short name (`GIT~1` for `.git`) or through a link no longer gets past the approval for git's and VS Code's own files. `problems` on a file outside the workspace now asks first. An Assist model's example of a tool request inside a file it writes is no longer run as a request. An enforced **Model filter** now applies to what's sent, not only to the picker, and one that isn't a valid pattern offers no models (it used to offer all of them). **Copy diagnostics** no longer lets parts of a path with spaces through. An organization's skill can't be deleted when its policy folder starts with `~`.
 - **Fixes for hangs and lost work.** A crafted Word, Excel or PowerPoint file in a docs folder could freeze VS Code while indexing (it now reads in linear time), and so could a regular-expression search with a pathological pattern. An Assist side request that timed out could be sent again (and billed again). `write_file` on a file that wasn't open now keeps its encoding (a UTF-8 BOM, UTF-16) and CRLF line endings. **Undo all** no longer stops at a moved or copied file edited later in the same task. A deleted item's backup can't be pruned away by a small storage limit, and a deleted chat no longer comes back when a save was waiting.
 - **Plans trim like any task.** A finished step's results used to be cut as soon as the step was done, so models read the same lines again (the same walkthrough cost 115k tokens with a plan, 41k without). They now stay in the chat, and go first only if a long task outgrows its room. Live, on a long-file walkthrough: Sol's re-reads fell from about 4 a run to 1, and its tokens by about a quarter.
