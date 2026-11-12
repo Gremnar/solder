@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.11 (2026-11-12)
 
 - **Read-only mode, on by default.** A new install of Solder reads, searches and explains code, but can't create, edit, move or delete files: the tools that change files aren't offered to the model, and aren't run if it asks for one anyway. It shows the change instead. Turn changes on once with **Enable tools** at the top of the panel, in the guided setup (a new last step), or in **Settings → Connection → Changes**; Solder never turns read-only mode back on by itself. If you set Solder up before this version, changes stay on. Organizations can enforce either with the new `ReadOnly` policy (in the ADMX templates). In read-only mode, `/skill` opens the New skill form, as the model can't write the file.
 
