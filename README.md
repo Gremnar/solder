@@ -8,6 +8,7 @@
 
 **Every setting can be enforced and locked through Group Policy or Intune.**
 
+- **Read-only by default:** Solder starts unable to change files, for policies that want agentic AI read-only unless a user opts in. Enforce it, or turn changes on for everyone.
 - **Lock the gateway:** set the address once for every user, and they can't point Solder anywhere else. If the policy can't be read, Solder doesn't connect.
 - **Rules for everyone:** add your organization's rules to every user's chats, after their own.
 - **Shared docs:** give everyone the same reference folders, with or without folders of their own.
@@ -29,10 +30,19 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
    - **your API key:** kept in VS Code's secret storage, never in settings. Solder checks it by listing the models;
    - **your default model;**
    - **your own docs folders:** optional, see [Your docs](#your-docs);
-   - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`".
+   - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`";
+   - **whether Solder may change files:** see [Read-only mode](#read-only-mode).
 3. **Ask.** Type in the box at the bottom and press **Enter**; **Shift+Enter** adds a new line. Or pick one of the cards on a new chat: summarise the codebase, explain or fix a script, clean up, learn something, review your changes, or ask what Solder can do.
 
 <p><img src="media/screenshots/new-chat.png" width="380" alt="A new chat: starter cards for common tasks"> <img src="media/screenshots/guided-setup.png" width="380" alt="Guided setup: choosing the default model"></p>
+
+## Read-only mode
+
+**Solder starts in read-only mode.** It reads, searches and explains your code, but it can't create, edit, move or delete files: the tools that change files aren't offered to the model, and aren't run if it asks for one anyway. When a task needs a change, it shows you what to change instead.
+
+- **Turn changes on** with **Enable tools** in the strip at the top of the panel, in the guided setup, or in **Settings → Connection → Changes**. It's a one-time choice: Solder never goes back to read-only mode by itself. You can turn it back on in Settings.
+- **For organizations:** the `ReadOnly` policy keeps every user in read-only mode, or turns changes on for everyone (see [docs/POLICY.md](docs/POLICY.md)).
+- **Already using Solder?** If you had set it up before read-only mode came in, changes stay on.
 
 ## Using Solder
 
@@ -157,6 +167,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 |---|---|
 | **Endpoint** | your gateway's `/chat/completions` address |
 | **Model**, **Model filter**, **Model names** | the default model; which models are offered; short names for the picker |
+| **Read only** | read-only mode (on until you turn changes on; see [Read-only mode](#read-only-mode)) |
 | **Effort** | how hard new chats think |
 | **Compact at tokens** | when the older part of a chat is summarised |
 | **Max rounds** | the most steps with tool calls for one message |

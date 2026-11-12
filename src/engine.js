@@ -76,7 +76,9 @@ function estimate(text) {
  *   needsApproval(name: string, args: any): string | null,
  *   save(chat: Chat): Promise<void>,
  * }} Host
- * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, modelAllowed?: ((id: string) => boolean) | null}} Settings
+ * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, modelAllowed?: ((id: string) => boolean) | null,
+ *            readOnly?: boolean}} Settings
+ *   readOnly: Solder's read-only mode: the tools that change files are neither offered nor run
  */
 
 class Engine {
@@ -279,7 +281,7 @@ class Engine {
   /** @param {Chat} chat @param {AbortSignal} signal */
   async _loop(chat, signal) {
     const settings = this.settings();
-    const tools = toolDefinitions();
+    const tools = toolDefinitions(!!settings.readOnly);
     let rounds = 0;
     let nudged = false;
     let repairs = 0;
@@ -442,6 +444,7 @@ class Engine {
     /** @type {Stored[]} */
     const added = [];
     let batchChars = 0;
+    const readOnly = !!this.settings().readOnly;
     const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
     // Several edits to one file in a reply: its problems are checked once, after the last of them.
     const group = calls[0]?.id || "";
@@ -460,6 +463,9 @@ class Engine {
         result = { output: TEXTS.notRunBatch(MAX_READ_BATCH, MAX_BATCH), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && name !== "plan" && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
+      } else if (readOnly && !READ_ONLY.has(name)) {
+        // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered.
+        result = { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
       } else if (seen.has(fingerprint(name, parsed.args))) {
@@ -633,7 +639,7 @@ class Engine {
     trim(chat, settings.compactAt);
     const system = await this.host.systemPrompt(chat);
     const ratio = chat.tokenRatio || 1;
-    const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions()));
+    const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions(!!settings.readOnly)));
     if (!force && size * ratio < settings.compactAt) return "skipped";
     const start = chat.compaction ? chat.compaction.through : 0;
     const keep = force ? 0 : settings.compactAt / 5 / ratio; // in estimated tokens

@@ -270,6 +270,19 @@
   let focusInput = false; // leaving settings or setup: the cursor goes back to the box
   let awayFromChat = false; // settings or setup is showing in the chat's place
 
+  let readOnlyShown = "";
+  /** Read-only mode's strip under the bar, with Enable tools (redrawn only when it changes, so it's announced once). */
+  function renderReadOnly() {
+    const strip = $("read-only");
+    const html = !state.readOnly ? "" : `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>` +
+      (state.readOnlyLocked ? `<span class="msg"><b>Read-only mode</b>, set by your organization: Solder can look, not change files.</span>`
+        : `<span class="msg"><b>Read-only mode</b>: Solder can look, not change files.</span><button class="link-button primary" data-action="allowChanges">Enable tools</button>`);
+    if (html === readOnlyShown) return;
+    readOnlyShown = html;
+    strip.classList.toggle("hidden", !html);
+    strip.innerHTML = html;
+  }
+
   function render() {
     if (!state) return;
     $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : state.chat.title;
@@ -282,6 +295,7 @@
     title.title = state.setup ? "" : state.settings ? "Close the settings" : "Your chats";
     if (state.setup || state.settings) title.removeAttribute("aria-haspopup"); else title.setAttribute("aria-haspopup", "menu");
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
+    renderReadOnly();
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
     if (state.setup) { shownParts = []; awayFromChat = true; renderSetup(); updateToBottom(); return; }
     if (state.settings) { shownParts = []; awayFromChat = true; renderSettings(); updateToBottom(); return; }
@@ -378,7 +392,11 @@
         `<div class="actions-row"><button class="link-button" data-sact="check">Check connection</button></div>`) +
       section("Model",
         label("Default model", "model", saved("model")) + modelField +
-        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${orgMark("effort")}${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`),
+        `<div class="field-label" id="sf-effort-label"><span>Effort</span>${orgMark("effort")}${saved("effort")}</div><div class="segs" role="group" aria-labelledby="sf-effort-label">${efforts}</div><div class="hint">Default sends nothing: the model's own choice, usually like Low. High is slower and uses many more tokens.</div>`) +
+      section("Changes",
+        `<div class="field-label" id="sf-access-label"><span>What Solder may do</span>${orgMark("access")}${saved("access")}</div><div class="segs" role="group" aria-labelledby="sf-access-label">` +
+        [["read", "Read only"], ["change", "Read and change files"]].map(([value, text]) => `<button class="seg${s.access === value ? " on" : ""}" data-sfield="access" data-value="${value}" aria-pressed="${s.access === value}">${text}</button>`).join("") + `</div>` +
+        `<div class="hint">Read only (read-only mode): Solder reads, searches and explains your code, but can't create, edit, move or delete files. It's how Solder starts; it never goes back to it by itself.</div>`),
       docs: section("",
         `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
         (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
@@ -617,6 +635,7 @@
     model: ["Your default model", "New chats start with it; each chat can switch beside Send."],
     docs: ["Your own docs", "Optional. Folders of reference docs that live only on your PC: APIs, schematics, specifications. They're indexed here; only the passages the model reads are sent. Plain text and Word, Excel and PowerPoint files; not PDFs."],
     rules: ["About you and your code", "Optional. A few plain lines the model always follows: languages and versions, style, what not to touch."],
+    changes: ["Let Solder make changes?", "Solder starts in read-only mode: it reads, searches and explains your code, but can't create, edit, move or delete files. Enable tools to let it make changes too. Each one is saved at once, and you can review and undo it; deleting asks you first."],
     done: ["You're set", "Solder is ready. You can change any of this in Settings, or run this again from the ⋯ menu."],
   };
 
@@ -660,7 +679,8 @@
       body = `<ul class="summary"><li><span>Gateway</span>${escape(host)}</li><li><span>Key</span>${s.hasKey ? "saved" : "none"}</li>` +
         `<li><span>Model</span>${escape(s.model)}</li><li><span>Docs</span>${s.docs.length ? s.docs.length + " folder" + (s.docs.length === 1 ? "" : "s") : "none"}</li>` +
         `<li><span>Rules</span>${s.rules ? s.rules.split("\n").filter(Boolean).length + " line" + (s.rules.split("\n").filter(Boolean).length === 1 ? "" : "s") : "none"}</li>` +
-        `<li><span>Skills</span>${s.skills ? s.skills + " skill" + (s.skills === 1 ? "" : "s") : "none yet"}</li></ul>` +
+        `<li><span>Skills</span>${s.skills ? s.skills + " skill" + (s.skills === 1 ? "" : "s") : "none yet"}</li>` +
+        `<li><span>Changes</span>${s.readOnly ? "read-only mode" : "on"}</li></ul>` +
         `<div class="hint">Skills are your instructions for a kind of task, such as how you write PowerShell scripts. The model reads one only when a task needs it. Make one any time in Settings → Your skills.</div>`;
     }
     const fresh = setupShown !== s.step;
@@ -670,7 +690,10 @@
       `${s.step === "key" ? ` <button class="link" data-setup="skipCheck">Continue without checking</button>` : ""}</div></div>` : "";
     const next = s.step === "done" ? "Start chatting" : s.step === "key" ? (s.busy ? "Checking…" : "Check and continue")
       : (s.step === "docs" && !s.docs.length) || (s.step === "rules" && !(setupDraft["setup-rules"] ?? s.rules)) ? "Skip" : "Continue";
-    const buttons = `<div class="setup-buttons">` +
+    const buttons = s.step === "changes" ? `<div class="setup-buttons">` +
+      (at > 0 ? `<button class="link-button" data-setup="back">Back</button>` : `<button class="link-button" data-setup="cancel">Not now</button>`) +
+      `<span class="grow"></span><button class="link-button" data-setup="next">Keep read-only</button><button class="link-button primary" data-setup="allowChanges">Enable tools</button></div>`
+      : `<div class="setup-buttons">` +
       (at > 0 && s.step !== "done" ? `<button class="link-button" data-setup="back"${s.busy ? " disabled" : ""}>Back</button>` : `<button class="link-button" data-setup="cancel">Not now</button>`) +
       `<span class="grow"></span><button class="link-button primary" data-setup="${s.step === "done" ? "finish" : "next"}"${s.busy ? " disabled" : ""}>` +
       (s.busy ? `<span class="spinner"></span>` : "") + `${next}</button></div>`;
@@ -684,7 +707,7 @@
     keepFocus(transcript, () => { transcript.innerHTML = html; });
     // a new step: the cursor goes to its field, its chosen option, its main button, or its title
     const first = /** @type {HTMLElement | null} */ (transcript.querySelector(".field, [role=radio][tabindex='0']") ||
-      (s.step === "done" ? transcript.querySelector('[data-setup="finish"]') : transcript.querySelector("#setup-title")));
+      (s.step === "done" ? transcript.querySelector('[data-setup="finish"]') : s.step === "changes" ? transcript.querySelector('[data-setup="allowChanges"]') : transcript.querySelector("#setup-title")));
     if (fresh && first) setTimeout(() => first.focus(), 60);
   }
 
@@ -1044,7 +1067,7 @@
       if (hadFocus) /** @type {HTMLElement} */ (banner.querySelector("button") || input).focus();
     }
     input.placeholder = state.busy ? "Add to this: it goes with the next step…"
-      : away && !away.done ? "Solder is working in another chat…" : "Ask Solder to read or change your code…";
+      : away && !away.done ? "Solder is working in another chat…" : state.readOnly ? "Ask Solder about your code…" : "Ask Solder to read or change your code…";
     // chips
     const chips = [];
     if (state.workspace) {

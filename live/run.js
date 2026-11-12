@@ -72,7 +72,7 @@ async function once(scenario, run) {
     fs.mkdirSync(skillsFolder, { recursive: true });
     for (const [name, text] of Object.entries(scenario.skills)) fs.writeFileSync(path.join(skillsFolder, name + ".md"), String(text));
   }
-  const { ws, host } = workspaceHost(root, S, typeof scenario.hooks === "function" ? scenario.hooks() : (scenario.hooks || {}), skillsFolder);
+  const { ws, host } = workspaceHost(root, S, typeof scenario.hooks === "function" ? scenario.hooks() : (scenario.hooks || {}), skillsFolder, !!scenario.readOnly);
   const client = new S.GatewayClient({ endpoint, apiKey: process.env.SOLDER_LIVE_KEY || "test" });
   let requests = 0;
   const reply = client.reply.bind(client);
@@ -82,7 +82,8 @@ async function once(scenario, run) {
     return reply(req);
   };
   let failure = "";
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock }),
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock,
+    readOnly: !!scenario.readOnly }),
     // The engine reports a failed reply as an event, not a throw: a run that ended on one is an error (a 429, say),
     // not a model that got the task wrong.
     onEvent: (/** @type {any} */ event) => { if (event.type === "error") failure = event.message || "error"; } });

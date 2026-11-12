@@ -16,7 +16,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const REPO = path.resolve(__dirname, "..");
-const ALL = ["policy", "edits", "group1", "problems", "symbols", "skills"];
+const ALL = ["policy", "edits", "group1", "problems", "symbols", "skills", "readonly"];
 const TIMEOUT_MS = 240_000;
 
 /** The files a few checks expect in the workspace. */

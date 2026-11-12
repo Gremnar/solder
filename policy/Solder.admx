@@ -24,6 +24,11 @@
     <category name="Limits" displayName="$(string.Cat_Limits)"><parentCategory ref="Solder" /></category>
   </categories>
   <policies>
+    <policy name="ReadOnly" class="Both" displayName="$(string.ReadOnly)" explainText="$(string.ReadOnly_Help)" key="SoftwarePoliciesGremnarSolder" valueName="ReadOnly">
+      <parentCategory ref="Solder" /><supportedOn ref="SUPPORTED_Solder" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="Endpoint" class="Both" displayName="$(string.Endpoint)" explainText="$(string.Endpoint_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Endpoint)">
       <parentCategory ref="Connection" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="Endpoint" valueName="Endpoint" maxLength="2048" required="true" /></elements>

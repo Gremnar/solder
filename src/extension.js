@@ -15,10 +15,30 @@ const path = require("node:path");
 const FEEDBACK_TO = "support@gremnar.com";
 const FEEDBACK_SUBJECT = "VS Code Solder extension feedback or support";
 
+/**
+ * Read-only mode is how Solder starts, from 0.2.11. Someone who set Solder up before then already had it changing files:
+ * once, their changes stay on (an update never puts anyone back in read-only mode). A fresh install has no endpoint of
+ * its own and no key, so it starts read-only.
+ * @param {vscode.ExtensionContext} context
+ */
+async function keepChanges(context) {
+  const DONE = "readOnlySettled";
+  if (context.globalState.get(DONE)) return;
+  try {
+    const raw = vscode.workspace.getConfiguration("solder");
+    const set = raw.inspect("readOnly");
+    const chosen = set && (set.globalValue !== undefined || set.workspaceValue !== undefined || set.workspaceFolderValue !== undefined);
+    const before = String(raw.get("endpoint", "") || "").trim() || (await context.secrets.get(KEY));
+    if (!chosen && before && !policy.locked("readOnly")) await raw.update("readOnly", false, vscode.ConfigurationTarget.Global);
+  } catch { /* left as it is: read-only */ }
+  await context.globalState.update(DONE, true);
+}
+
 /** @param {vscode.ExtensionContext} context */
 async function activate(context) {
   // The organisation's policy first: nothing connects before it's known (see policy.js).
   await policy.refresh();
+  await keepChanges(context);
   const output = vscode.window.createOutputChannel("Solder");
   const panel = new SolderPanel(context, output);
   // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
@@ -170,4 +190,4 @@ function message(error) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, keepChanges };

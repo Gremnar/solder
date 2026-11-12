@@ -40,13 +40,14 @@ const SEARCH_LINES = 200;
  * @param {string} root the workspace @param {any} S Solder's modules (solder())
  * @param {{beforeEdit?: (ws: Workspace, args: any) => void, overrides?: Record<string, (args: any) => any>}} [hooks]
  * @param {string} [skillsFolder] a skills folder (outside the workspace), offered as Solder offers the user's
+ * @param {boolean} [readOnly] Solder's read-only mode
  */
-function workspaceHost(root, S, hooks = {}, skillsFolder = "") {
+function workspaceHost(root, S, hooks = {}, skillsFolder = "", readOnly = false) {
   const ws = new Workspace(root, S, hooks, skillsFolder);
   const context = () => {
-    if (!skillsFolder) return { workspace: root };
+    if (!skillsFolder) return { workspace: root, ...(readOnly ? { readOnly } : {}) };
     const skills = S.skills.listSkills([skillsFolder]).filter(S.skills.offered ?? ((/** @type {any} */ s) => s.text)).map(({ name, path: file, when }) => ({ name, path: file, when }));
-    return { workspace: root, skills, skillsFolder };
+    return { workspace: root, skills, skillsFolder, ...(readOnly ? { readOnly } : {}) };
   };
   return { ws, host: {
     async systemPrompt() { return S.prompt.systemPrompt(context()); },

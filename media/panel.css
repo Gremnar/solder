@@ -96,6 +96,14 @@ svg circle { fill: currentColor; stroke: none; }
 #btn-new:hover svg { transform: rotate(90deg); }
 .icon[aria-expanded="true"] { background: var(--press); }
 
+/* ---- read-only mode: a strip under the bar, until changes are turned on ---- */
+.read-only { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 14px; font-size: 0.92em; border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg)); }
+.read-only.hidden, body.in-setup .read-only { display: none; }
+.read-only svg { flex: none; width: 14px; height: 14px; color: var(--warn); stroke-width: 1.6; fill: none; stroke: currentColor; }
+.read-only .msg { flex: 1; min-width: 0; }
+.read-only .msg b { font-weight: 600; }
+
 /* ---- menus ---- */
 .menu {
   position: absolute; z-index: 20; top: calc(100% + 2px); left: 8px; min-width: 210px; max-width: calc(100% - 16px); max-height: 60vh; overflow-y: auto;

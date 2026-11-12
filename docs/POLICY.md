@@ -23,6 +23,7 @@ Solder reads two registry keys, both writable only by administrators:
 
 | Value | Type | What it does |
 |---|---|---|
+| `ReadOnly` | REG_DWORD | `1`: Solder is always in read-only mode (it reads, searches and explains, but the tools that change files are neither offered to the model nor run), and users can't turn changes on. `0`: changes are always on. Absent: Solder starts in read-only mode and each user can turn changes on once. |
 | `Endpoint` | REG_SZ | The gateway's Chat Completions URL, ending in `/chat/completions`. If it isn't valid, Solder won't connect (it doesn't fall back to the user's). |
 | `Model` | REG_SZ | The model id. Users can't pick another, for new chats or existing ones. |
 | `ModelFilter` | REG_SZ | A regular expression: only matching model ids are offered. |

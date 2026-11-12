@@ -78,6 +78,8 @@
           "description": "A regular expression: only models whose id matches it are offered (for example, only tool-calling ones)." },
         "solder.modelNames": { "type": "object", "default": {}, "additionalProperties": { "type": "string" }, "order": 4,
           "markdownDescription": "Short names for the model picker: `{ \"<model id>\": \"<name>\" }`." },
+        "solder.readOnly": { "type": "boolean", "default": true, "scope": "application", "order": 4.5,
+          "markdownDescription": "Read-only mode: Solder reads, searches and explains your code, but can't create, edit, move or delete files. Solder starts in it; turn it off with **Enable tools** at the top of Solder's panel, in the guided setup, or in Solder's Settings. Nothing turns it on again but you." },
         "solder.effort": { "type": "string", "enum": ["default", "low", "medium", "high"], "default": "default", "order": 5,
           "enumDescriptions": ["The model's own default (sends nothing).", "Quick answers.", "More thought.", "Much more thought: slower, and uses significantly more tokens."],
           "description": "How hard new chats think (reasoning_effort)." },

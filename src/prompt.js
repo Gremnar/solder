@@ -58,10 +58,12 @@ function skillLines(skills) {
 /**
  * The system message.
  * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
- *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string}} context
- *   skills: the skills to offer; skillsFolder: where a new one is saved ("" when the user can't add skills)
+ *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string, readOnly?: boolean}} context
+ *   skills: the skills to offer; skillsFolder: where a new one is saved ("" when the user can't add skills);
+ *   readOnly: Solder's read-only mode (the tools that change files are left out)
  */
-function systemPrompt({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "" }) {
+function systemPrompt({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "", readOnly = false }) {
+  if (readOnly) skillsFolder = "";
   const several = folders.length > 1;
   const facts = [several
     ? `- Workspace folders: ${folders[0]} (the main one), ${folders.slice(1).join(", ")}. Relative paths are relative \
@@ -73,7 +75,7 @@ when the user's message names one, otherwise to this folder; searches start ther
     "- Each of the user's messages starts with their local date and time."];
   if (!instructions.length) facts.push(`- There's no project instructions file (AGENTS.md) at the ${several ? "top of any workspace folder" : "workspace root"}, so \
 don't look for one. One in a subfolder is added to your first read there.`);
-  let text = RULES + "\n\n# The workspace\n" + facts.join("\n");
+  let text = RULES + (readOnly ? "\n\n" + READ_ONLY_MODE : "") + "\n\n# The workspace\n" + facts.join("\n");
   for (const file of instructions) {
     text += `\n\n# Project instructions (${file.path})\n${file.text.trim()}`;
   }
@@ -170,9 +172,18 @@ values, decisions), in a few lines." },
 /** Tools that only look: more of them fit in one reply, and one failing doesn't stop the rest. */
 const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems", "plan"]);
 
-/** The tools array, in a fixed order. */
-function toolDefinitions() {
-  return Object.entries(TOOLS).map(([name, [description, properties, required]]) => ({
+/** The tools that change files: left out in read-only mode. */
+const CHANGES = Object.keys(TOOLS).filter((name) => !READ_ONLY.has(name));
+
+/** What the model is told in read-only mode (the Tool lane). */
+const READ_ONLY_MODE = `# Read-only mode
+Solder is in read-only mode: you can look at the workspace but not change it, so ${listed(CHANGES)} aren't \
+available. When a task needs a change, find what to change, then show it: the file, where, and the new code. The user \
+can make it, or turn on changes with Enable tools at the top of Solder's panel and ask again.`;
+
+/** The tools array, in a fixed order; only those that look in read-only mode. @param {boolean} [readOnly] */
+function toolDefinitions(readOnly = false) {
+  return Object.entries(TOOLS).filter(([name]) => !readOnly || READ_ONLY.has(name)).map(([name, [description, properties, required]]) => ({
     type: "function",
     function: { name, description, parameters: { type: "object", properties, required } },
   }));
@@ -204,6 +215,8 @@ again whatever was stopped or not run, then go on.",
   notRunBatch: (/** @type {number} */ calls, /** @type {number} */ changes) =>
     `Not run: Solder runs up to ${calls} calls from one reply, ${changes} of them changes (plan calls aside). Send it again if you still need it.`,
   repeat: "Not run again: it's the same call as an earlier one in this reply (see that result).",
+  readOnly: "Not run: Solder is in read-only mode, so nothing can be changed. Show the change instead (the file, where, \
+and the new code); the user can turn on changes with Enable tools at the top of Solder's panel.",
   declined: "The user declined this.",
   userNote: (/** @type {string} */ note) => `The user's note: ${note}`,
   unknownTool: (/** @type {string} */ name, /** @type {string[]} */ offered) =>
@@ -511,6 +524,11 @@ questions, each with the choice you'd recommend. When you're done, tell me \
 what you changed or found in a few sentences, with file paths, and don't paste back files you edited. If you don't \
 need anything from my workspace, just answer normally.`;
 
+/** Read-only mode, in the Assist lane's words. */
+const ASSIST_READ_ONLY = `My extension is in read-only mode for now: you can look at my workspace but not change it, so \
+${listed(CHANGES)} aren't available. When something needs changing, find what to change, then show me: the file, where, \
+and the new code. I can make it, or turn on changes and ask again.`;
+
 /** The lead before the user's own words. Kept identical always: it's how a saved message is split back up. */
 const MESSAGE_LEAD = "Here's my message:";
 
@@ -518,10 +536,11 @@ const MESSAGE_LEAD = "Here's my message:";
  * The Assist setup: the tools, how to ask for them, the workspace and what to follow. The tool lines come from TOOLS,
  * so a tool change lands in both lanes.
  * @param {{workspace: string, folders?: string[], os?: string, instructions?: {path: string, text: string}[], rules?: string,
- *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string}} context
+ *          docs?: {path: string, about?: string}[], skills?: {name: string, path: string, when: string}[], skillsFolder?: string, readOnly?: boolean}} context
  */
-function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "" }) {
-  const lines = Object.entries(TOOLS).map(([name, [description, properties, required]]) => {
+function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "", readOnly = false }) {
+  if (readOnly) skillsFolder = "";
+  const lines = Object.entries(TOOLS).filter(([name]) => !readOnly || READ_ONLY.has(name)).map(([name, [description, properties, required]]) => {
     const args = Object.keys(properties).map((arg) => /** @type {string[]} */ (required).includes(arg) ? arg : `${arg} (optional)`);
     return `- ${name}: ${assistText(description)}` + (args.length ? ` Arguments: ${args.join(", ")}` : "");
   });
@@ -530,7 +549,7 @@ function assistSetup({ workspace, folders = [], os = "Windows", instructions = [
 relative to the working folder when my message names one, otherwise to the main folder; use full paths for the others.`
     : `My workspace folder is ${workspace || "(none open)"}. Relative paths are relative to the working folder when my \
 message names one, otherwise to this folder.`;
-  const parts = [ASSIST_LEAD + "\n\n" + lines.join("\n"), ASSIST_HOW, `${where} I'm on ${os}. Each of my messages starts with my local date and time.`];
+  const parts = [ASSIST_LEAD + "\n\n" + lines.join("\n"), ASSIST_HOW, ...(readOnly ? [ASSIST_READ_ONLY] : []),`${where} I'm on ${os}. Each of my messages starts with my local date and time.`];
   for (const file of instructions) parts.push(`My project's instructions (${file.path}), which you should follow; what \
 I ask in a message wins if they conflict:\n\n${file.text.trim()}`);
   if (docs.length) parts.push("I keep reference documentation in these folders. When a task needs something my \
@@ -561,6 +580,7 @@ request, or give me your answer.)"],
   ["Tell the user it wasn't checked, so they can open it to have it checked.", "Tell me it wasn't checked, so I can open it to have it checked."],
   ["Tell the user it may not have been checked.", "Tell me it may not have been checked."],
   ["The user can add them", "I can add them"],
+  ["the user can turn on changes with Enable tools at the top of Solder's panel.", "I can turn on changes."],
   ["which asks the user first", "which asks me first"],
   ["Ask the user to save it first.", "Ask me to save it first."],
   ["Never overwrites; the user can undo it.", "Never overwrites; I can undo it."],

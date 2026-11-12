@@ -60,6 +60,8 @@ async function main() {
   fs.writeFileSync(path.join(shared, "code_review.md"), "---\nname: x\ndescription: Reviewing a change before it's committed.\n---\n\nRead the diff first.\nSay what's risky.\n");
   fs.writeFileSync(path.join(org, "branching.md"), "When to use: Naming a git branch.\n\nfeature/<ticket>-<slug>\n");
   await settings().update("skillsFolders", undefined, vscode.ConfigurationTarget.Global);
+  // /skill asks the model to write the skill: that needs changes on (a fresh profile starts read-only; see readonly.js).
+  await settings().update("readOnly", false, vscode.ConfigurationTarget.Global);
   const realHome = process.env.USERPROFILE;
   const realAppData = process.env.APPDATA;
   process.env.USERPROFILE = home; // New skill makes its default folder in AppData: a throwaway one here

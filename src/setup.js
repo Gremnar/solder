@@ -2,14 +2,14 @@
 "use strict";
 /**
  * Guided setup in the side bar: the gateway's address, the API key (checked by listing the models), the
- * default model, docs folders and your own rules. Everything lands where the settings page and
+ * default model, docs folders, your own rules, and whether Solder may change files (it starts read-only). Everything lands where the settings page and
  * "Set API key" would put it: user settings, and VS Code's secret storage for the key.
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy } = require("./config.js");
+const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 
-const STEPS = ["endpoint", "key", "model", "docs", "rules", "done"];
+const STEPS = ["endpoint", "key", "model", "docs", "rules", "changes", "done"];
 const CHECK_MS = 30_000;
 
 class SetupWizard {
@@ -46,6 +46,7 @@ class SetupWizard {
       step: "", steps: stepsNow(), busy: false, error: "",
       endpoint: String(config.get("endpoint", "")), hasKey: !!key, models: [], model: String(config.get("model", "")),
       docs: docsFrom(config.own("docsFolders", [])), rules: String(config.get("rules", "")), skills: this.hooks.skills?.() ?? 0,
+      readOnly: readOnly(),
     };
     this.view.step = this.view.steps[0];
     this.changed();
@@ -140,6 +141,13 @@ class SetupWizard {
         this.go(after("rules"));
         return;
       }
+      case "changes": {
+        // Enable tools turns read-only mode off for good; Keep read-only leaves it as it is.
+        if (action === "allowChanges") await allowChanges();
+        view.readOnly = readOnly();
+        this.go(after("changes"));
+        return;
+      }
     }
   }
 }
@@ -147,7 +155,9 @@ class SetupWizard {
 /** The setup steps, less those the organisation sets (a gateway it enforces needs no asking). */
 function stepsNow() {
   return STEPS.filter((step) => !(step === "endpoint" && policy.locked("endpoint")) && !(step === "model" && policy.locked("model"))
-    && !(step === "docs" && policy.locked("docsFolders")) && !(step === "rules" && policy.locked("rules")));
+    && !(step === "docs" && policy.locked("docsFolders")) && !(step === "rules" && policy.locked("rules"))
+    // Asked only while Solder is read-only and the organization leaves it to you.
+    && !(step === "changes" && (policy.locked("readOnly") || !readOnly())));
 }
 
 /** @param {string} endpoint */

@@ -5,7 +5,7 @@
  * no truth: it renders the state posted here (rebuilt from the saved chat) plus streamed text.
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy } = require("./config.js");
+const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
 const { laneOf, assistTwin } = require("./lanes.js");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -20,6 +20,7 @@ const { Log } = require("./log.js");
 const { MAX_SKILLS, offered } = require("./skills.js");
 const os = require("node:os");
 
+const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so it can't change files.";
 const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
 
 /**
@@ -128,6 +129,7 @@ class SolderPanel {
       vscode.window.onDidChangeTextEditorSelection(() => this.postEditor()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("solder")) { this._client = null; this.refreshModels(); }
+        if (event.affectsConfiguration("solder.readOnly")) this.post();
         if (event.affectsConfiguration("solder.docsFolders") || event.affectsConfiguration("solder.docsSearch")
           || event.affectsConfiguration("solder.embeddingModel")) this.tools.refreshDocs();
       }),
@@ -176,7 +178,13 @@ class SolderPanel {
       // The organisation's rules go after the user's, so they read as the more recent instruction.
       rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders(),
       skills: this.tools.skills().filter(offered).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
-      skillsFolder: this.skillsFolder() };
+      skillsFolder: this.skillsFolder(), readOnly: readOnly() };
+  }
+
+  /** The panel's Enable tools: read-only mode off, for good (only you, in Settings, can turn it on again). */
+  async allowChanges() {
+    if (!(await allowChanges())) { vscode.window.showInformationMessage(READ_ONLY_LOCKED); return; }
+    this.post();
   }
 
   /** Where a new skill is saved: the user's own first skills folder that's there ("" when they have none, or can't add one). */
@@ -272,7 +280,7 @@ class SolderPanel {
     return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
       compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)),
       toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
-      modelAllowed: modelAllowed() };
+      modelAllowed: modelAllowed(), readOnly: readOnly() };
   }
 
   /**
@@ -490,6 +498,7 @@ class SolderPanel {
       case "settings": await this.settingsScreen.open(); return;
       case "settingsScreen": await this.settingsScreen.handle(message); return;
       case "refreshModels": return this.refreshModels();
+      case "allowChanges": return this.allowChanges();
       case "setup":
         if (message.action === "start") await this.setup.start();
         else {
@@ -573,6 +582,8 @@ class SolderPanel {
       case "skill": {
         if (this.engine.busy) return busy();
         if (policy.locked("skillsFolders")) return info("Your organization sets Solder's skills, so you can't add your own.");
+        // In read-only mode the model can't write one: made by hand, as Settings' New skill does.
+        if (readOnly()) { await this.newSkill(); return; }
         // Nothing to go on (a new chat, and nothing said about it): made by hand, as Settings' New skill does.
         if (!arg && !this.chat.messages.length) { await this.newSkill(); return; }
         // The model is told where skills go once you have a folder for them: yours is made now if there's none.
@@ -922,6 +933,7 @@ class SolderPanel {
       credits: this.credits,
       steers: this.awayBusy() ? [] : this.engine.steers.map((s) => s.text),
       workspace: !!this.tools.root(),
+      readOnly: readOnly(), readOnlyLocked: policy.locked("readOnly"),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
       settings: this.setup.view ? null : this.settingsScreen.view,

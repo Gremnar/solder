@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "1f249983848d0dff";
+const PINNED = "017a1aa0e92078ac";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -56,7 +56,9 @@ function everything() {
       { name: "bare", path: "C:\\Skills\\bare.md", when: "" }], skillsFolder: "C:\\Skills" }),
     orgSkillsOnly: systemPrompt({ workspace: "C:\\work", skills: [{ name: "review", path: "\\\\share\\skills\\review.md", when: "WHEN" }] }),
     noSkillsYet: systemPrompt({ workspace: "C:\\work", skillsFolder: "C:\\Skills" }),
+    readOnly: systemPrompt({ workspace: "C:\\work", skillsFolder: "C:\\Skills", readOnly: true }),
     tools: toolDefinitions(),
+    readOnlyTools: toolDefinitions(true),
     starters: STARTERS,
     plan: [PLAN.now([{ goal: "G1", work: "W1", state: "done", notes: "N1" }, { goal: "G2", work: "W2", state: "doing", notes: "" }, { goal: "G3", work: "W3", state: "todo", notes: "" }]),
       PLAN.now([{ goal: "G1", work: "", state: "done", notes: "" }]), PLAN.none, PLAN.badStep(3), PLAN.stub(2, "Read a.js")],
@@ -137,7 +139,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "426c7e3192754274";
+const ASSIST_PINNED = "6fd0d4334dcc3f7d";
 
 function assistEverything() {
   return {
@@ -148,6 +150,7 @@ function assistEverything() {
     withSkills: ASSIST.setup({ workspace: "C:\\work", skills: [{ name: "ps_scripts", path: "C:\\Skills\\ps_scripts.md", when: "WHEN" },
       { name: "bare", path: "C:\\Skills\\bare.md", when: "" }], skillsFolder: "C:\\Skills" }),
     noSkillsYet: ASSIST.setup({ workspace: "C:\\work", skillsFolder: "C:\\Skills" }),
+    readOnly: ASSIST.setup({ workspace: "C:\\work", skillsFolder: "C:\\Skills", readOnly: true }),
     changed: ASSIST.setupChanged("SETUP"),
     results: [ASSIST.resultOk("read_file a.js"), ASSIST.resultFailed("read_file a.js"), ASSIST.resultClosing],
     carry: [ASSIST.carryOverLead, ASSIST.carryOverLeftOut(1), ASSIST.carryOverLeftOut(4), ASSIST.carryOverEnd],
@@ -167,4 +170,19 @@ test("every shared text, as the Assist lane says it, is in first person: none sa
     ...Object.values(toolDefinitions()).map((/** @type {any} */ d) => d.function.description)];
   const left = texts.map((t) => assistText(String(t))).filter((t) => /the user/i.test(t));
   assert.deepEqual(left, []);
+});
+
+test("read-only mode: only the tools that look are offered, the model is told why, and it isn't told how to save a skill", () => {
+  const names = toolDefinitions(true).map((t) => t.function.name);
+  assert.deepEqual(names, toolDefinitions().map((t) => t.function.name).filter((name) => READ_ONLY.has(name)));
+  for (const change of ["edit_file", "write_file", "move_item", "remove_item"]) assert.ok(!names.includes(change), change);
+  const system = systemPrompt({ workspace: "C:\work", skillsFolder: "C:\Skills", readOnly: true });
+  assert.match(system, /# Read-only mode\n.*edit_file, write_file, move_item and remove_item aren't available/);
+  assert.doesNotMatch(system, /To save a new skill/);
+  assert.equal(systemPrompt({ workspace: "C:\work" }).includes("Read-only mode"), false, "not a word of it otherwise");
+  const assist = ASSIST.setup({ workspace: "C:\work", skillsFolder: "C:\Skills", readOnly: true });
+  assert.match(assist, /read-only mode for now/);
+  assert.doesNotMatch(assist, /^- edit_file:/m);
+  assert.doesNotMatch(assist, /To save a new skill/);
+  assert.equal(assistText(TEXTS.readOnly).includes("the user"), false, "the refusal reads in the first person on the Assist lane");
 });

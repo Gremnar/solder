@@ -5,7 +5,7 @@
   <description>Settings for Solder, the coding agent in VS Code, enforced by your organization.</description>
   <resources>
     <stringTable>
-      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later; Assist models: 0.2.10 or later)</string>
+      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later; Assist models: 0.2.10 or later; read-only mode: 0.2.11 or later)</string>
       <string id="Cat_Solder">Solder</string>
       <string id="Cat_Connection">Connection</string>
       <string id="Cat_Model">Model</string>
@@ -15,6 +15,12 @@
       <string id="Cat_Rules">Rules and instructions</string>
       <string id="Cat_Limits">Limits</string>
 
+      <string id="ReadOnly">Read-only mode</string>
+      <string id="ReadOnly_Help">In read-only mode Solder reads, searches and explains code, but can't create, edit, move or delete files: the tools that change files are neither offered to the model nor run.
+
+Enabled: Solder is always in read-only mode, and users can't turn changes on.
+Disabled: changes are always on, with no read-only start.
+Not configured: Solder starts in read-only mode, and each user can turn changes on once (in the guided setup, with Enable tools at the top of the panel, or in Settings). It never turns read-only mode on again by itself.</string>
       <string id="Endpoint">Gateway address</string>
       <string id="Endpoint_Help">The full Chat Completions URL Solder connects to, ending in /chat/completions, for example https://gateway.example.com/v1/chat/completions.
 

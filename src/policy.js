@@ -42,6 +42,7 @@ const SETTINGS = {
   embeddingModel: { value: "EmbeddingModel", kind: "text" },
   docsFolders: { value: "DocsFolders", kind: "docs" },
   skillsFolders: { value: "SkillsFolders", kind: "folders" },
+  readOnly: { value: "ReadOnly", kind: "number" },
 };
 /** Policies that aren't a setting: user folders beside enforced ones, and rules added after the user's. */
 const ALLOW_USER_DOCS = "AllowUserDocsFolders";

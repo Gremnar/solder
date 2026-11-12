@@ -534,4 +534,32 @@ SCENARIOS.push({
   },
 });
 
+// ---- read-only mode: the model looks, then shows the change; nothing is changed, and it doesn't try
+/** The change calls a chat tried (each refused in read-only mode). @param {any} chat */
+const changeCalls = (chat) => chat.messages.flatMap((/** @type {any} */ m) => m.tool_calls || [])
+  .filter((/** @type {any} */ c) => ["edit_file", "write_file", "move_item", "remove_item"].includes(c.function.name)).length;
+
+SCENARIOS.push({
+  name: "read-only-fix",
+  about: "read-only mode, asked for a fix: reads, shows the fix, changes nothing and doesn't try to",
+  readOnly: true,
+  setup: (w) => w("src/greet.js", "function greet(name) {\n  return \"Helo, \" + name;\n}\nmodule.exports = { greet };\n"),
+  task: "Fix the typo in greet.js.",
+  check: ({ read, chat, answer }) => !/"Helo, "/.test(read("src/greet.js")) ? "the file was changed"
+    : changeCalls(chat) ? `tried ${changeCalls(chat)} change(s)`
+    : !/Hello/.test(answer) ? "the answer doesn't show the fix" : "",
+});
+
+SCENARIOS.push({
+  name: "read-only-explain",
+  about: "read-only mode, asked a question: just answers (no fuss about the mode)",
+  readOnly: true,
+  setup: (w) => {
+    w("src/cart.js", "function totalPrice(items) {\n  return items.reduce((sum, i) => sum + i.price * i.qty, 0);\n}\nmodule.exports = { totalPrice };\n");
+    w("src/checkout.js", "const { totalPrice } = require(\"./cart\");\nfunction checkout(cart) {\n  return { total: totalPrice(cart.items), currency: \"USD\" };\n}\nmodule.exports = { checkout };\n");
+  },
+  task: "Where is totalPrice used, and what does checkout return?",
+  check: ({ chat, answer }) => changeCalls(chat) ? "tried a change" : !/checkout/i.test(answer) || !/currency|USD/i.test(answer) ? "the answer misses what checkout returns" : "",
+});
+
 module.exports = { SCENARIOS };

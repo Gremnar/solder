@@ -5,7 +5,7 @@
  * API key (secret storage) and the docs index's state, so the everyday ones are a click away.
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy } = require("./config.js");
+const { config: solderSettings, policy, readOnly } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
 const { MAX_SKILLS, offered: isOffered } = require("./skills.js");
 const { laneOf } = require("./lanes.js");
@@ -66,6 +66,7 @@ class SettingsScreen {
       model: String(config.get("model", "")),
       models: this.hooks.models(),
       effort: String(config.get("effort", "default")),
+      access: readOnly() ? "read" : "change",
       rules: String(config.get("rules", "")),
       instructionFiles: (config.get("instructionFiles", ["AGENTS.md"]) || []).join(", "),
       docs: (Array.isArray(raw) ? raw : []).map((item) => typeof item === "string" ? { path: item, about: "" }
@@ -85,7 +86,8 @@ class SettingsScreen {
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
         ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"],
-        ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"]]
+        ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"],
+        ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
       skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
@@ -136,6 +138,8 @@ class SettingsScreen {
           await save("endpoint", endpoint, field);
         } else if (field === "model") await save("model", String(value || "").trim(), field);
         else if (field === "effort" && ["default", "low", "medium", "high"].includes(value)) await save("effort", value, field);
+        // Read-only mode: only ever changed here, by you (Solder never turns it on by itself).
+        else if (field === "access" && ["read", "change"].includes(value)) await save("readOnly", value === "read", field);
         else if (field === "rules") await save("rules", String(value ?? "").trim(), field);
         else if (field === "instructionFiles") {
           await save("instructionFiles", String(value || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean), field);
