@@ -380,7 +380,7 @@
       `<button class="seg${s.effort === level ? " on" : ""}" data-sfield="effort" data-value="${level}" aria-pressed="${s.effort === level}">${level === "default" ? "Default" : level[0].toUpperCase() + level.slice(1)}</button>`).join("");
     const modelField = s.models.length
       ? `<select class="field" id="sf-model" data-field="model">${s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : `<option value="${escape(s.model)}">${escape(s.model || "Choose a model")}</option>`}` +
-        s.models.map((/** @type {any} */ m) => `<option value="${escape(m.id)}"${m.id === s.model ? " selected" : ""}>${escape(m.name)}${m.name !== m.id ? ` (${escape(m.id)})` : ""}</option>`).join("") + `</select>`
+        modelOptions(s) + `</select>`
       : `<input class="field" id="sf-model" data-field="model" spellcheck="false" placeholder="The model's id" value="${escape(s.model)}">`;
     const docs = s.docs.map((/** @type {any} */ d, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(d.path)}">` +
       `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span>` +
@@ -522,6 +522,17 @@
   }
 
   /** "Set by your organization", for a field the policy enforces. @param {string} field */
+  /** Settings' Default model choices: Tool models first (recommended), Assist models after (the fallback), when both are offered. @param {any} s */
+  function modelOptions(s) {
+    const option = (/** @type {any} */ m) => `<option value="${escape(m.id)}"${m.id === s.model ? " selected" : ""}>${escape(m.name)}${m.name !== m.id ? ` (${escape(m.id)})` : ""}</option>`;
+    const assist = new Set((s.kinds || []).filter((/** @type {any} */ k) => k.assist).map((/** @type {any} */ k) => k.id));
+    const tools = s.models.filter((/** @type {any} */ m) => !assist.has(m.id));
+    const assists = s.models.filter((/** @type {any} */ m) => assist.has(m.id));
+    if (!tools.length || !assists.length) return s.models.map(option).join("");
+    return `<optgroup label="Recommended: Tool models">${tools.map(option).join("")}</optgroup>` +
+      `<optgroup label="Fallback: Assist models">${assists.map(option).join("")}</optgroup>`;
+  }
+
   function orgMark(field) {
     return state?.settings?.locked?.[field] ? `<span class="org">Set by your organization</span>` : "";
   }
@@ -666,12 +677,32 @@
     } else if (s.step === "model") {
       const chosen = setupDraft["setup-model"] ?? s.model;
       const any = s.models.some((/** @type {any} */ m) => m.id === chosen);
-      body = s.models.length
-        ? `<div class="pick" role="radiogroup" aria-labelledby="setup-title" aria-describedby="setup-intro">${s.models.map((/** @type {any} */ m, /** @type {number} */ i) =>
-            `<button class="option${m.id === chosen ? " on" : ""}" role="radio" aria-checked="${m.id === chosen}" tabindex="${m.id === chosen || (!any && i === 0) ? 0 : -1}" data-pick-model="${escape(m.id)}">` +
-            `<span class="radio" aria-hidden="true"></span><span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")}</div>`
-        : `<input id="setup-model-typed" class="field" aria-labelledby="setup-title" aria-describedby="setup-intro setup-hint" spellcheck="false" placeholder="The model's id" value="${keep("setup-model-typed", s.model)}">` +
-          `<div class="hint" id="setup-hint">The models couldn't be listed, so type the id your gateway uses.</div>`;
+      const option = (/** @type {any} */ m, /** @type {number} */ i) =>
+        `<button class="option${m.id === chosen ? " on" : ""}" role="radio" aria-checked="${m.id === chosen}" tabindex="${m.id === chosen || (!any && i === 0) ? 0 : -1}" data-pick-model="${escape(m.id)}">` +
+        `<span class="radio" aria-hidden="true"></span><span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`;
+      // Both kinds on offer: the Tool models first (recommended), the Assist models folded away below (the fallback),
+      // with what tells them apart. One kind only: just the list.
+      const tools = s.models.filter((/** @type {any} */ m) => !m.assist);
+      const assists = s.models.filter((/** @type {any} */ m) => m.assist);
+      const both = tools.length > 0 && assists.length > 0;
+      const fallbackOpen = setupDraft.fallbackOpen === "1" || assists.some((/** @type {any} */ m) => m.id === chosen);
+      body = !s.models.length
+        ? `<input id="setup-model-typed" class="field" aria-labelledby="setup-title" aria-describedby="setup-intro setup-hint" spellcheck="false" placeholder="The model's id" value="${keep("setup-model-typed", s.model)}">` +
+          `<div class="hint" id="setup-hint">The models couldn't be listed, so type the id your gateway uses.</div>`
+        : !both ? `<div class="pick" role="radiogroup" aria-labelledby="setup-title" aria-describedby="setup-intro">${s.models.map(option).join("")}</div>`
+        : `<div class="pick" role="radiogroup" aria-labelledby="setup-title" aria-describedby="setup-intro">` +
+          `<div class="pick-head">Recommended: Tool models</div>${tools.map(option).join("")}` +
+          `<details class="fallback"${fallbackOpen ? " open" : ""}><summary>Fallback: Assist models (${assists.length})</summary>${assists.map((m, i) => option(m, tools.length + i)).join("")}</details></div>` +
+          `<details class="compare" open><summary>Tool or Assist: what's the difference?</summary><table>` +
+          `<thead><tr><th></th><th>Tool</th><th>Assist</th></tr></thead><tbody>` +
+          [["Works by", "Using Solder's tools directly", "Writing requests as text for Solder to run"],
+            ["Speed", "Faster", "A few seconds more a step"],
+            ["Big tasks", "Most reliable", "May stall, or need a nudge"],
+            ["Effort", "Low to High", "None"],
+            ["Your allowance", "Uses it", "Doesn't use it"],
+            ["Use it", "Every day", "When your allowance runs out: Solder offers to switch"]]
+            .map(([what, tool, assist]) => `<tr><th scope="row">${what}</th><td>${tool}</td><td>${assist}</td></tr>`).join("") +
+          `</tbody></table></details>`;
     } else if (s.step === "docs") {
       body = `<div class="docs">${s.docs.map((/** @type {any} */ d, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(d.path)}">` +
           `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span>` +
@@ -718,6 +749,12 @@
     if (fresh && first) setTimeout(() => first.focus(), 60);
   }
 
+  // The setup's fallback models, opened or closed by you: kept so a redraw doesn't fold them away again.
+  transcript.addEventListener("toggle", (event) => {
+    const el = /** @type {HTMLElement} */ (event.target);
+    if (setupDraft && el.classList?.contains("fallback")) setupDraft.fallbackOpen = /** @type {HTMLDetailsElement} */ (el).open ? "1" : "";
+  }, true);
+
   /** Chooses a model on the setup's list. @param {HTMLElement} el */
   function pickModel(el) {
     if (setupDraft) setupDraft["setup-model"] = String(el.dataset.pickModel);
@@ -758,7 +795,7 @@
     }
     // the model list is a radio group: the arrows move the choice
     if (state?.setup && el.dataset?.pickModel !== undefined && ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(event.key)) {
-      const options = /** @type {HTMLElement[]} */ ([...transcript.querySelectorAll("[data-pick-model]")]);
+      const options = /** @type {HTMLElement[]} */ ([...transcript.querySelectorAll("[data-pick-model]")]).filter((option) => !option.closest("details:not([open])"));
       const at = options.indexOf(el);
       const n = options.length;
       const to = event.key === "Home" ? 0 : event.key === "End" ? n - 1 : event.key === "ArrowDown" || event.key === "ArrowRight" ? (at + 1) % n : (at - 1 + n) % n;
@@ -1096,7 +1133,7 @@
     $("model-button").title = locks.model ? "Set by your organization" : "Model";
     const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button role="menuitemradio" aria-checked="${m.id === state.model}" tabindex="-1" data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
-        `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Free, and slower: a few seconds more per step. No thinking level.">Assist</span>` : ""}</span>` +
+        `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Assist (fallback): doesn't use your allowance, but slower (a few seconds more per step) and less reliable on big tasks, with no thinking level. For when your allowance runs out: Solder offers to switch.">Assist</span>` : ""}</span>` +
         `${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
       : `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No models listed.</div>`;
     if (models !== shownModels) { shownModels = models; $("model-menu").innerHTML = models; } // an open menu doesn't flicker

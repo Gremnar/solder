@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Tool or Assist, made plain.** The guided setup lists the Tool models first, as recommended, with one chosen for you; the Assist models are folded away below as the fallback, with a short comparison of the two (how each works, speed, reliability, Effort, your allowance, and when to use which). Settings's Default model groups them the same way, and the Assist tag in the model menu now says it's the fallback (it used to lead with "Free").
+
 ## 0.2.12 (2026-11-15)
 
 - **Security fixes from a two-reviewer review.** A new `.gitattributes`, `.gitmodules` or `.gitconfig` written with an NTFS stream suffix (`.gitattributes::$DATA`) now asks for approval like the plain name. An instruction file (AGENTS.md) that is a link to somewhere outside the workspace is no longer read and sent as instructions. An Assist session block in a gateway response can no longer set fields of the next request (its model, tools or limits).
