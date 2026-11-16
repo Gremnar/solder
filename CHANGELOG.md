@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.13 (2026-11-15)
 
 - **Help writing a skill.** Settings → Skills has a new button: **I have an idea for a skill, but I don't know how to write it**. It starts a chat where Solder asks you a few questions at a time, shows you a draft, and saves the skill once you say it's right (it makes your skills folder first if you have none).
 - **Tool or Assist, made plain.** The guided setup lists the Tool models first, as recommended, with one chosen for you; the Assist models are folded away below as the fallback, with a short comparison of the two (how each works, speed, reliability, Effort, your allowance, and when to use which). Settings's Default model groups them the same way, and the Assist tag in the model menu now says it's the fallback (it used to lead with "Free"). The model chosen for you (in setup, or for a first chat with no default) is the best Tool model by its name: never a lite, mini or nano one while another is on offer, then the highest version, then a pro or max variant.
