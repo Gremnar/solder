@@ -586,7 +586,9 @@
             `<input class="field" id="sf-skillWhen" placeholder="Writing or changing a PowerShell script.">` +
             `<div class="hint">One sentence: it's all the model sees until it reads the skill. After Create, write the instructions in the editor.</div>` +
             `<div class="actions-row"><button class="link-button primary" data-sact="createSkill">Create</button> <button class="link-button" data-sact="cancelSkill">Cancel</button></div></div>`
-          : `<div class="actions-row"><button class="link-button" data-sact="newSkill">New skill…</button> <button class="link-button" data-sact="addSkills">Use a folder of skills…</button></div>`) +
+          : `<div class="actions-row"><button class="link-button" data-sact="newSkill">New skill…</button> <button class="link-button" data-sact="addSkills">Use a folder of skills…</button></div>` +
+            `<button class="link-button wide idea" data-sact="interviewSkill">I have an idea for a skill, but I don't know how to write it</button>` +
+            `<div class="hint">Solder asks you a few questions, shows you a draft, and saves it once you're happy with it.</div>`) +
       `<div class="hint">A skill is your instructions for a kind of task. The model sees each skill's name and when to use it, and reads the whole skill before a task it covers.` +
       (s.skillsLocked ? "" : ` New skills are saved in ${escape(s.skillsHome)}.`) + `</div>` +
       (folders ? `<div class="field-label"><span>Skills folders</span></div><div class="docs">${folders}</div>` : "");

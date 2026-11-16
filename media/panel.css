@@ -701,6 +701,7 @@ body.in-setup #btn-settings { display: none; }
 .banner button.quiet { background: transparent; color: var(--fg); border-color: var(--line); }
 .banner button.quiet:hover { background: var(--hover); }
 .banner.paused > svg { color: var(--link); }
+.settings .link-button.idea { display: block; width: 100%; margin: 14px 0 0; text-align: center; white-space: normal; }
 .settings .skill-form { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
 /* Advanced → Kinds of model: Assist models on the left, Tool models on the right */
 .settings .kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -43,7 +43,7 @@ async function main() {
   check("the extension's own policy module is the one used here (not a second copy)", Object.keys(require.cache).filter((key) => /[\\/]src[\\/]policy\.js$/i.test(key)).length === 1);
   const { config } = require(path.join(REPO, "src", "config.js"));
   const { SolderPanel } = require(path.join(REPO, "src", "panel.js"));
-  const { RESULTS } = require(path.join(REPO, "src", "prompt.js"));
+  const { RESULTS, SKILL } = require(path.join(REPO, "src", "prompt.js"));
   const settings = () => vscode.workspace.getConfiguration("solder");
   // Solder's own copy of the VS Code API (each extension gets its own): the one its prompts go through. From inside
   // the repo it's the same object this file gets; asked for by Solder's path, it's right wherever this file is.
@@ -108,6 +108,16 @@ async function main() {
       && !fs.existsSync(path.join(mine, "second.md")), [taken, odd, noWhen]);
     await editor.edit((e) => e.insert(new vscode.Position(2, 0), "Use approved verbs.\nNo aliases.\n"));
     await editor.document.save();
+
+    // ---- "I have an idea for a skill": a new chat where the model interviews you (no gateway here: the message is what's checked)
+    await panel.onMessage({ type: "settings" });
+    const chatBefore = panel.chat;
+    await panel.onMessage({ type: "settingsScreen", action: "interviewSkill" });
+    const opening = panel.chat.messages[0];
+    check("the skill interview starts a new chat, titled, with its message, and Settings closes",
+      panel.chat !== chatBefore && panel.chat.title === "Write a skill" && opening?.meta?.typed === SKILL.interview && !panel.settingsScreen.view,
+      [panel.chat.title, opening?.meta?.typed?.slice(0, 40), !!panel.settingsScreen.view]);
+    await sleep(500);
 
     // ---- the command: Use as Solder skills (the Explorer's menu passes the folder)
     await vscode.commands.executeCommand("solder.useAsSkills", vscode.Uri.file(shared));
@@ -313,7 +323,6 @@ async function main() {
     await policy.refresh();
 
     // ---- /skill: by hand in a new chat, else a message to the model (with a skills folder made first if there's none)
-    const { SKILL } = require(path.join(REPO, "src", "prompt.js"));
     /** @type {any[]} */ const sent = [];
     panel.send = async (message) => { sent.push(message); };
     await settings().update("skillsFolders", undefined, vscode.ConfigurationTarget.Global);

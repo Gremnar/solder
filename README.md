@@ -126,6 +126,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
 
   A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
 - **Making one:** in **Settings → Skills**, **New skill…** opens a short form there: its name, and when the model should use it. **Create** makes it and opens it in the editor for you to write the instructions (**Solder: New skill** in the command palette opens the same form). Click a skill to edit it, or ✕ to delete it. Changes count from your next message.
+- **Not sure how to write it?** Choose **I have an idea for a skill, but I don't know how to write it** in **Settings → Skills**. Solder asks you a few questions at a time, shows you a draft, and saves it once you say it's right.
 - **Where they're kept:** in `Solder\skills` in your AppData folder (`%APPDATA%`), which the guided setup makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
 - **Saving one from a chat:** after a task you'll do again, type **/skill**. Solder writes up how the task was done as a skill, and asks before it saves the file. `/skill` followed by what it's for (`/skill how we name branches: feature/<ticket>-<slug>`) writes one from that instead. You can also just ask in your own words.
 - **The rules:**

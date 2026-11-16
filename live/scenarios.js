@@ -562,4 +562,40 @@ SCENARIOS.push({
   check: ({ chat, answer }) => changeCalls(chat) ? "tried a change" : !/checkout/i.test(answer) || !/currency|USD/i.test(answer) ? "the answer misses what checkout returns" : "",
 });
 
+
+
+// ---- Settings' "I have an idea for a skill": the model interviews, drafts, and saves only once you agree
+/** The chat's turns: each user message's index, so a check can look at one turn's replies. @param {any} chat */
+const turnsOf = (chat) => chat.messages.map((/** @type {any} */ m, /** @type {number} */ i) => m.role === "user" && m.meta?.typed ? i : -1).filter((i) => i >= 0);
+
+SCENARIOS.push({
+  name: "skill-interview",
+  about: "the skill interview: asks questions first (writes nothing), drafts from the answers, saves once told it's right",
+  skills: {},
+  setup: (w) => w("README.md", "# Shop API\nAn Express app.\n"),
+  task: (/** @type {any} */ prompt) => prompt.SKILL.interview,
+  then: [
+    "It's for adding a new REST endpoint to our Express app. The route goes in routes/<name>.js, the handler in handlers/<name>.js, " +
+      "every handler validates its input with validate() from lib/validate.js, there's a test in test/<name>.test.js, and the endpoint gets a line in docs/API.md. " +
+      "Never put database calls in the route file.",
+    "That covers it. Show me the draft.",
+    "Looks right. Save it.",
+  ],
+  check: ({ chat, skillsFolder }) => {
+    const turns = turnsOf(chat);
+    const writes = (/** @type {number} */ from, /** @type {number} */ to) => chat.messages.slice(from, to)
+      .flatMap((/** @type {any} */ m) => m.tool_calls || []).filter((/** @type {any} */ c) => c.function.name === "write_file").length;
+    if (writes(turns[0], turns[1])) return "saved a skill before asking anything";
+    const firstReply = chat.messages.slice(turns[0], turns[1]).filter((/** @type {any} */ m) => m.role === "assistant" && m.content).map((/** @type {any} */ m) => m.content).join("\n");
+    if (!/\?/.test(firstReply)) return "the first reply asks no questions";
+    if (writes(turns[1], turns[3])) return "saved before being told it's right";
+    const files = fs.readdirSync(skillsFolder).filter((name) => name.toLowerCase().endsWith(".md"));
+    if (files.length !== 1) return files.length + " skills saved";
+    const text = fs.readFileSync(require("node:path").join(skillsFolder, files[0]), "utf8").replace(/^﻿/, "");
+    if (!/^when to use:\s*\S/i.test(text)) return "no When to use first line";
+    if (!/validate/i.test(text) || !/docs\/API\.md|API\.md/i.test(text)) return "the skill leaves out what was said: " + text.replace(/\s+/g, " ").slice(0, 400);
+    return "";
+  },
+});
+
 module.exports = { SCENARIOS };

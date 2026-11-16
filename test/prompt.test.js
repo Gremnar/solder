@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "017a1aa0e92078ac";
+const PINNED = "ae457e93b77a842f";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -64,7 +64,7 @@ function everything() {
       PLAN.now([{ goal: "G1", work: "", state: "done", notes: "" }]), PLAN.none, PLAN.badStep(3), PLAN.stub(2, "Read a.js")],
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js")],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
-    skill: [SKILL.fromChat, SKILL.about("WHAT")],
+    skill: [SKILL.fromChat, SKILL.about("WHAT"), SKILL.interview],
     texts: filled(TEXTS, SAMPLES, "TEXTS"),
     results: filled(RESULTS, RESULT_SAMPLES, "RESULTS"),
     time: timeNote(new Date(2026, 10, 4, 14, 5)),

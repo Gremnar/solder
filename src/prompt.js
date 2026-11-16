@@ -479,6 +479,12 @@ const SKILL = {
   fromChat: "Save a skill for the kind of task we just did, so a future chat can do it the same way: the steps that worked, the \
 names, paths and settings that matter, and the mistakes to avoid. Leave out what was particular to this one time.",
   about: (/** @type {string} */ what) => `Save a skill for this: ${what}`,
+  /** Settings' "I have an idea for a skill…": the model interviews you, drafts it, and saves it once you agree. */
+  interview: "I have an idea for a skill, but I don't know how to write it. Help me shape it: ask me what you need to \
+know, two or three short questions at a time, suggesting likely answers where you can (what kind of task it's for, the \
+steps I follow, the names, paths, tools and settings that matter, what to avoid, and what a good result looks like). You \
+don't need to look at my workspace unless I point you at something. When you have enough, show me a draft of the skill \
+and ask what to change. Save it only once I say it's right.",
 };
 
 /** "(Wednesday, 4 November 2026, 14:05)": what each user message starts with. @param {Date} [now] */

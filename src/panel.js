@@ -109,7 +109,7 @@ class SolderPanel {
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
-      skills: () => this.tools.skills(), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(), createSkill: (/** @type {string} */ name, /** @type {string} */ when) => this.createSkill(name, when),
+      skills: () => this.tools.skills(), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(), interviewSkill: () => this.interviewSkill(), createSkill: (/** @type {string} */ name, /** @type {string} */ when) => this.createSkill(name, when),
       deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name), orgSkillsFolders: () => this.tools.skillsFolders(policy.orgSkills()),
       policyChanged: () => { this.policyChanged(); },
       testEmbedding: async (/** @type {string} */ model) => {
@@ -179,6 +179,29 @@ class SolderPanel {
       rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders(),
       skills: this.tools.skills().filter(offered).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
       skillsFolder: this.skillsFolder(), readOnly: readOnly() };
+  }
+
+  /**
+   * Settings' "I have an idea for a skill, but I don't know how to write it": a new chat where the model interviews you,
+   * drafts the skill, and saves it once you agree. Your skills folder is made first if you have none (as /skill does).
+   */
+  async interviewSkill() {
+    if (policy.locked("skillsFolders")) { vscode.window.showInformationMessage("Your organization sets Solder's skills, so you can't add your own."); return; }
+    if (this.engine.busy) { vscode.window.showInformationMessage("Solder is busy with a task. Try again once it's done."); return; }
+    if (!this.skillsFolder()) {
+      const folder = DEFAULT_SKILLS();
+      try { fs.mkdirSync(folder, { recursive: true }); } catch (error) {
+        vscode.window.showInformationMessage(`Solder couldn't make your skills folder (${/** @type {any} */ (error)?.code || error}).`); return;
+      }
+      if (!(await this.addSkillsFolder(folder))) return;
+    }
+    this.settingsScreen.close();
+    const folder = this.chat.folder || "";
+    this.chat = Engine.newChat();
+    if (folder) this.chat.folder = folder;
+    this.chat.title = "Write a skill";
+    this.error = null;
+    await this.send({ text: SKILL.interview });
   }
 
   /** The panel's Enable tools: read-only mode off, for good (only you, in Settings, can turn it on again). */

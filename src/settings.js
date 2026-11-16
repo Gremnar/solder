@@ -16,7 +16,7 @@ class SettingsScreen {
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
    * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, refreshModels: () => Promise<void>,
-   *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>,
+   *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>, interviewSkill: () => Promise<void>,
    *          createSkill: (name: string, when: string) => Promise<{file: string} | {problem: string}>,
    *          deleteSkill: (name: string) => Promise<boolean>, orgSkillsFolders: () => string[], policyChanged?: () => void,
    *          testEmbedding: (model: string) => Promise<{dims: number, tokens: number}>}} hooks
@@ -249,6 +249,7 @@ class SettingsScreen {
         return;
       }
       case "newSkill": Object.assign(this.view, { skillForm: true, notice: "", noticeKind: "" }); this.changed(); return;
+      case "interviewSkill": await this.hooks.interviewSkill(); return;
       case "cancelSkill": Object.assign(this.view, { skillForm: false, notice: "", noticeKind: "" }); this.changed(); return;
       case "moveModel": {
         // A model moved to the other kind: the Assist models list is saved whole (made from the current kinds the first time).
