@@ -8,7 +8,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { laneOf } = require("./lanes.js");
+const { laneOf, bestModel } = require("./lanes.js");
 
 const STEPS = ["endpoint", "key", "model", "docs", "rules", "changes", "done"];
 const CHECK_MS = 30_000;
@@ -106,7 +106,10 @@ class SetupWizard {
             .sort((a, b) => Number(a.assist) - Number(b.assist));
           // The choice made for you is a Tool model: an Assist model only if you pick one (or there's nothing else).
           const tools = view.models.filter((/** @type {any} */ m) => !m.assist);
-          if (!view.model || !ids.includes(view.model) || (tools.length && !tools.some((/** @type {any} */ m) => m.id === view.model))) view.model = (tools[0] || view.models[0])?.id || view.model;
+          // Of those, the best by its name (not a lite or mini one; the highest version), so nobody starts on the weakest.
+          if (!view.model || !ids.includes(view.model) || (tools.length && !tools.some((/** @type {any} */ m) => m.id === view.model))) {
+            view.model = bestModel((tools.length ? tools : view.models).map((/** @type {any} */ m) => m.id)) || view.model;
+          }
           this.go(after("key"));
         } catch (error) {
           view.busy = false;

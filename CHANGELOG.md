@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Tool or Assist, made plain.** The guided setup lists the Tool models first, as recommended, with one chosen for you; the Assist models are folded away below as the fallback, with a short comparison of the two (how each works, speed, reliability, Effort, your allowance, and when to use which). Settings's Default model groups them the same way, and the Assist tag in the model menu now says it's the fallback (it used to lead with "Free").
+- **Tool or Assist, made plain.** The guided setup lists the Tool models first, as recommended, with one chosen for you; the Assist models are folded away below as the fallback, with a short comparison of the two (how each works, speed, reliability, Effort, your allowance, and when to use which). Settings's Default model groups them the same way, and the Assist tag in the model menu now says it's the fallback (it used to lead with "Free"). The model chosen for you (in setup, or for a first chat with no default) is the best Tool model by its name: never a lite, mini or nano one while another is on offer, then the highest version, then a pro or max variant.
 
 ## 0.2.12 (2026-11-15)
 

@@ -6,7 +6,7 @@
  */
 const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
-const { laneOf, assistTwin } = require("./lanes.js");
+const { laneOf, assistTwin, bestModel } = require("./lanes.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments, tokenReport } = require("./engine.js");
@@ -707,7 +707,13 @@ class SolderPanel {
       this.post();
       return;
     }
-    if (!this.chat.model && !this.settings().model && this.models[0]) this.chat.model = this.models[0].id;
+    // No model chosen anywhere: the best Tool model by its name, as the guided setup would choose (never a lite one first).
+    if (!this.chat.model && !this.settings().model && this.models[0]) {
+      const settings = this.settings();
+      const ids = this.models.map((m) => m.id);
+      const tools = ids.filter((id) => laneOf(id, settings) === "tool");
+      this.chat.model = bestModel(tools.length ? tools : ids);
+    }
     const parts = [];
     const chips = [];
     this.tools.useFolder(this.chat.folder);

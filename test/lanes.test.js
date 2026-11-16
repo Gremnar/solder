@@ -88,3 +88,19 @@ test("the Tool lane is as it was: tools, effort and the output limit go, and no 
     assert.ok(gw.requests[0].systemSent);
   } finally { gw.close(); }
 });
+
+test("the model chosen for you: not a small one, then the highest version, then the bigger variant, then the gateway's order", () => {
+  const { bestModel, versionOf } = require("../src/lanes.js");
+  assert.deepEqual(versionOf("model-3.5-flash-lite"), [3, 5]);
+  assert.deepEqual(versionOf("x-3.10"), [3, 10]);
+  assert.deepEqual(versionOf("x-2024-05-13"), [], "a date isn't a version");
+  assert.deepEqual(versionOf("x-0613"), []);
+  assert.equal(bestModel(["model-3.5-lite", "model-3-pro", "model-3.5", "model-2.5-pro"]), "model-3.5");
+  assert.equal(bestModel(["model-4-mini", "model-3.5-pro"]), "model-3.5-pro", "a small model comes last, whatever its version");
+  assert.equal(bestModel(["m-3.5", "m-3.5-pro"]), "m-3.5-pro");
+  assert.equal(bestModel(["x-3.9", "x-3.10"]), "x-3.10");
+  assert.equal(bestModel(["x-2024-05-13", "x-4"]), "x-4");
+  assert.equal(bestModel(["a", "b"]), "a", "no clue in the names: the gateway's order");
+  assert.equal(bestModel(["m-lite", "m-nano"]), "m-lite", "only small ones: still one of them");
+  assert.equal(bestModel([]), "");
+});

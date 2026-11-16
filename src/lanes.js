@@ -50,4 +50,39 @@ function assistTwin(model, settings, offered) {
   return twin && twin !== model && offered.includes(twin) && laneOf(twin, settings) === "assist" ? twin : "";
 }
 
-module.exports = { laneOf, assistTwin };
+/** Words that mark a model as a small one (as whole words in its id: "x-lite", "x_mini"). */
+const SMALL = /(^|[^a-z])(lite|mini|nano|small|tiny|micro)([^a-z]|$)/i;
+/** Words that mark the bigger variant of a model. */
+const BIG = /(^|[^a-z])(pro|max|ultra|large|plus)([^a-z]|$)/i;
+
+/**
+ * A model id's version, as numbers to compare part by part ("x-3.5-y" → [3, 5]; "x-3.10" beats "x-3.9"). The first
+ * number of one or two digits, with its dotted parts; dates and long numbers ("2024-05-13", "0613") aren't versions.
+ * @param {string} id @returns {number[]}
+ */
+function versionOf(id) {
+  const plain = String(id).replace(/\d{4,}(?:[-_.]\d{1,2}){0,2}/g, " "); // dates and long numbers out first
+  const found = /(?:^|[^\d.])(?!0\d)(\d{1,2}(?:\.\d{1,3})*)(?![\d.])/.exec(plain);
+  return found ? found[1].split(".").map(Number) : [];
+}
+
+/**
+ * The model to choose for you, best first: not a small one (lite, mini, nano…), then the highest version, then the
+ * bigger variant (pro, max…), then the gateway's own order. Names only: it can't know a model, just read its id.
+ * @param {string[]} ids @returns {string} "" when there are none
+ */
+function bestModel(ids) {
+  const ranked = ids.map((id, order) => ({ id, order, small: SMALL.test(id), version: versionOf(id), big: BIG.test(id) }));
+  ranked.sort((a, b) => {
+    if (a.small !== b.small) return a.small ? 1 : -1;
+    for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
+      const d = (b.version[i] ?? -1) - (a.version[i] ?? -1);
+      if (d) return d;
+    }
+    if (a.big !== b.big) return a.big ? -1 : 1;
+    return a.order - b.order;
+  });
+  return ranked[0]?.id ?? "";
+}
+
+module.exports = { laneOf, assistTwin, bestModel, versionOf };
