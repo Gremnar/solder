@@ -134,3 +134,11 @@ test("carrying over: the setup once, the conversation as Me and You, then the ne
   assert.match(tight, /\(\d earlier messages? (is|are) left out here\.\)/);
   assert.equal(stripSetup(rendered[0].content), "(time)\n\nFix a.js");
 });
+
+test("a carry-over leaves out the whole 'setup changed' note, even when the setup itself has a line ending ')' then a blank line", () => {
+  const { ASSIST, timeNote } = require("../src/prompt.js");
+  const message = timeNote(new Date(2026, 10, 15, 20, 5)) + "\n\nFix a.js";
+  const setup = "Rules (mine)\n\nNever edit generated/ (it's rebuilt)\n\nMore.";
+  assert.equal(stripSetup(ASSIST.setupChanged(setup) + "\n\n" + message), message);
+  assert.equal(stripSetup(ASSIST.setupChanged("plain") + "\n\n" + message), message, "the plain case, as before");
+});

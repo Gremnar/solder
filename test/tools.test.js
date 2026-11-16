@@ -495,3 +495,61 @@ test("a folder's tree stamp changes when anything in it does", () => {
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("a stream suffix on git's files (.gitattributes::$DATA) is still asked about: NTFS writes it to the file itself", () => {
+  const { WorkspaceTools, runsPrograms } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-ads-"));
+  try {
+    const ws = path.join(top, "ws");
+    fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [ws];
+    tools.docsFolders = () => [];
+    const ask = (/** @type {string} */ name, /** @type {any} */ args) => tools.needsApproval(name, args);
+    // None of these files exist yet, so their real paths can't tell: the name as written has to.
+    assert.match(String(ask("write_file", { path: ".gitattributes::$DATA" })), /\.gitattributes, where a change can make programs run/);
+    assert.match(String(ask("write_file", { path: "src/.gitmodules:x" })), /\.gitmodules/);
+    assert.match(String(ask("write_file", { path: ".GitConfig::$data" })), /\.gitconfig/);
+    assert.match(String(ask("move_item", { from: "src", to: ".gitattributes::$DATA" })), /programs run/);
+    assert.equal(ask("write_file", { path: "src/notes.txt::$DATA" }), null, "a stream on an ordinary file is ordinary");
+    assert.equal(runsPrograms(path.join(ws, "src", "gitattributes.md")), "");
+    assert.equal(runsPrograms(path.join(ws, ".gitattributes::$DATA")), ".gitattributes");
+    assert.equal(runsPrograms(path.join(ws, ".vscode:zone", "tasks.json")), ".vscode");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("an instruction file is read only when it's the workspace's own: a link out of it (or a folder by that name) isn't", (t) => {
+  const { WorkspaceTools, ownFile } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-agents-"));
+  try {
+    const ws = path.join(top, "ws");
+    const outside = path.join(top, "outside");
+    fs.mkdirSync(path.join(ws, "lib", "deep"), { recursive: true });
+    fs.mkdirSync(path.join(ws, "AGENTS.md")); // a folder by that name at the root
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "AGENTS.md"), "secret instructions");
+    fs.writeFileSync(path.join(ws, "lib", "AGENTS.md"), "lib rules");
+    fs.writeFileSync(path.join(ws, "lib", "deep", "x.js"), "x");
+    fs.symlinkSync(outside, path.join(ws, "linked"), "junction");
+    assert.equal(ownFile(path.join(ws, "lib", "AGENTS.md"), ws), true);
+    assert.equal(ownFile(path.join(ws, "AGENTS.md"), ws), false, "a folder");
+    assert.equal(ownFile(path.join(ws, "missing", "AGENTS.md"), ws), false, "not there");
+    assert.equal(ownFile(path.join(outside, "AGENTS.md"), ws), false, "outside");
+    assert.equal(ownFile(path.join(ws, "linked", "AGENTS.md"), ws), false, "through a link out of the workspace");
+    let fileLink = false;
+    try { fs.symlinkSync(path.join(outside, "AGENTS.md"), path.join(ws, "lib", "deep", "AGENTS.md"), "file"); fileLink = true; }
+    catch { t.diagnostic("file links can't be made here: that case isn't tried"); }
+    if (fileLink) assert.equal(ownFile(path.join(ws, "lib", "deep", "AGENTS.md"), ws), false, "a file link out of the workspace");
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [ws];
+    const chat = { agentsSeen: [] };
+    const notes = tools.nestedAgents({ full: path.join(ws, "lib", "deep", "x.js"), inside: true }, chat);
+    assert.match(notes, /lib rules/);
+    assert.ok(!notes.includes("secret instructions"), "the link's target isn't read");
+    assert.equal(chat.agentsSeen.length, 1, "only the folder's own file counts as seen");
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});

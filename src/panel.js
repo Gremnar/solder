@@ -13,7 +13,7 @@ const { Engine, labelOf, parseArguments, tokenReport } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
-const { WorkspaceTools, plainNames } = require("./tools.js");
+const { WorkspaceTools, plainNames, ownFile } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
@@ -265,6 +265,8 @@ class SolderPanel {
     const found = [];
     for (const root of roots) {
       for (const name of names) {
+        // The folder's own file only: a link by that name to somewhere else on the disk isn't read (see ownFile).
+        if (!ownFile(path.join(root, name), root)) continue;
         try {
           const text = fs.readFileSync(path.join(root, name), "utf8").slice(0, 40_000);
           // With several folders, each is named by its folder, so the model knows which one it's for.

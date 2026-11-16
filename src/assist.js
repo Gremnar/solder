@@ -376,9 +376,21 @@ function stripSetup(text) {
   const s = String(text);
   const at = s.indexOf(ASSIST.messageLead);
   if (s.startsWith(ASSIST.lead) && at >= 0) return s.slice(at + ASSIST.messageLead.length).replace(/^\s+/, "");
-  if (s.startsWith(ASSIST.setupChangedLead)) { const end = s.indexOf(")\n\n"); if (end >= 0) return s.slice(end + 3); }
+  if (s.startsWith(ASSIST.setupChangedLead)) {
+    // The note ends ")" then a blank line, but so may a line of the setup it holds (your rules, AGENTS.md): the message
+    // after it starts with its date and time, so the end that's followed by one is the note's. Else the first, as before.
+    let end = -1;
+    for (let at = s.indexOf(")\n\n"); at >= 0; at = s.indexOf(")\n\n", at + 1)) {
+      if (end < 0) end = at;
+      if (DATED.test(s.slice(at + 3, at + 64))) { end = at; break; }
+    }
+    if (end >= 0) return s.slice(end + 3);
+  }
   return s;
 }
+
+/** How each of your messages starts: "(Wednesday, 4 November 2026, 14:05)" (prompt.js timeNote). */
+const DATED = /^\([A-Z][a-z]+day, \d{1,2} [A-Z][a-z]+ \d{4}, \d{2}:\d{2}\)/;
 
 /**
  * When the gateway doesn't hold the conversation (a switch from the Tool lane, a fork, compaction, a session that

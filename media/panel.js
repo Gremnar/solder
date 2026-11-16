@@ -36,14 +36,21 @@
       codes.push(code);
       return `\u0000${codes.length - 1}\u0000`;
     });
-    text = escape(text)
+    const emphasis = (/** @type {string} */ s) => s
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^\w*])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
-      .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>")
-      .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label, href) => /^https?:/i.test(href)
-        ? `<a href="${href}" title="${href}">${label}</a>` : `<a href="#" class="path-link" data-path="${href}"><code class="path">${label}</code></a>`);
-    return text.replace(/\u0000(\d+)\u0000/g, (_m, n) => {
+      .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
+    // Links are set aside first, so a link's address keeps its underscores and stars (only its label is formatted).
+    const links = [];
+    text = escape(text).replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label, href) => {
+      links.push(/^https?:/i.test(href)
+        ? `<a href="${href}" title="${href}">${emphasis(label)}</a>` : `<a href="#" class="path-link" data-path="${href}"><code class="path">${label}</code></a>`);
+      return `\u0001${links.length - 1}\u0001`;
+    });
+    text = emphasis(text).replace(/\u0001(\d+)\u0001/g, (m, n) => links[Number(n)] ?? m);
+    return text.replace(/\u0000(\d+)\u0000/g, (m, n) => {
       const code = codes[Number(n)];
+      if (code === undefined) return m; // NULs in the text itself (a model can send them), not a placeholder
       return PATHLIKE.test(code.trim()) ? `<a href="#" class="path-link" data-path="${escape(code.trim())}"><code class="path">${escape(code)}</code></a>` : `<code>${escape(code)}</code>`;
     });
   }

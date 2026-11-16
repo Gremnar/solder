@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.12 (2026-11-15)
+
+- **Security fixes from a two-reviewer review.** A new `.gitattributes`, `.gitmodules` or `.gitconfig` written with an NTFS stream suffix (`.gitattributes::$DATA`) now asks for approval like the plain name. An instruction file (AGENTS.md) that is a link to somewhere outside the workspace is no longer read and sent as instructions. An Assist session block in a gateway response can no longer set fields of the next request (its model, tools or limits).
+- **Fixes:** a link in a reply keeps the underscores and stars in its address (they were turned into italics, which broke the link); a reply containing NUL characters no longer stops the chat from redrawing; when an Assist chat is carried over after a setup change, none of the old setup is left in it (a line of your rules or AGENTS.md ending in a bracket could cut the note short).
+
 ## 0.2.11 (2026-11-12)
 
 - **Read-only mode, on by default.** A new install of Solder reads, searches and explains code, but can't create, edit, move or delete files: the tools that change files aren't offered to the model, and aren't run if it asks for one anyway. It shows the change instead. Turn changes on once with **Enable tools** at the top of the panel, in the guided setup (a new last step), or in **Settings → Connection → Changes**; Solder never turns read-only mode back on by itself. If you set Solder up before this version, changes stay on. Organizations can enforce either with the new `ReadOnly` policy (in the ADMX templates). In read-only mode, `/skill` opens the New skill form, as the model can't write the file.

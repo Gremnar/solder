@@ -363,7 +363,7 @@ class WorkspaceTools {
       for (const name of names) {
         const candidate = path.join(folder, name);
         const key = candidate.toLowerCase();
-        if (chat.agentsSeen.includes(key) || !fs.existsSync(candidate)) continue;
+        if (chat.agentsSeen.includes(key) || !ownFile(candidate, root)) continue;
         chat.agentsSeen.push(key);
         try {
           const text = fs.readFileSync(candidate, "utf8").slice(0, 20_000).trim();
@@ -1696,9 +1696,13 @@ function programRisk(full) {
   return runsPrograms(full) || runsPrograms(realPath(full));
 }
 
-/** The git or VS Code folder or file a path is in, as written, or "". @param {string} full */
+/**
+ * The git or VS Code folder or file a path is in, as written, or "". A name's stream suffix (".gitattributes::$DATA",
+ * "file:stream") is left out: NTFS writes that to the file itself, so it would otherwise slip past (for a file that
+ * isn't there yet, whose real path can't be asked). @param {string} full
+ */
 function runsPrograms(full) {
-  const parts = path.resolve(full).split(/[\\/]/).map((part) => part.toLowerCase());
+  const parts = path.resolve(full).split(/[\\/]/).map((part) => part.replace(/:.*$/, "").toLowerCase());
   const folder = parts.slice(0, -1).find((part) => PROGRAM_FOLDERS.includes(part));
   if (folder) return folder;
   const last = parts[parts.length - 1];
@@ -1718,6 +1722,15 @@ function realPath(full) {
     rest.push(path.basename(at));
     at = up;
   }
+}
+
+/**
+ * Whether an instruction file (AGENTS.md) really is the workspace's own: a file, there, whose real path (links followed)
+ * is inside the folder's. A repository can carry a symbolic link by that name pointing anywhere on the disk; following it
+ * would send that file to the model as "instructions", with no approval asked. @param {string} full @param {string} folder
+ */
+function ownFile(full, folder) {
+  try { return fs.statSync(full).isFile() && within(realPath(full), realPath(folder)); } catch { return false; }
 }
 
 /** The instruction file names that are plain names (no folders, no ..), so a setting can't point outside. @param {unknown} names */
@@ -2159,4 +2172,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

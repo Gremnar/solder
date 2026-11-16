@@ -364,6 +364,7 @@ async function main() {
     for (const back of undo) back?.();
     process.env.USERPROFILE = realHome;
     process.env.APPDATA = realAppData;
+    await settings().update("readOnly", undefined, vscode.ConfigurationTarget.Global); // as a fresh profile has it, for the checks after
     await settings().update("skillsFolders", undefined, vscode.ConfigurationTarget.Global);
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await sleep(300);

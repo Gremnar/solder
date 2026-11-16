@@ -141,6 +141,12 @@ function allowanceOf(headers) {
 
 /** The longest a session field may be (a session id, a token). */
 const MAX_SESSION_FIELD_CHARS = 8192;
+/**
+ * Fields a session block may not carry: they're the request's own. Session fields go at the top level of the next
+ * request, before the rest is set, so a response naming one of these would otherwise rewrite the request (its model,
+ * past an organisation's model filter; its tools or output limit).
+ */
+const REQUEST_FIELDS = new Set(["model", "messages", "stream", "tools", "tool_choice", "reasoning_effort", "max_tokens"]);
 /** How long an answer-whole side request may take (they've taken minutes on slow backends). */
 const SIDE_MS = 180_000;
 
@@ -157,7 +163,7 @@ function sessionOf(value, block) {
   const fields = {};
   for (const [key, field] of Object.entries(found)) {
     if (typeof field === "string" && field.length > 0 && field.length <= MAX_SESSION_FIELD_CHARS
-      && /^[\x20-\x7e]+$/.test(field) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) fields[key] = field;
+      && /^[\x20-\x7e]+$/.test(field) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key) && !REQUEST_FIELDS.has(key)) fields[key] = field;
   }
   return Object.keys(fields).length >= 2 ? { block, fields } : null;
 }

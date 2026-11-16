@@ -373,3 +373,28 @@ test("embeddings: one vector per text, in the order asked (whatever order they c
   assert.equal(gw.seen[0].url, "/v1/embeddings", "next to /chat/completions");
   assert.deepEqual(gw.seen[0].body, { model: "embed-a", input: ["a", "b", "c"] });
 });
+
+test("a session block can't rewrite the request: its model, messages, stream, tools or limits are left out of the fields sent back", async () => {
+  const { sessionOf } = require("../src/gateway.js");
+  // A response (or a chunk) whose session block names the request's own fields: only the real session fields are kept.
+  const found = sessionOf({ sess: { session: "s1", token: "t1", model: "other-model", messages: "x", stream: "false",
+    tools: "[]", tool_choice: "none", reasoning_effort: "high", max_tokens: "1" } }, "sess");
+  assert.deepEqual(found, { block: "sess", fields: { session: "s1", token: "t1" } });
+  // And on the wire: the next Assist request still goes to the model asked for, with the session beside it.
+  const gw = await fakeGateway([(res) => sse(res, [{ sess: { session: "s1", token: "t1", model: "other-model" },
+    choices: [{ index: 0, delta: { content: "hi" }, finish_reason: "stop" }] }])]);
+  const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+  const first = await client.reply({ model: "model-a", messages: [{ role: "user", content: "hello" }], assist: true, sessionBlock: "sess" });
+  assert.deepEqual(/** @type {any} */ (first).session, { block: "sess", fields: { session: "s1", token: "t1" } });
+  gw.server.closeAllConnections();
+  gw.server.close();
+  const again = await fakeGateway([(res) => sse(res, [{ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] }])]);
+  const next = new GatewayClient({ endpoint: again.endpoint, apiKey: "" });
+  await next.reply({ model: "model-a", messages: [{ role: "user", content: "more" }], assist: true, sessionBlock: "sess", session: /** @type {any} */ (first).session });
+  again.server.closeAllConnections();
+  again.server.close();
+  const sent = again.seen[0].body;
+  assert.equal(sent.model, "model-a");
+  assert.deepEqual(Object.keys(sent), ["model", "session", "token", "sess", "messages", "stream"]);
+  assert.deepEqual(sent.sess, { session: "s1", token: "t1" });
+});
