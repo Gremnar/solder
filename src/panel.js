@@ -9,7 +9,7 @@ const { config: solderSettings, policy, readOnly, allowChanges } = require("./co
 const { laneOf, assistTwin, bestModel } = require("./lanes.js");
 const fs = require("node:fs");
 const path = require("node:path");
-const { Engine, labelOf, parseArguments, tokenReport } = require("./engine.js");
+const { Engine, labelOf, parseArguments, tokenReport, removeTurn, laterMessages } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
@@ -202,6 +202,33 @@ class SolderPanel {
     this.chat.title = "Write a skill";
     this.error = null;
     await this.send({ text: SKILL.interview });
+  }
+
+  /**
+   * A message of yours, from its bubble: Delete takes it out with its turn; Edit takes it and everything after it, and
+   * puts what you typed back in the box. Files the turns changed stay as they are. It asks first when more than the
+   * message and its own reply would go.
+   * @param {boolean} edit @param {number} index
+   */
+  async changeMessage(edit, index) {
+    const chat = this.chat;
+    if (this.engine.busy && this.runId === chat.id) { vscode.window.showInformationMessage("Solder is working in this chat. Stop it first, or wait until it's done."); return; }
+    const message = chat.messages[index];
+    if (!message || message.role !== "user" || message.meta?.resume) return;
+    if (chat.compaction && index < chat.compaction.through) { vscode.window.showInformationMessage("This message has been summarised, so it can't be changed."); return; }
+    const later = laterMessages(chat, index);
+    const ask = !edit ? "Delete this message and its reply? Files Solder changed stay as they are."
+      : later ? `Edit this message? The ${later === 1 ? "message" : `${later} messages`} after it, and ${later === 1 ? "its reply" : "their replies"}, are removed too. Files Solder changed stay as they are.` : "";
+    if (ask) {
+      const button = edit ? "Edit" : "Delete";
+      if ((await vscode.window.showWarningMessage(ask, { modal: true }, button)) !== button) return;
+    }
+    const typed = removeTurn(chat, index, edit);
+    if (typed === null) return;
+    if (this.errorChat === chat.id || !this.errorChat) this.error = null;
+    await this.store.save(chat);
+    this.post();
+    if (edit) this.view?.webview.postMessage({ type: "editText", text: typed });
   }
 
   /** The panel's Enable tools: read-only mode off, for good (only you, in Settings, can turn it on again). */
@@ -471,6 +498,7 @@ class SolderPanel {
         this.post();
         return;
       }
+      case "editMessage": case "deleteMessage": return this.changeMessage(message.type === "editMessage", Number(message.index));
       case "new":
         if (!this.engine.busy) {
           this.awayDone = "";
@@ -1010,7 +1038,8 @@ class SolderPanel {
         flat.push({ kind: "note", key: "n" + index, text: "Older messages were summarised here to save tokens.", turn });
       }
       if (message.role === "user") {
-        flat.push({ kind: "user", key: "u" + index, text: message.meta?.typed ?? message.content, chips: message.meta?.chips || [], resume: !!message.meta?.resume, turn });
+        flat.push({ kind: "user", key: "u" + index, text: message.meta?.typed ?? message.content, chips: message.meta?.chips || [], resume: !!message.meta?.resume, turn,
+          index, changeable: !message.meta?.resume && !(this.chat.compaction && index < this.chat.compaction.through) });
       } else if (message.role === "assistant") {
         if (message.content?.trim()) flat.push({ kind: "answer", text: message.content, incomplete: !!message.meta?.incomplete, turn });
         for (const call of message.tool_calls || []) {

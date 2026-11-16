@@ -946,6 +946,37 @@ function modelOf(chat, settings) {
 }
 
 /**
+ * Takes your message at `index` out of the chat: with its turn (its steps and answer, up to your next message), or with
+ * everything after it too (`rest`, for Edit). Files the turn changed are left as they are: only the conversation forgets.
+ * Not a message that's been summarised (it's part of the summary), nor a "carry on" (it belongs to the turn before).
+ * An Assist session that held the removed messages no longer matches the chat, so the next request carries it over.
+ * @param {Chat} chat @param {number} index @param {boolean} [rest] @returns {string | null} what you typed, or null if it can't
+ */
+function removeTurn(chat, index, rest = false) {
+  const message = chat.messages[index];
+  if (!message || message.role !== "user" || message.meta?.resume) return null;
+  if (chat.compaction && index < chat.compaction.through) return null;
+  let end = chat.messages.length;
+  if (!rest) {
+    for (let at = index + 1; at < chat.messages.length; at++) {
+      if (chat.messages[at].role === "user" && !chat.messages[at].meta?.resume) { end = at; break; }
+    }
+  }
+  chat.messages.splice(index, end - index);
+  if (end >= chat.messages.length + (end - index)) delete chat.limitHit; // the last turn went: its pause with it
+  // The plan, if the call that set it went too.
+  const planSet = chat.messages.some((m) => (m.tool_calls || []).some((/** @type {any} */ c) => c.function.name === "plan" && /"steps"\s*:/.test(c.function.arguments || "")));
+  if (!planSet) delete /** @type {any} */ (chat).plan;
+  chat.updated = Date.now();
+  return String(message.meta?.typed ?? message.content);
+}
+
+/** How many of your messages come after the one at `index` (what Edit would take with it). @param {Chat} chat @param {number} index */
+function laterMessages(chat, index) {
+  return chat.messages.slice(index + 1).filter((m) => m.role === "user" && !m.meta?.resume).length;
+}
+
+/**
  * Where the current task started: the latest message you typed. Resume's and the plan nudge's "carry on" go on the
  * same task, so its results keep their in-task protection and it isn't summarised partway. @param {Chat} chat
  */
@@ -1302,5 +1333,5 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { Engine, outbound, trim, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, tokenReport,
+module.exports = { Engine, outbound, trim, removeTurn, laterMessages, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, tokenReport,
   KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

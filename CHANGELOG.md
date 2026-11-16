@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Edit or delete your messages.** Point at one of your messages: **Delete** (the bin) takes it and its reply out of the chat, after asking; **Edit** (the pencil) takes it and everything after it, and puts your words back in the box. Files Solder changed stay as they are. On the Assist lane, the next message carries the chat over afresh, so the gateway's session doesn't keep what you removed.
+
 ## 0.2.13 (2026-11-15)
 
 - **Help writing a skill.** Settings → Skills has a new button: **I have an idea for a skill, but I don't know how to write it**. It starts a chat where Solder asks you a few questions at a time, shows you a draft, and saves the skill once you say it's right (it makes your skills folder first if you have none).

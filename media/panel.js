@@ -258,6 +258,8 @@
   }
 
   const ICONS = {
+    pencil: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.6 3.4l2 2L6 12H4v-2zM9.4 4.6l2 2"/></svg>`,
+    bin: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 5h9M6.5 5V3.5h3V5M5 5l.6 7.5h4.8L11 5"/></svg>`,
     check: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M4.2 8.4 6.9 11l4.9-5.8"/></svg>`,
     cross: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5 5l6 6M11 5l-6 6"/></svg>`,
     undo: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5.5 6.5h4a2.6 2.6 0 0 1 0 5.2H7.5M7.6 4.4 5.5 6.5l2.1 2.1"/></svg>`,
@@ -867,8 +869,11 @@
   function itemHtml(item) {
     const key = "i:" + (item.key ?? "x");
     if (item.kind === "user") {
+      // Edit and Delete, on hover or focus, on your own messages (not while this chat is working, nor once summarised).
+      const acts = item.changeable && !state.busy ? `<div class="msg-acts"><button data-edit-msg="${item.index}" title="Edit: take this message and everything after it back to the box" aria-label="Edit this message">${ICONS.pencil}</button>` +
+        `<button data-delete-msg="${item.index}" title="Delete this message and its reply" aria-label="Delete this message">${ICONS.bin}</button></div>` : "";
       return `<div class="user${item.resume ? " resume" : ""}" data-enter="${key}">${escape(item.text)}` +
-        (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c).replace(/^✂/, `<span aria-hidden="true">✂</span>`)}</span>`).join("")}</div>` : "") + "</div>";
+        (item.chips.length ? `<div class="chips">${item.chips.map((/** @type {string} */ c) => `<span class="chip">${escape(c).replace(/^✂/, `<span aria-hidden="true">✂</span>`)}</span>`).join("")}</div>` : "") + acts + "</div>";
     }
     // no entrance: an answer arrives word by word, through the fade-in
     if (item.kind === "answer") return `<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`;
@@ -1449,6 +1454,12 @@
       editor.file = message.file;
       editor.selection = message.selection;
       if (state) renderComposer();
+    } else if (message.type === "editText") {
+      // Edit: your message back in the box, the cursor at its end.
+      input.value = message.text;
+      autosize();
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
     } else if (message.type === "restore") {
       if (!input.value.trim()) { input.value = message.text; autosize(); }
     } else if (message.type === "attachSelection") {
@@ -1654,7 +1665,7 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -1666,6 +1677,8 @@
     }
     if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
+    if (d.editMsg !== undefined) { vscode.postMessage({ type: "editMessage", index: Number(d.editMsg) }); return; }
+    if (d.deleteMsg !== undefined) { vscode.postMessage({ type: "deleteMessage", index: Number(d.deleteMsg) }); return; }
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
     else if (d.switch) { closeMenus(); vscode.postMessage({ type: "switch-and-resume", model: d.switch }); }
     else if (d.starter) { stickToBottom = true; vscode.postMessage({ type: "starter", id: d.starter }); }

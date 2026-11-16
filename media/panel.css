@@ -209,6 +209,13 @@ svg circle { fill: currentColor; stroke: none; }
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%), var(--raised);
   white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; }
 .user:first-child { margin-top: 2px; }
+/* Edit and Delete: on the bubble's bottom edge, at the right, while you're over it (or in it with the keyboard). */
+.user .msg-acts { position: absolute; right: 8px; bottom: -11px; display: flex; gap: 2px; padding: 1px; border-radius: var(--r-sm);
+  border: 1px solid var(--hairline); background: var(--raised); opacity: 0; transition: opacity var(--t-fast) ease; }
+.user:hover .msg-acts, .user:focus-within .msg-acts { opacity: 1; }
+.user .msg-acts button { width: 22px; height: 20px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--muted); }
+.user .msg-acts button:hover { background: var(--hover); color: var(--fg); }
+.user .msg-acts svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .user .chips { margin-top: 7px; }
 .user .chips .chip { background: color-mix(in srgb, var(--fg) 6%, transparent); border-color: transparent; }
 .user.resume { background: none; border-color: transparent; color: var(--muted); padding: 2px 12px; font-style: italic; }
