@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.16 (2026-11-17)
 
 - **Fix: an enforced `ToolModels` pattern can't be overridden.** A user's own Assist models list (made by moving models in Settings → Advanced → Kinds of model) used to win over the organization's pattern. Now the pattern decides, the user's list doesn't apply while it's enforced, and Kinds of model is locked.
 - **A daily budget for docs search by meaning.** Embedding counts against the same daily allowance as the models, so it's now held to 250,000 tokens a day by default (from midnight UTC; Settings → Docs / RAG → Daily budget). Past it, embedding waits for the next day while keyword search goes on, and **raise it for today** carries on now. A gateway on your own PC isn't counted. New `EmbedDailyBudget` policy.
