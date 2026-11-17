@@ -1004,7 +1004,8 @@
   function welcome() {
     if (state.modelsProblem === "setup") {
       return `<div class="welcome" data-enter="w:setup"><div class="logo">${ICONS.solder}</div><h2>Set up Solder</h2>` +
-        `<p class="lead">It takes a minute: your gateway's address, your key and a model, then your own docs and rules if you like.</p>` +
+        (state.locks?.endpoint ? `<p class="lead">Your organization has set the gateway. Add your key and choose a model, then your own docs and rules if you like.</p>`
+          : `<p class="lead">It takes a minute: your gateway's address, your key and a model, then your own docs and rules if you like.</p>`) +
         `<div class="actions"><button class="link-button primary" data-setup="start">Start guided setup</button>` +
         `<button class="link-button" data-action="settings">Settings</button></div></div>`;
     }
@@ -1012,7 +1013,8 @@
       return `<div class="welcome" data-enter="w:problem"><div class="logo problem">${ICONS.triangle}</div><h2>Can't reach the endpoint</h2>` +
         `<p class="lead">${escape(state.modelsProblem)}</p>` +
         `<div class="actions"><button class="link-button primary" data-action="refreshModels">Try again</button>` +
-        `<button class="link-button" data-action="settings">Settings</button><button class="link-button" data-action="setKey">Set API key</button></div></div>`;
+        `<button class="link-button" data-action="settings">Settings</button><button class="link-button" data-action="setKey">Set API key</button>` +
+        `<button class="link-button" data-setup="start">Guided setup</button></div></div>`;
     }
     // Starter cards: each sends its prompt (from prompt.js, through the extension) and starts the chat.
     const cards = (state.starters || []).map((/** @type {any} */ s, /** @type {number} */ i) =>

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **First start with your organization's gateway.** When the gateway comes from policy and you have no key yet, Solder now starts the guided setup (at the key, as the gateway is set) instead of showing a connection error (HTTP 401). A key that's there but turned away still shows the connection problem, now with **Guided setup** beside Try again, Settings and Set API key.
+
 ## 0.2.14 (2026-11-16)
 
 - **Summaries and titles by the Assist twin.** When a chat's Tool model has an Assist twin on offer, the twin writes the chat's summary (compaction) and its title: they no longer use your allowance, and still work once it's used up. If the twin fails, or your organization's model filter doesn't allow it, the chat's own model does it, as before.

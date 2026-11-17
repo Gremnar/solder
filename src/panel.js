@@ -155,7 +155,13 @@ class SolderPanel {
     view.webview.onDidReceiveMessage((message) => this.onMessage(message).catch((error) =>
       vscode.window.showErrorMessage(`Solder: ${error instanceof Error ? error.message : error}`)));
     view.onDidChangeVisibility(() => { if (view.visible) this.post(); });
-    this.refreshModels();
+    // Not set up yet (no gateway, or no key for one, as when your organization sets the gateway): the guided setup
+    // starts by itself, once a window, rather than a connection error. It skips what your organization sets.
+    this.refreshModels().then(async () => {
+      if (this.modelsProblem !== "setup" || this.setupStarted || this.setup.view || this.settingsScreen.view) return;
+      this.setupStarted = true;
+      await this.setup.start();
+    }).catch(() => {});
   }
 
   // ------------------------------------------------------------------ the host --
@@ -384,7 +390,8 @@ class SolderPanel {
     try {
       await this.loadKey();
       const config = solderSettings();
-      if (!config.get("endpoint", "")) { this.models = []; this.modelsProblem = "setup"; this.post(); return; }
+      // No gateway, or no key for one that needs it: that's setup to do, not a connection problem (a 401).
+      if (!config.get("endpoint", "") || await this.setup.needed()) { this.models = []; this.modelsProblem = "setup"; this.post(); return; }
       let ids = await this.client().models();
       const filter = config.get("modelFilter", "");
       if (filter) {
@@ -982,7 +989,7 @@ class SolderPanel {
       modelsProblem: this.modelsProblem,
       model: current,
       effort: settings.effortLocked ? settings.effort : chat.effort || settings.effort,
-      locks: { model: settings.modelLocked, effort: settings.effortLocked },
+      locks: { model: settings.modelLocked, effort: settings.effortLocked, endpoint: policy.locked("endpoint") },
       busy: this.engine.busy && !this.awayBusy(),
       elsewhere: this.elsewhere(),
       folder: this.chat.folder || "",
