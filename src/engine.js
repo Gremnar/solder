@@ -73,7 +73,8 @@ function estimate(text) {
  *   save(chat: Chat): Promise<void>,
  * }} Host
  * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, modelAllowed?: ((id: string) => boolean) | null,
- *            readOnly?: boolean}} Settings
+ *            readOnly?: boolean, assistTwinOf?: (model: string) => string}} Settings
+ *   assistTwinOf: a Tool model's Assist twin on offer ("" for none): it writes summaries and titles, free of the allowance
  *   readOnly: Solder's read-only mode: the tools that change files are neither offered nor run
  */
 
@@ -643,21 +644,36 @@ class Engine {
     const focus = String(options.focus || "").trim().slice(0, MAX_FOCUS_CHARS);
     this.emit({ type: "compacting", chat: chat.id });
     let reply;
+    let freeSide = assistLane; // what wrote it was an Assist model (free)
     try {
       const transcript = transcriptOf(chat, start, cut, Math.floor(settings.compactAt * CHARS_PER_TOKEN * 0.8));
       const ask = `${TEXTS.compactionTranscript}\n\n${transcript}\n\n${TEXTS.compaction}` + (focus ? `\n\n${TEXTS.compactionFocus(focus)}` : "");
       // An Assist model takes no system message, and a side request there goes whole (not streamed), without a session.
-      reply = assistLane
-        ? await this._patient(chat, { model: modelOf(chat, settings), signal, assist: true, stream: false, messages: [{ role: "user", content: ask }] }, true)
-        : await this._patient(chat, { model: modelOf(chat, settings), signal, effort: undefined, messages: [
+      // A Tool model's chat is summarised by its Assist twin when it has one (free of the allowance, and still there
+      // once it's used up); if the twin fails, by the chat's own model.
+      const own = () => assistLane
+        ? this._patient(chat, { model: modelOf(chat, settings), signal, assist: true, stream: false, messages: [{ role: "user", content: ask }] }, true)
+        : this._patient(chat, { model: modelOf(chat, settings), signal, effort: undefined, messages: [
           { role: "system", content: TEXTS.compactionSystem }, { role: "user", content: ask }] }, true);
+      const twin = assistLane ? "" : twinOf(modelOf(chat, settings), settings);
+      if (twin) {
+        try {
+          reply = await this._patient(chat, { model: twin, signal, assist: true, stream: false, messages: [{ role: "user", content: ask }] }, true);
+          freeSide = true;
+          if (!String(reply.content || "").trim()) reply = null;
+        } catch (error) {
+          if (error instanceof Cancelled || signal.aborted) throw error;
+          reply = null;
+        }
+      }
+      if (!reply) { freeSide = assistLane; reply = await own(); }
     } catch (error) {
       if (error instanceof Cancelled || signal.aborted) throw new Cancelled();
       this.emit({ type: "compaction-failed", chat: chat.id, message: error instanceof Error ? error.message : String(error) });
       if (!force) failed.set(chat.id, attempt);
       return "failed";
     }
-    this._spend(chat, reply.usage, reply.credits, assistLane, true); // free on the Assist lane
+    this._spend(chat, reply.usage, reply.credits, freeSide, true); // free when an Assist model wrote it
     if (!reply.content.trim()) { if (!force) failed.set(chat.id, attempt); return force ? "failed" : "skipped"; }
     chat.compaction = { through: cut, summary: reply.content.trim() };
     // The session no longer matches the chat: the next Assist message starts afresh, with the recap carried over.
@@ -684,10 +700,18 @@ class Engine {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
     const assistLane = laneOf(modelOf(chat, settings), settings) === "assist";
-    Promise.resolve().then(() => this.client.reply({ model: modelOf(chat, settings), signal: controller.signal,
-      ...(assistLane ? { assist: true, stream: false } : {}), messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] }))
-      .then(async (/** @type {any} */ reply) => {
-        if (reply.usage) { this._spend(chat, reply.usage, reply.credits, assistLane, true); await this._save(chat); }
+    // Named by the Tool model's Assist twin when it has one (free of the allowance); by the chat's model otherwise,
+    // or if the twin fails.
+    const twin = assistLane ? "" : twinOf(modelOf(chat, settings), settings);
+    const ask = (/** @type {string} */ model, /** @type {boolean} */ assist) => this.client.reply({ model, signal: controller.signal,
+      ...(assist ? { assist: true, stream: false } : {}), messages: [{ role: "user", content: TEXTS.titleRequest(excerpt) }] })
+      .then((/** @type {any} */ reply) => ({ reply, free: assist }));
+    Promise.resolve().then(() => twin
+      ? ask(twin, true).then((done) => cleanTitle(done.reply.content || "") ? done : ask(modelOf(chat, settings), assistLane),
+        () => controller.signal.aborted ? Promise.reject(new Cancelled()) : ask(modelOf(chat, settings), assistLane))
+      : ask(modelOf(chat, settings), assistLane))
+      .then(async (/** @type {any} */ { reply, free }) => {
+        if (reply.usage) { this._spend(chat, reply.usage, reply.credits, free, true); await this._save(chat); }
         const title = cleanTitle(reply.content || "");
         if (!title || chat.titleSource === "user" || title === chat.title) return;
         chat.title = title;
@@ -901,6 +925,17 @@ function argumentsOf(call) {
 /** A path as given, for comparing two calls' (slashes and case aside). @param {unknown} given */
 function pathKey(given) {
   return typeof given === "string" ? given.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase() : "";
+}
+
+/**
+ * A Tool model's Assist twin, to write summaries and titles free of the allowance: "" when there's none on offer, or
+ * your organization's model filter doesn't allow it. @param {string} model @param {Settings} settings
+ */
+function twinOf(model, settings) {
+  const twin = settings.assistTwinOf ? String(settings.assistTwinOf(model) || "") : "";
+  if (!twin || twin === model) return "";
+  if (settings.modelAllowed && !settings.modelAllowed(twin)) return "";
+  return twin;
 }
 
 /** The model a chat uses: its own choice, unless the organisation enforces one. @param {Chat} chat @param {any} settings */

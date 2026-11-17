@@ -156,7 +156,8 @@ Some gateways offer two kinds of model: **Tool models**, which take a system pro
 Each step sends the whole chat again, so long chats cost more per step. Solder keeps that down:
 - it cuts old tool output down to short stand-ins;
 - it leaves out earlier turns' big file writes;
-- it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default.
+- it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default;
+- when a Tool model has an Assist twin (see [Two kinds of model](#two-kinds-of-model-optional)), the twin writes those summaries and the chats' titles, so they don't use your allowance and still work once it's used up.
 
 Under the box, the chat shows what it has **spent** (every request added up) and how much is **in context** (what each step sends now, as your gateway counted it): older turns are summarised once that passes **Compact at tokens**. The status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
 

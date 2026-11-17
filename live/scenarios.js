@@ -598,4 +598,16 @@ SCENARIOS.push({
   },
 });
 
+// ---- a chat that's summarised partway (a small Compact at): what was said before still counts after
+SCENARIOS.push({
+  name: "compact-follow",
+  about: "a long read, then a follow-up after the chat is summarised: the answer still knows what came before",
+  compactAt: 20_000,
+  setup: (w) => w("notes.txt", ["Project codename: ORCHID-7.", "Owner: the platform team."].concat(Array.from({ length: 1400 }, (_, i) => `Line ${i + 3}: routine log entry, nothing to see.`)).concat(["Last line: release on Friday."]).join("\n") + "\n"),
+  task: "Read notes.txt in full and tell me its last line.",
+  then: ["Now read lines 400 to 900 of notes.txt and tell me if anything there is unusual.", "And lines 900 to 1400: anything unusual?", "What was the project codename in notes.txt? Answer from what you already know."],
+  check: ({ chat, answer }) => !chat.compaction ? "it was never summarised (the test needs a smaller Compact at)"
+    : !/ORCHID-7/i.test(answer) ? "the codename was lost after the summary: " + answer.slice(0, 200) : "",
+});
+
 module.exports = { SCENARIOS };

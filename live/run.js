@@ -34,6 +34,8 @@ const effort = opt("effort", "low");
 // --assist-block the session block's name (empty: every Assist request carries the conversation over).
 const toolModels = opt("tool-models", "");
 const assistBlock = opt("assist-block", "");
+// --twin: the Assist twin that writes summaries and titles for the model under test (as Solder's panel finds it).
+const twinModel = opt("twin", "");
 const label = opt("label", `run-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 const baseline = opt("baseline");
 const only = opt("only") ? opt("only").split(",") : null;
@@ -77,12 +79,15 @@ async function once(scenario, run) {
   let requests = 0;
   const reply = client.reply.bind(client);
   // The task's own requests (with tools): not the chat's title, which goes out on its own afterwards.
+  /** @type {string[]} */
+  const summarisedBy = [];
   client.reply = async (/** @type {any} */ req) => {
+    if (S.prompt.TEXTS.compactionTranscript && String(req.messages?.at(-1)?.content || "").startsWith(S.prompt.TEXTS.compactionTranscript)) summarisedBy.push(req.model);
     if (!String(req.messages?.at(-1)?.content || "").startsWith("Give a short title")) requests++;
     return reply(req);
   };
   let failure = "";
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: 100_000, maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock,
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: scenario.compactAt || 100_000, ...(twinModel ? { assistTwinOf: () => twinModel } : {}), maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock,
     readOnly: !!scenario.readOnly }),
     // The engine reports a failed reply as an event, not a throw: a run that ended on one is an error (a 429, say),
     // not a model that got the task wrong.
@@ -119,6 +124,7 @@ async function once(scenario, run) {
     chatter: withCalls.filter((/** @type {any} */ m) => (m.content || "").trim()).length,
     maxReads: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => c.function.name === "read_file").length)),
     planned: !!plan, planLeft: plan ? plan.steps.filter((/** @type {any} */ s) => s.state !== "done").length : 0,
+    summarisedBy: summarisedBy.length ? summarisedBy : undefined, compacted: !!chat.compaction,
     nudges: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
     // Reads of lines already read in the same task: still in the chat (avoidable), or after the first was cut.
     rereads: S.repeatReads ? S.repeatReads(chat).again : undefined, rereadsAfterCut: S.repeatReads ? S.repeatReads(chat).afterCut : undefined,

@@ -329,10 +329,13 @@ class SolderPanel {
 
   settings() {
     const config = solderSettings();
+    const lanes = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
     return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
       compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)),
       toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
-      modelAllowed: modelAllowed(), readOnly: readOnly() };
+      modelAllowed: modelAllowed(), readOnly: readOnly(),
+      // A Tool model's Assist twin on offer: it writes summaries and titles, free of the allowance.
+      assistTwinOf: (/** @type {string} */ model) => assistTwin(model, lanes, this.models.map((m) => m.id)) };
   }
 
   /**

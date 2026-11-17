@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.14 (2026-11-16)
 
+- **Summaries and titles by the Assist twin.** When a chat's Tool model has an Assist twin on offer, the twin writes the chat's summary (compaction) and its title: they no longer use your allowance, and still work once it's used up. If the twin fails, or your organization's model filter doesn't allow it, the chat's own model does it, as before.
 - **No more plans.** The model no longer sets out a checklist for longer tasks. Measured on six multi-step tasks, three runs each on two models: every task still succeeded (36 of 36 both ways), and without plans the same work took 36% and 53% fewer tokens, with about half the requests. Setting and ticking off a plan cost extra round trips, and each one resends the whole chat. Chats from before keep working: their old plan steps just aren't shown or sent.
 - **Edit or delete your messages.** Point at one of your messages: **Delete** (the bin) takes it and its reply out of the chat, after asking; **Edit** (the pencil) takes it and everything after it, and puts your words back in the box. Files Solder changed stay as they are. On the Assist lane, the next message carries the chat over afresh, so the gateway's session doesn't keep what you removed.
 
