@@ -37,6 +37,7 @@ Solder reads two registry keys, both writable only by administrators:
 | `DocsSearch` | REG_SZ | `keyword` or `hybrid` (keywords and meaning). Enforce `keyword` to keep docs text from being sent for embedding. |
 | `SkillsFolders` | REG_MULTI_SZ | Skills folders, one per line, such as `\\fileserver\it\solder-skills`. Each skill is one `.md` file directly in a folder, starting with a `When to use:` line; the model reads one whole before a task it covers. Users see the organization's skills in settings but can't change the folders. |
 | `AllowUserSkills` | REG_DWORD | With `SkillsFolders` set: `1` lets users add skills folders of their own beside the organization's (where a skill they ask Solder to save goes); `0` or absent, only the organization's, and users can't save new skills. |
+| `EmbedDailyBudget` | REG_DWORD | The most tokens search by meaning may send to the embeddings model in a day (from midnight UTC). Past it, embedding waits for the next day; keyword search goes on. `0`: no embedding. Users can't change it or raise it for the day. Absent: 250,000, and users can change it. |
 | `EmbeddingModel` | REG_SZ | The gateway's embeddings model, for search by meaning. |
 | `Rules` | REG_MULTI_SZ | Rules that replace the user's own, one per line. |
 | `OrgRules` | REG_MULTI_SZ | Rules added after the user's own, so they read as the more recent instruction. Users see them in settings but can't change them. |

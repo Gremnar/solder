@@ -5,7 +5,7 @@
   <description>Settings for Solder, the coding agent in VS Code, enforced by your organization.</description>
   <resources>
     <stringTable>
-      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later; Assist models: 0.2.10 or later; read-only mode: 0.2.11 or later)</string>
+      <string id="SUPPORTED_Solder">Solder 0.2.5 or later, in VS Code on Windows (Tool models and Assist session block: 0.2.8 or later; skills and feedback address: 0.2.9 or later; Assist models: 0.2.10 or later; read-only mode: 0.2.11 or later; daily embedding budget: 0.2.16 or later)</string>
       <string id="Cat_Solder">Solder</string>
       <string id="Cat_Connection">Connection</string>
       <string id="Cat_Model">Model</string>
@@ -70,6 +70,8 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <string id="DocsSearch_Help">Keywords: the docs index stays on the PC, and only the passages the model reads are sent to the gateway. Keywords and meaning: every passage is also sent to the gateway once, to its embeddings model. Enforce Keywords to keep docs text from being sent for embedding.</string>
       <string id="DocsSearch_Keyword">Keywords</string>
       <string id="DocsSearch_Hybrid">Keywords and meaning</string>
+      <string id="EmbedDailyBudget">Daily embedding budget</string>
+      <string id="EmbedDailyBudget_Help">The most tokens docs search by meaning may send to the embeddings model in a day (the gateway's day, from midnight UTC); it counts against the same daily allowance as the models. Past it, embedding waits for the next day, and keyword search goes on. 0: no embedding. Users can't change it, or raise it for the day. Not configured: 250,000, and each user can change it.</string>
       <string id="EmbeddingModel">Embeddings model</string>
       <string id="EmbeddingModel_Help">The gateway's embeddings model id, for search by meaning.</string>
 
@@ -113,6 +115,7 @@ Not configured: feedback goes to Solder's support address.</string>
       <presentation id="OrgRules"><multiTextBox refId="OrgRules">Rules, one per line:</multiTextBox></presentation>
       <presentation id="InstructionFiles"><multiTextBox refId="InstructionFiles">File names, one per line:</multiTextBox></presentation>
       <presentation id="CompactAtTokens"><decimalTextBox refId="CompactAtTokens" defaultValue="100000">Tokens:</decimalTextBox></presentation>
+      <presentation id="EmbedDailyBudget"><decimalTextBox refId="EmbedDailyBudget" defaultValue="250000">Tokens a day:</decimalTextBox></presentation>
       <presentation id="MaxRounds"><decimalTextBox refId="MaxRounds" defaultValue="30">Rounds:</decimalTextBox></presentation>
       <presentation id="StorageLimitGB"><decimalTextBox refId="StorageLimitGB" defaultValue="5">GB:</decimalTextBox></presentation>
     </presentationTable>

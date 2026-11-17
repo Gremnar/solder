@@ -63,6 +63,25 @@ async function main() {
     again.resolveWebviewView(fakeView());
     await sleep(1500);
     check("... and the guided setup doesn't start by itself then", !again.setup.view);
+
+    // ---- the daily embedding budget, in Settings → Docs / RAG
+    const raw = () => vscode.workspace.getConfiguration("solder");
+    await again.onMessage({ type: "settings" });
+    await again.onMessage({ type: "settingsScreen", action: "set", field: "embedBudget", value: "100,000" });
+    check("the daily budget saves, commas and all", raw().get("embedDailyBudget") === 100000 && again.settingsScreen.view.embedBudget === 100000, raw().get("embedDailyBudget"));
+    await again.onMessage({ type: "settingsScreen", action: "set", field: "embedBudget", value: "lots" });
+    check("... a value that isn't a whole number of tokens is refused, with why", raw().get("embedDailyBudget") === 100000 && /whole number of tokens/.test(again.settingsScreen.view.notice));
+    const budget = again.tools.embedBudget();
+    budget.raiseToday(null);
+    await again.onMessage({ type: "settingsScreen", action: "raiseEmbedBudget" });
+    check("Raise for today raises today's budget, until midnight UTC", budget.raisedToday() === 200000 && /Raised for today/.test(again.settingsScreen.view.notice), budget.raisedToday());
+    budget.raiseToday(null);
+    policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["embeddailybudget", 50000]]), "");
+    await again.onMessage({ type: "settingsScreen", action: "raiseEmbedBudget" });
+    await again.onMessage({ type: "settingsScreen", action: "set", field: "embedBudget", value: "999" });
+    check("your organization's budget: used, locked, and not raised for the day", again.tools.embedBudgetSetting() === 50000 && budget.raisedToday() === undefined
+      && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
+    await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
   } finally {
     policy.apply(new Map(), "");
     policy.refresh = refresh;

@@ -394,7 +394,7 @@ class DocsIndex {
     /** @type {Map<string, number>} when each folder was last looked at (walked, in full or as far as allowed) */
     this.walked = new Map();
     /** What embedding has done: this run, and in all (tokens are the gateway's count). */
-    this.embedding = { done: 0, tokens: 0, runTokens: 0, error: "" };
+    this.embedding = { done: 0, tokens: 0, runTokens: 0, error: "", paused: false };
     /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
     this.loaded = null;
     this.version = 0;
@@ -481,12 +481,14 @@ class DocsIndex {
    * Vectors for the passages that have none (or another model's). Stops at `stop`, or at the gateway's first
    * refusal (kept in this.embedding.error); the keyword index works either way.
    * @param {{model: string, fn: (texts: string[], signal?: AbortSignal) => Promise<{vectors: number[][], tokens: number}>,
-   *          onBatch?: (done: number, tokens: number) => void}} embed @param {number} stop @param {AbortSignal} [signal]
+   *          onBatch?: (done: number, tokens: number) => void, left?: () => number, spend?: (tokens: number) => void}} embed
+   *   left: today's embedding budget still to spend (none: no budget); spend: counts what a batch used @param {number} stop @param {AbortSignal} [signal]
    */
   async _embed(embed, stop, signal) {
     const db = this._open();
     this.embedding.runTokens = 0;
     this.embedding.error = "";
+    this.embedding.paused = false;
     this.embedding.waiting = null;
     // Another model's vectors aren't deleted (a model switched by mistake would cost a rebuild): they're replaced one by
     // one as this model's come, and only after the run below is agreed to.
@@ -506,6 +508,9 @@ class DocsIndex {
       if (Date.now() > stop || signal?.aborted) return;
       const rows = pending.all(embed.model, ...listed.values, EMBED_BATCH);
       if (!rows.length) return;
+      // Today's embedding budget used up: the rest waits for tomorrow (keyword search, and meaning over what has its
+      // vectors, go on as ever). A batch can take it a little past the budget, never further.
+      if (embed.left && embed.left() <= 0) { this.embedding.paused = true; return; }
       let answer;
       try {
         answer = await embed.fn(rows.map(passageText), signal);
@@ -525,6 +530,7 @@ class DocsIndex {
       this.embedding.done += rows.length;
       this.embedding.tokens += answer.tokens;
       this.embedding.runTokens += answer.tokens;
+      embed.spend?.(answer.tokens);
       embed.onBatch?.(rows.length, answer.tokens);
       await new Promise((resolve) => setImmediate(resolve));
     }
@@ -805,5 +811,72 @@ async function listFiles(root, late) {
   return { files, complete: true, truncated };
 }
 
+// ---------------------------------------------------------------- the daily embedding budget --
+
+/** The gateway's day: it starts at midnight UTC. @param {Date} [now] */
+function utcDay(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Embedding isn't free: on a gateway it counts against the same daily allowance as the Tool models. So it's held to
+ * a daily budget of its own (Settings → Docs / RAG, 250,000 tokens by default), which you can raise for the rest of
+ * today. Kept in a small JSON file: tokens embedded today, and today's raise if any. A new day starts afresh. Saving
+ * can fail quietly: a budget must never stop a search.
+ */
+class EmbedBudget {
+  /** @param {string} file @param {() => Date} [now] */
+  constructor(file, now = () => new Date()) {
+    this.file = file;
+    this.now = now;
+    /** @type {{day: string, used: number, today?: number}} */
+    this.state = this._load();
+  }
+
+  _load() {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      const state = { day: String(data.day), used: Math.max(0, Math.floor(Number(data.used) || 0)) };
+      if (Number.isInteger(data.today) && data.today >= 0) return { ...state, today: data.today };
+      return state;
+    } catch { return { day: utcDay(this.now()), used: 0 }; }
+  }
+
+  _current() {
+    if (this.state.day !== utcDay(this.now())) this.state = { day: utcDay(this.now()), used: 0 }; // today's raise ends too
+    return this.state;
+  }
+
+  _save() {
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      fs.writeFileSync(this.file + ".tmp", JSON.stringify(this.state));
+      fs.renameSync(this.file + ".tmp", this.file);
+    } catch { /* the count lives on in memory */ }
+  }
+
+  /** Tokens embedded today. */
+  used() { return this._current().used; }
+
+  /** Today's budget: raised for today, or the setting. @param {number} setting */
+  allowed(setting) { const today = this._current().today; return today !== undefined ? today : Math.max(0, Math.floor(setting)); }
+
+  /** What's left of today's. @param {number} setting */
+  left(setting) { return Math.max(0, this.allowed(setting) - this.used()); }
+
+  /** Today's raise, if there is one. */
+  raisedToday() { return this._current().today; }
+
+  /** @param {number} tokens */
+  spend(tokens) { this._current().used += Math.max(0, Math.floor(Number(tokens) || 0)); this._save(); }
+
+  /** Today's budget is `tokens` until midnight UTC (null: back to the setting). @param {number | null} tokens */
+  raiseToday(tokens) {
+    const state = this._current();
+    if (tokens === null) delete state.today; else state.today = Math.max(0, Math.floor(tokens));
+    this._save();
+  }
+}
+
 module.exports = { DocsIndex, available, documentText, isOffice, decodeText, SIGNED, signatureBlocks, withoutSignatures, unzip, officeText, sections, queryTerms,
-  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES };
+  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay };

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A daily budget for docs search by meaning.** Embedding counts against the same daily allowance as the models, so it's now held to 250,000 tokens a day by default (from midnight UTC; Settings → Docs / RAG → Daily budget). Past it, embedding waits for the next day while keyword search goes on, and **raise it for today** carries on now. A gateway on your own PC isn't counted. New `EmbedDailyBudget` policy.
+- **Fix: the `ReadOnly` and `AssistModels` policies didn't take effect.** In the ADMX templates since 0.2.10 (`AssistModels`) and 0.2.11 (`ReadOnly`), their registry path had lost its backslashes, so Group Policy wrote them where Solder doesn't look. Use the templates from this release; a new test checks every policy's path against the code.
+
 ## 0.2.15 (2026-11-17)
 
 - **First start with your organization's gateway.** When the gateway comes from policy and you have no key yet, Solder now starts the guided setup (at the key, as the gateway is set) instead of showing a connection error (HTTP 401). A key that's there but turned away still shows the connection problem, now with **Guided setup** beside Try again, Settings and Set API key.

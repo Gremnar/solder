@@ -13,7 +13,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
+const { DocsIndex, EmbedBudget, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
 
 const MAX_READ_LINES = 2000;
@@ -693,7 +693,11 @@ class WorkspaceTools {
     const model = this.semantic();
     let meaning = null;
     if (model) {
-      try { meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error, waiting: index.embedding.waiting ?? null }; } catch { meaning = null; }
+      try {
+        const budget = this.embedBudget();
+        meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error, waiting: index.embedding.waiting ?? null,
+          paused: !!index.embedding.paused, free: this.embedFree(), today: budget.used(), budget: budget.allowed(this.embedBudgetSetting()), raised: budget.raisedToday() !== undefined };
+      } catch { meaning = null; }
     }
     return { available: true, folders, indexed, active: !!index.active, meaning };
   }
@@ -704,6 +708,30 @@ class WorkspaceTools {
       this._docs = docsAvailable() ? new DocsIndex(path.join(this.context.globalStorageUri.fsPath, "docs", "docs.sqlite")) : null;
     }
     return this._docs;
+  }
+
+  /** Today's embedding count and budget (a small file beside the index). */
+  embedBudget() {
+    this._budget ??= new EmbedBudget(path.join(this.context.globalStorageUri.fsPath, "docs", "embed-budget.json"));
+    return this._budget;
+  }
+
+  /** The daily embedding budget's setting (your organization's, if it sets one), in tokens. */
+  embedBudgetSetting() {
+    const value = Number(solderSettings().get("embedDailyBudget", 250_000));
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 250_000;
+  }
+
+  /** A gateway on this PC (a local embeddings server) is free: neither counted nor held to the budget. */
+  embedFree() {
+    try { return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(String(solderSettings().get("endpoint", ""))).hostname); } catch { return false; }
+  }
+
+  /** Raise today's budget by another day's worth, until midnight UTC (Settings → Docs / RAG), and carry on embedding. */
+  raiseEmbedBudget() {
+    const budget = this.embedBudget();
+    budget.raiseToday(budget.allowed(this.embedBudgetSetting()) + Math.max(this.embedBudgetSetting(), 50_000));
+    this.refreshDocs();
   }
 
   /**
@@ -723,6 +751,9 @@ class WorkspaceTools {
         const embed = model && this.embedder ? { model,
           fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal),
           confirm: (/** @type {number} */ passages, /** @type {number} */ tokens) => this.confirmEmbedding(model, passages, tokens),
+          // Held to today's embedding budget (a gateway on this PC is free, and isn't).
+          left: () => this.embedFree() ? Infinity : this.embedBudget().left(this.embedBudgetSetting()),
+          spend: (/** @type {number} */ tokens) => { if (!this.embedFree()) this.embedBudget().spend(tokens); },
           onBatch: () => {
             const { passages, embedded } = index.vectorCount(model);
             progress?.report({ message: `${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages` });
@@ -789,6 +820,7 @@ class WorkspaceTools {
       try {
         const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
         meaning = { vector: vectors[0], model };
+        if (!this.embedFree()) this.embedBudget().spend(tokens); // counted, but a search is never held back by the budget
         this.onDocsLog?.(`docs search by meaning · ${tokens} tokens`);
       } catch (error) {
         if (signal.aborted) throw error;

@@ -24,7 +24,7 @@
     <category name="Limits" displayName="$(string.Cat_Limits)"><parentCategory ref="Solder" /></category>
   </categories>
   <policies>
-    <policy name="ReadOnly" class="Both" displayName="$(string.ReadOnly)" explainText="$(string.ReadOnly_Help)" key="SoftwarePoliciesGremnarSolder" valueName="ReadOnly">
+    <policy name="ReadOnly" class="Both" displayName="$(string.ReadOnly)" explainText="$(string.ReadOnly_Help)" key="Software\Policies\Gremnar\Solder" valueName="ReadOnly">
       <parentCategory ref="Solder" /><supportedOn ref="SUPPORTED_Solder" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
@@ -41,7 +41,7 @@
       <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="ModelFilter" valueName="ModelFilter" maxLength="512" required="true" /></elements>
     </policy>
-    <policy name="AssistModels" class="Both" displayName="$(string.AssistModels)" explainText="$(string.AssistModels_Help)" key="SoftwarePoliciesGremnarSolder" presentation="$(presentation.AssistModels)">
+    <policy name="AssistModels" class="Both" displayName="$(string.AssistModels)" explainText="$(string.AssistModels_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.AssistModels)">
       <parentCategory ref="Model" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><multiText id="AssistModels" valueName="AssistModels" maxLength="4096" required="true" /></elements>
     </policy>
@@ -94,6 +94,10 @@
           <item displayName="$(string.DocsSearch_Hybrid)"><value><string>hybrid</string></value></item>
         </enum>
       </elements>
+    </policy>
+    <policy name="EmbedDailyBudget" class="Both" displayName="$(string.EmbedDailyBudget)" explainText="$(string.EmbedDailyBudget_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbedDailyBudget)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><decimal id="EmbedDailyBudget" valueName="EmbedDailyBudget" minValue="0" maxValue="100000000" required="true" /></elements>
     </policy>
     <policy name="EmbeddingModel" class="Both" displayName="$(string.EmbeddingModel)" explainText="$(string.EmbeddingModel_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbeddingModel)">
       <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />

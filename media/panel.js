@@ -369,6 +369,8 @@
       }
       const el = $("docs-status");
       if (el) { el.textContent = status.text; el.className = "status-pill" + (status.busy ? " busy" : ""); }
+      const today = $("embed-today");
+      if (today) { const html = embedTodayHtml(s); if (today.innerHTML !== html) today.innerHTML = html; }
       const notice = $("settings-notice");
       if (notice) { notice.textContent = s.notice || ""; notice.className = "settings-notice " + (s.noticeKind || ""); }
       const check = /** @type {HTMLButtonElement | null} */ (transcript.querySelector('[data-sact="check"]'));
@@ -418,6 +420,8 @@
         (s.docsSearch === "hybrid"
           ? label("Embeddings model", "embeddingModel", saved("embeddingModel")) + `<div class="row-field"><input class="field" id="sf-embeddingModel" data-field="embeddingModel" spellcheck="false" placeholder="The gateway's embeddings model id" value="${escape(s.embeddingModel)}">` +
             `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
+            label("Daily budget", "embedBudget", saved("embedBudget")) + `<div class="row-field"><input class="field" id="sf-embedBudget" data-field="embedBudget" inputmode="numeric" spellcheck="false" value="${escape(String(s.embedBudget))}"><span class="grey">tokens a day</span></div>` +
+            `<div class="hint" id="embed-today">${embedTodayHtml(s)}</div>` +
             `<div class="hint">Meaning search finds passages that say the same thing in other words. It sends every passage of your docs folders to the gateway once to be turned into numbers, then only changed files, and each search's words. The log (Copy diagnostics) shows the tokens each run used.</div>`
           : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)),
       skills: section("", skillsHtml(s)),
@@ -605,12 +609,23 @@
   }
 
   /** @param {any} d */
+  /** Today's embedding against the daily budget, for the Docs tab (with Raise for today once it's reached). @param {any} s */
+  function embedTodayHtml(s) {
+    const m = s.docsStatus?.meaning;
+    if (!m) return "";
+    if (m.free) return "A gateway on this PC: embedding isn't counted.";
+    const reached = Number(m.today) >= Number(m.budget);
+    return `Embedded today: ${compact(Number(m.today) || 0)} of ${compact(Number(m.budget) || 0)} tokens${m.raised ? " (raised for today)" : ""}.` +
+      (reached || m.paused ? (s.locked?.embedBudget ? " It waits for tomorrow (midnight UTC)." : ` It waits for tomorrow (midnight UTC), or <button class="link" data-sact="raiseEmbedBudget">raise it for today</button>.`) : "");
+  }
+
   function docsStatusText(d) {
     if (!d) return { text: "", busy: false };
     if (!d.available) return { text: "Needs a newer VS Code", busy: false };
     if (!d.folders) return { text: "No folders yet", busy: false };
     const m = d.meaning;
     const meaning = !m ? "" : m.error ? " · meaning: stopped, see the log"
+      : m.paused ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages, paused (today's embedding budget is used up)`
       : m.waiting ? ` · meaning: waiting for your OK to send ${Number(m.waiting.passages).toLocaleString()} passages (Index again asks)` : m.passages
       ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages${m.tokens ? `, ${compact(m.tokens)} tokens` : ""}` : "";
     if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far${meaning}`, busy: true };

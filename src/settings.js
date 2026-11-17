@@ -15,7 +15,7 @@ class SettingsScreen {
   /**
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
-   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, refreshModels: () => Promise<void>,
+   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, raiseEmbedBudget: () => void, refreshModels: () => Promise<void>,
    *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>, interviewSkill: () => Promise<void>,
    *          createSkill: (name: string, when: string) => Promise<{file: string} | {problem: string}>,
    *          deleteSkill: (name: string) => Promise<boolean>, orgSkillsFolders: () => string[], policyChanged?: () => void,
@@ -74,6 +74,7 @@ class SettingsScreen {
       docsStatus: this.hooks.docs(),
       docsSearch: String(config.get("docsSearch", "keyword")) === "hybrid" ? "hybrid" : "keyword",
       embeddingModel: String(config.get("embeddingModel", "")),
+      embedBudget: Number(config.get("embedDailyBudget", 250_000)),
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
@@ -85,7 +86,7 @@ class SettingsScreen {
       storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
-        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["modelFilter", "modelFilter"],
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["modelFilter", "modelFilter"],
         ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"],
         ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
@@ -153,6 +154,11 @@ class SettingsScreen {
           await save("maxRounds", n, field);
         } else if (field === "docsSearch" && ["keyword", "hybrid"].includes(value)) await save("docsSearch", value, field);
         else if (field === "embeddingModel") await save("embeddingModel", String(value || "").trim(), field);
+        else if (field === "embedBudget") {
+          const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
+          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens, from 0 to 100,000,000.", "bad"); return; }
+          await save("embedDailyBudget", tokens, field);
+        }
         else if (field === "modelFilter") {
           const text = String(value || "").trim();
           try { if (text) new RegExp(text); } catch { this.notice("That model filter isn't a valid regular expression.", "bad"); return; }
@@ -280,6 +286,12 @@ class SettingsScreen {
         return;
       }
       case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "raiseEmbedBudget":
+        if (policy.locked("embedDailyBudget")) { this.notice("Your organization sets the daily embedding budget.", "bad"); return; }
+        this.hooks.raiseEmbedBudget();
+        Object.assign(this.view, { docsStatus: this.hooks.docs() });
+        this.notice("Raised for today (until midnight UTC). Embedding carries on in the background.", "ok");
+        return;
       case "testEmbedding": {
         const model = String(solderSettings().get("embeddingModel", "")).trim();
         if (!model) { this.notice("Type the embeddings model's id first.", "bad"); return; }

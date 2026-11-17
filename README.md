@@ -106,7 +106,8 @@ Point Solder at folders of reference documentation that only exist on your PC: i
   - files over 5 MB (40 MB for Office files);
   - anything beyond 20,000 files in one folder. `.git` and `node_modules` are skipped.
 - **Privacy:** the index is built and kept on your PC, and refreshed in the background. Only the passages the model reads are sent to your endpoint.
-- **Search by meaning (optional):** in **Settings → Your docs**, choose **Keywords + meaning** and your gateway's embeddings model (**Test** checks it). Searches then also find passages that say the same thing in other words, merged with the keyword results. It sends every passage of your docs folders to the gateway once, to be turned into numbers, then only changed files, plus each search's words. The log (**⋯ → Copy diagnostics**) shows the tokens each run used.
+- **Search by meaning (optional):** in **Settings → Docs / RAG**, choose **Keywords + meaning** and your gateway's embeddings model (**Test** checks it). Searches then also find passages that say the same thing in other words, merged with the keyword results. It sends every passage of your docs folders to the gateway once, to be turned into numbers, then only changed files, plus each search's words. The log (**⋯ → Copy diagnostics**) shows the tokens each run used.
+- **A daily budget for it:** embedding counts against the same daily allowance as the models, so it's held to a budget of its own, 250,000 tokens a day by default (the gateway's day, from midnight UTC). Past it, embedding waits for the next day, and keyword search, and meaning over what's already embedded, go on. Change it under **Daily budget**, or **raise it for today** once it's reached. A gateway on your own PC isn't counted. Organizations can set it with the `EmbedDailyBudget` policy.
 
 <img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
 

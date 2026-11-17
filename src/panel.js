@@ -116,7 +116,8 @@ class SolderPanel {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
         return { dims: vectors[0].length, tokens };
       },
-      refreshDocs: (/** @type {boolean} */ ask) => { if (ask) this.tools.embedDeclinedAt = 0; this.tools.refreshDocs(); }, refreshModels: () => this.refreshModels() }, () => this.post());
+      refreshDocs: (/** @type {boolean} */ ask) => { if (ask) this.tools.embedDeclinedAt = 0; this.tools.refreshDocs(); },
+      raiseEmbedBudget: () => this.tools.raiseEmbedBudget(), refreshModels: () => this.refreshModels() }, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "solder.focus";
     context.subscriptions.push(this.statusBar);

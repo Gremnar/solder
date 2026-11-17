@@ -315,3 +315,50 @@ test("nothing already embedded is sent again by accident: a re-dated copy, a fol
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("the daily embedding budget: counted on the gateway's day, raised for today only, and saved", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-budget-"));
+  try {
+    let now = new Date("2026-11-17T23:30:00Z");
+    const file = path.join(base, "embed-budget.json");
+    const budget = new docs.EmbedBudget(file, () => now);
+    assert.equal(budget.left(250_000), 250_000);
+    budget.spend(200_000);
+    assert.equal(budget.left(250_000), 50_000);
+    budget.raiseToday(500_000);
+    assert.equal(budget.allowed(250_000), 500_000, "raised for today");
+    assert.equal(new docs.EmbedBudget(file, () => now).used(), 200_000, "saved, so a restart doesn't reset it");
+    now = new Date("2026-11-18T00:05:00Z"); // midnight UTC: a new gateway day
+    assert.equal(budget.used(), 0);
+    assert.equal(budget.allowed(250_000), 250_000, "today's raise is over");
+    assert.equal(budget.left(0), 0, "0: no embedding");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("embedding stops when today's budget is used up, and carries on once there's more", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-budget-run-"));
+  const folder = path.join(base, "docs");
+  fs.mkdirSync(folder);
+  for (let n = 0; n < 40; n++) fs.writeFileSync(path.join(folder, `n${n}.md`), `# Note ${n}\n\nSome text about topic ${n}, long enough to be a passage of its own.\n`);
+  const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
+  let left = 10;
+  let spent = 0;
+  const embed = { model: "embed-a", fn: fakeEmbed, left: () => left - spent, spend: (/** @type {number} */ tokens) => { spent += tokens; } };
+  try {
+    await index.refresh([folder], { ms: 20_000, embed });
+    const partway = index.vectorCount("embed-a");
+    assert.ok(partway.embedded > 0 && partway.embedded < partway.passages, `one batch, then paused: ${partway.embedded} of ${partway.passages}`);
+    assert.equal(index.embedding.paused, true);
+    assert.ok(spent > 0, "what the batch used is counted");
+    left = Infinity;
+    await index.refresh([folder], { ms: 20_000, embed });
+    const all = index.vectorCount("embed-a");
+    assert.equal(all.embedded, all.passages, "the rest, once there's room");
+    assert.equal(index.embedding.paused, false);
+  } finally {
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

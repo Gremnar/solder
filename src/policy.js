@@ -40,6 +40,7 @@ const SETTINGS = {
   storageLimitGB: { value: "StorageLimitGB", kind: "number" },
   docsSearch: { value: "DocsSearch", kind: "choice", choices: ["keyword", "hybrid"] },
   embeddingModel: { value: "EmbeddingModel", kind: "text" },
+  embedDailyBudget: { value: "EmbedDailyBudget", kind: "number" },
   docsFolders: { value: "DocsFolders", kind: "docs" },
   skillsFolders: { value: "SkillsFolders", kind: "folders" },
   readOnly: { value: "ReadOnly", kind: "number" },
