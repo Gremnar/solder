@@ -28,7 +28,7 @@ Solder reads two registry keys, both writable only by administrators:
 | `Model` | REG_SZ | The model id. Users can't pick another, for new chats or existing ones. |
 | `ModelFilter` | REG_SZ | A regular expression: only matching model ids are offered. |
 | `AssistModels` | REG_MULTI_SZ | The Assist models, by id, one per line; every other model is a Tool model. What users set in Settings → Advanced → Kinds of model. When set, it decides (`ToolModels` is then not used). |
-| `ToolModels` | REG_SZ | A regular expression: matching model ids are Tool models (system prompt, native tool calls); every other model is an Assist model (plain text, Solder's text protocol, the gateway's sessions). Empty: all are Tool models. |
+| `ToolModels` | REG_SZ | A regular expression: matching model ids are Tool models (system prompt, native tool calls); every other model is an Assist model (plain text, Solder's text protocol, the gateway's sessions). Empty: all are Tool models. Enforced (without `AssistModels`), it decides on its own: users' own Assist models list doesn't apply, and Settings → Advanced → Kinds of model is shown by it and locked. |
 | `AssistSessionBlock` | REG_SZ | The name of the object in the gateway's responses that carries an Assist session. Empty: no sessions (every Assist request carries the conversation over). |
 | `ModelNames` | REG_SZ | Short names for the picker, as JSON: `{"model-a": "Model A"}`. |
 | `Effort` | REG_SZ | `default`, `low`, `medium` or `high`. Users can't change it, in settings or per chat. |

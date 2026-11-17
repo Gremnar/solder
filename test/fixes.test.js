@@ -125,3 +125,21 @@ test("an enforced model filter stops a request to a model it doesn't allow, befo
   assert.equal(sent.length, 0, "nothing sent");
   assert.match(String(events.find((e) => e.type === "error")?.message), /doesn't allow the model model-b/);
 });
+
+test("an enforced Tool models pattern decides which model is which: the user's own Assist models list doesn't apply, and is locked", () => {
+  const { Policy } = require("../src/policy.js");
+  const { laneOf } = require("../src/lanes.js");
+  const policy = new Policy({ platform: "win32" });
+  /** @type {Record<string, any>} */
+  const mine = { assistModels: ["model-a-tools"], toolModels: "" };
+  const config = policy.wrap({ get: (name, fallback) => name in mine ? mine[name] : fallback, update: async () => {} });
+  const lanes = () => ({ toolModels: String(config.get("toolModels", "")), assistModels: config.get("assistModels", []) });
+  assert.equal(laneOf("model-a-tools", lanes()), "assist", "no policy: the user's own list decides");
+  policy.apply(new Map([["toolmodels", "-tools$"]]), "");
+  assert.deepEqual(config.get("assistModels", []), [], "the user's list is set aside");
+  assert.equal(laneOf("model-a-tools", lanes()), "tool");
+  assert.equal(laneOf("model-a", lanes()), "assist");
+  assert.equal(policy.locked("assistModels"), true, "the Kinds of model picker is locked");
+  policy.apply(new Map([["toolmodels", "-tools$"], ["assistmodels", ["model-b"]]]), "");
+  assert.deepEqual(config.get("assistModels", []), ["model-b"], "both enforced: the organization's list, as before");
+});

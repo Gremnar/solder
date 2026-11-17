@@ -82,6 +82,18 @@ async function main() {
     check("your organization's budget: used, locked, and not raised for the day", again.tools.embedBudgetSetting() === 50000 && budget.raisedToday() === undefined
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
+
+    // ---- your organization's Tool models pattern: Kinds of model is shown by it, and locked
+    await raw().update("assistModels", ["model-a-tools"], vscode.ConfigurationTarget.Global);
+    again.models = [{ id: "model-a-tools", name: "A" }, { id: "model-a", name: "A (Assist)" }];
+    policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["toolmodels", "-tools$"]]), "");
+    await again.onMessage({ type: "settings" });
+    const kinds = again.settingsScreen.view.kinds;
+    check("an enforced Tool models pattern sorts Kinds of model, over the user's own list", JSON.stringify(kinds.map((k) => [k.id, k.assist])) === JSON.stringify([["model-a-tools", false], ["model-a", true]]), kinds);
+    await again.onMessage({ type: "settingsScreen", action: "moveModel", name: "model-a", index: 0 });
+    check("... and it's locked: a move is refused, with why", again.settingsScreen.view.locked.kinds === true && /organization sets which models/.test(again.settingsScreen.view.notice)
+      && JSON.stringify(raw().get("assistModels")) === JSON.stringify(["model-a-tools"]), again.settingsScreen.view.notice);
+    await raw().update("assistModels", undefined, vscode.ConfigurationTarget.Global);
   } finally {
     policy.apply(new Map(), "");
     policy.refresh = refresh;

@@ -218,6 +218,8 @@ class Policy {
 
   /** Whether the user can't change this setting. @param {string} name */
   locked(name) {
+    // Which model is which is your organization's once it sets either the Assist models list or the Tool models pattern.
+    if (name === "assistModels") return this.values.has("assistModels") || this.values.has("toolModels");
     if (name === "docsFolders") return this.values.has("docsFolders") && !this.allowUserDocs;
     if (name === "skillsFolders") return this.values.has("skillsFolders") && !this.allowUserSkills;
     return this.values.has(name);
@@ -252,6 +254,9 @@ class Policy {
           const mine = (config.get(name, []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean);
           return [...org, ...mine.filter((folder) => !org.some((o) => o.toLowerCase() === folder.toLowerCase()))];
         }
+        // Your organization's Tool models pattern decides which model is which: your own Assist models list (which
+        // would otherwise win over a pattern) doesn't apply while it's enforced.
+        if (name === "assistModels" && !policy.values.has("assistModels") && policy.values.has("toolModels")) return [];
         return policy.values.has(name) ? policy.values.get(name) : config.get(name, fallback);
       },
       /** The user's own value, policy aside (their docs folders, beside the organisation's). @param {string} name @param {any} [fallback] */
