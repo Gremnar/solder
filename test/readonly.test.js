@@ -45,7 +45,7 @@ test("read-only mode: the change tools aren't offered, and a change the model as
     { content: "Here's the change to make." },
   ], true);
   assert.ok(!offered[0].includes("edit_file") && !offered[0].includes("write_file") && !offered[0].includes("remove_item") && !offered[0].includes("move_item"));
-  assert.ok(offered[0].includes("read_file") && offered[0].includes("plan"));
+  assert.ok(offered[0].includes("read_file") && offered[0].includes("problems"));
   assert.deepEqual(ran, ["read_file"], "only the read ran");
   const results = sent[1].filter((/** @type {any} */ m) => m.role === "tool").map((/** @type {any} */ m) => m.content);
   assert.equal(results[1], TEXTS.readOnly);

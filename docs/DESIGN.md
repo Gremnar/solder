@@ -9,7 +9,7 @@ It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's
 | Solder does | Solder leaves out (VS Code or Alloy covers it) |
 |---|---|
 | A chat panel in the side bar, with streaming answers | A file tree, file previews and an editor: VS Code has them |
-| 11 tools: read, symbols, search, find, changes, edit, write, move, remove, problems, plan | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
+| 10 tools: read, symbols, search, find, changes, edit, write, move, remove, problems | Running commands (no shell at all), OneNote, reminders, Excel, the Brain, web fetch |
 | Edits you can review in VS Code's diff and undo per step | General-assistant chat and long-term memory |
 | Follows `AGENTS.md`, a few simple rules you set, and your skills (one `.md` file each, read when a task needs one) | Skills with scripts, notes and project folders |
 | Approval before any change outside the workspace | Builds, tests and scripts: it says what to run, and you run it |
@@ -58,11 +58,11 @@ VS Code extension host (Node)
 | `write_file` | path, content | create or overwrite through `WorkspaceEdit`, then save | none inside the workspace; asks outside it |
 | `move_item` | from, to, copy? | `workspace.fs.rename` or `copy` (plain file operations, not a rename with import updates, which would change files Undo doesn't cover). `to` that's a folder, or ends with `/`, means into it; missing folders are created; it never overwrites, and refuses a file with unsaved editor changes. After a move it lists up to 20 lines that still mention the old name, so the model fixes them (a note alone was ignored three times in four). Undo moves it back, or removes the copy | asks when anything leaves or enters the workspace |
 | `problems` | path? | `languages.getDiagnostics` (errors and warnings, capped) | none |
-| `plan` | steps? (goal, work), done?, notes? | the engine's own: chat.plan; a finished step's results become stand-ins with its notes | none |
 
 Details that matter:
 - **After every edit or write, include the file's new problems.** Wait up to about 2 s for `onDidChangeDiagnostics` on that file, then add any new errors to the result: "New problems in app.ts: 42: Cannot find name 'x'". This is the biggest token saver available. The model sees a broken edit at once instead of running a build to find out.
 - **Ripgrep.** VS Code ships `rg.exe` inside its install. In 1.141 it is at `<appRoot>/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/win32-x64/rg.exe`; older builds have `@vscode/ripgrep/bin/rg.exe`. Probe both from `vscode.env.appRoot`. If neither exists, or policy blocks it, fall back to a JS search over `findFiles` with size caps. Output: `path:line: text`, at most 200 matches.
+- **No plan tool (decided 2026-11-16).** Solder had a `plan` tool (a checklist the model set and ticked off). An A/B on six multi-step scenarios, three runs each on two models, passed 36/36 both ways, but without plans the same work cost 36% and 53% fewer tokens, with about half the requests: the cost was the extra round trips to set and update it. Frontier models keep to a task without one. Old chats' plan calls are left out of what's sent.
 - **No shell (decided 2026-11-04).** Solder never starts PowerShell or any other shell, so Constrained Language mode, AppLocker and endpoint security have nothing to trip over, and the model can't fall into script loops (Alloy's worst token burns). It checks its work through `problems`, and says what to build or test for the user to run. If running things is missed later, add narrow, read-only tools that start one program directly (`git diff`, `git status`), never a general shell.
 - **Docs search** (`src/docs.js`, ported from Alloy's docsearch).
   - **Where:** the user's `solder.docsFolders`, a per-user setting, are indexed in a local SQLite FTS5 index: `node:sqlite`, which VS Code's runtime ships, with porter stemming and BM25 ranking.
@@ -78,7 +78,7 @@ Details that matter:
 - **Skills** (`src/skills.js`, decided 2026-11-09). Alloy's skills, without their tools.
   - **What one is:** a `.md` file directly in a skills folder, named after the skill, whose first line is `When to use: …`. A front-matter `description:` (Claude's and Codex's `SKILL.md`) is read too, never written. No folder skills: they exist to ship scripts, and Solder runs nothing.
   - **How the model gets them:** both lanes' prompts list each skill (name, file, when; up to 50) and, when the user has a folder of their own, where to save a new one (offered rarely, saved only when they agree). There's no `read_skill` or `create_skill`: the model reads a skill with `read_file` and saves one with `write_file`, which asks, as the folder is outside the workspace.
-  - **The read:** a file that's a skill comes back whole (any range ignored, no line numbers, up to 20,000 characters) as `keep`, so cutting old results and finishing its plan step leave it in the chat (Alloy's lesson: a skill read must stay whole). If the chat already holds that text since the last compaction, a short "already read" goes back instead.
+  - **The read:** a file that's a skill comes back whole (any range ignored, no line numbers, up to 20,000 characters) as `keep`, so cutting old results leaves it in the chat (Alloy's lesson: a skill read must stay whole). If the chat already holds that text since the last compaction, a short "already read" goes back instead.
   - **Folders:** `solder.skillsFolders` (per user, scope `machine`), and the `SkillsFolders` and `AllowUserSkills` policies, as for docs. Skills folders are read without asking, like docs folders, and a network path is opened inside a docs or skills folder that's set up (compared as written).
   - **Making one:** **New skill…** (Settings, and the `solder.newSkill` command) asks the name and when to use it, then opens the file. With no folder of the user's yet, it makes `~/.solder/skills` and adds it to the setting, so the first skill needs no folder picking. The prompt says where to save a skill only once the user has a folder: someone who never uses skills pays no tokens for them.
   - **/skill:** sends a fixed message (`SKILL` in prompt.js) asking the model to save how the chat's task was done, or a skill for what follows the command; it makes the default folder first, so the prompt says where to save. Alone in a new chat it runs New skill… instead.
@@ -141,7 +141,7 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
 
 **Two lanes (Tool and Assist models).** The `solder.toolModels` pattern sends matching models down the **Tool lane**: a system prompt, native tool calls, and the whole chat on every request. Every other model goes down the **Assist lane**, which has no system prompt and no tools, and works like this:
 - **Calls:** the model asks for a tool by writing a JSON block in its reply. `src/assist.js` parses those blocks into ordinary tool calls before they're stored.
-- **Storage:** chats are stored the same way on both lanes, so batching, approvals, the plan and Undo don't change.
+- **Storage:** chats are stored the same way on both lanes, so batching, approvals and Undo don't change.
 - **Rendering:** each lane renders the stored chat its own way.
 - **Sessions:** `sessionPlan` sends only each new message while the gateway's session holds the chat. Otherwise it sends the introduction (`ASSIST` in prompt.js), or carries the conversation over inside one user message.
 - **The texts:** the two lanes' model-facing texts are separate, and each is pinned by its own test.

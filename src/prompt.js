@@ -35,9 +35,6 @@ stop later reads). When you know several files or names you need, look at them i
 not one per reply. Batch edits only when you know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
-- For a task of two or more steps, call plan first, then do one step at a time. When a step is done, call plan \
-with done and notes for later steps, alongside your next calls. What you read stays in the chat: don't read it again. \
-Skip plan for small tasks.
 - If a change could lose the user's work, or the request is unclear and reading the code can't settle \
 it, ask first: one to three short questions, each with the choice you'd recommend.
 
@@ -156,21 +153,10 @@ a folder, or ends with /, means into it. Never overwrites; the user can undo it.
 linters), for one file or the whole workspace.", {
     path: { type: "string", description: `Just this file: ${RELATIVE}.` },
   }, []],
-  plan: ["Sets out a task of several steps, or marks one finished. The user sees each step's goal as a checklist. \
-With steps: the plan (replacing any earlier one; steps already done stay done). With done: that step is finished; \
-its notes stand in for its results if the chat later needs the room.", {
-    steps: { type: "array", description: "The plan, in order.", items: { type: "object", properties: {
-      goal: { type: "string", description: "One sentence the user sees, such as \"Fix the date parsing in Get-Report\"." },
-      work: { type: "string", description: "What the step needs: files, functions, what to check. Only you see it." } },
-      required: ["goal"] } },
-    done: { type: "integer", description: "The step just finished (numbered from 1)." },
-    notes: { type: "string", description: "With done: what you did, and anything later steps need from it (names, \
-values, decisions), in a few lines." },
-  }, []],
 };
 
 /** Tools that only look: more of them fit in one reply, and one failing doesn't stop the rest. */
-const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems", "plan"]);
+const READ_ONLY = new Set(["read_file", "symbols", "search", "find_files", "changes", "problems"]);
 
 /** The tools that change files: left out in read-only mode. */
 const CHANGES = Object.keys(TOOLS).filter((name) => !READ_ONLY.has(name));
@@ -200,10 +186,6 @@ const TEXTS = {
   notRunFull: "Not run yet, only because this reply's results reached the size limit for one step. Call it again \
 in your next step, before you answer: nothing is wrong with it.",
   resume: "Please carry on from where you stopped.",
-  planLeft: (/** @type {{number: number, goal: string}[]} */ steps) => `The plan still has ${steps.length === 1 ? "a step" : steps.length + " steps"} \
-to do: ${steps.map((step) => `${step.number}. ${step.goal}`).join("; ")}. Please carry on with ${steps.length === 1 ? "it" : "them"}. If you \
-stopped on purpose (it's done another way, or you need something from me), say so instead.`,
-  planLeftShown: (/** @type {number} */ count) => `Carry on (the plan had ${count} step${count === 1 ? "" : "s"} left)`,
   resumeLimit: (/** @type {number} */ steps) => `Please carry on from where you stopped. You reached the limit of ${steps} \
 replies with tool calls for one message, and that's reset now: you have ${steps} more. Run again anything that wasn't run, then \
 go on.`,
@@ -213,7 +195,7 @@ again whatever was stopped or not run, then go on.",
   notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
   notRunBatch: (/** @type {number} */ calls, /** @type {number} */ changes) =>
-    `Not run: Solder runs up to ${calls} calls from one reply, ${changes} of them changes (plan calls aside). Send it again if you still need it.`,
+    `Not run: Solder runs up to ${calls} calls from one reply, ${changes} of them changes. Send it again if you still need it.`,
   repeat: "Not run again: it's the same call as an earlier one in this reply (see that result).",
   readOnly: "Not run: Solder is in read-only mode, so nothing can be changed. Show the change instead (the file, where, \
 and the new code); the user can turn on changes with Enable tools at the top of Solder's panel.",
@@ -254,25 +236,6 @@ this. Reply with only the title, without quotes.\n\n" + excerpt,
 };
 
 /** The tools' results and errors (src/tools.js). An error reaches the model as "Error: " + the text. */
-/** The plan tool's answers. */
-const PLAN = {
-  /** @param {{goal: string, work: string, state: string, notes: string}[]} steps */
-  now: (steps) => {
-    const at = steps.findIndex((step) => step.state === "doing");
-    const done = steps.filter((step) => step.state === "done").length;
-    const head = at >= 0 ? `Plan: step ${at + 1} of ${steps.length} now (${done} done).` : `Plan: all ${steps.length} steps done.`;
-    return [head, ...steps.map((step, index) => `${index + 1}. [${step.state === "done" ? "done" : step.state === "doing" ? "now" : "to do"}] ${step.goal}` +
-      (step.state === "done" && step.notes ? `\n   Notes: ${step.notes}` : "") + (step.state === "doing" && step.work ? `\n   Work: ${step.work}` : ""))].join("\n");
-  },
-  none: "There's no plan yet: call plan with steps first.",
-  badStep: (/** @type {number} */ count) => `done needs a step number from 1 to ${count}.`,
-  /** An older plan result, all of it in the newest one. */
-  superseded: "(An earlier state of the plan, left out: the newest plan result, further on, holds all of it.)",
-  /** A finished step's result, left out. */
-  stub: (/** @type {number} */ step, /** @type {string} */ summary) =>
-    `(Step ${step} is done; this result (${summary}) is left out to save space. The step's notes in the plan say what came of it.)`,
-};
-
 const RESULTS = {
   networkPath: "Network paths (\\\\server\\share) aren't opened, outside the workspace: use a path on this PC.",
   error: (/** @type {string} */ message) => `Error: ${message}`,
@@ -522,7 +485,7 @@ reading, and for a big file you haven't seen, get its outline with symbols and r
 where a function, class or method is defined or used, use symbols rather than search. Read only what the task needs, \
 and never guess what a file says: read it. Make the smallest change that does the job, in the style of the code \
 around it. Edits are saved right away (I can undo them), and you'll see any new problems they cause: fix what you \
-broke before moving on. For a task of two or more steps, call plan first, then do one step at a time. My extension \
+broke before moving on. My extension \
 can't run commands: when something needs building, testing or running, tell me what to run and I will. I only see \
 what my extension sends back, so wait for a result before describing what a file says. If a change could lose my \
 work, or what I'm asking is unclear and reading the code can't settle it, ask me first: one to three short \
@@ -591,7 +554,6 @@ request, or give me your answer.)"],
   ["Ask the user to save it first.", "Ask me to save it first."],
   ["Never overwrites; the user can undo it.", "Never overwrites; I can undo it."],
   ["The user is asked first, and can undo it.", "I'm asked first, and can undo it."],
-  ["The user sees each step's goal as a checklist.", "I see each step's goal as a checklist."],
 ];
 
 const ASSIST = {
@@ -635,4 +597,4 @@ function assistText(text) {
   return out;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };

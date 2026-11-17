@@ -7,13 +7,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, PLAN, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
+const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "ae457e93b77a842f";
+const PINNED = "d28f04424b5eec68";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
-  notRunBatch: [[8, 5]], resumeLimit: [[30]], planLeft: [[[{ number: 3, goal: "Update the README" }]], [[{ number: 2, goal: "A" }, { number: 3, goal: "B" }]]], planLeftShown: [[1], [3]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
+  notRunBatch: [[8, 5]], resumeLimit: [[30]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
   missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
   wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]], argumentLeftOut: [[412]],
@@ -60,8 +60,6 @@ function everything() {
     tools: toolDefinitions(),
     readOnlyTools: toolDefinitions(true),
     starters: STARTERS,
-    plan: [PLAN.now([{ goal: "G1", work: "W1", state: "done", notes: "N1" }, { goal: "G2", work: "W2", state: "doing", notes: "" }, { goal: "G3", work: "W3", state: "todo", notes: "" }]),
-      PLAN.now([{ goal: "G1", work: "", state: "done", notes: "" }]), PLAN.none, PLAN.badStep(3), PLAN.stub(2, "Read a.js")],
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js")],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
     skill: [SKILL.fromChat, SKILL.about("WHAT"), SKILL.interview],
@@ -80,7 +78,7 @@ test("the model-facing texts match the pinned fingerprint", () => {
 test("the tools: a fixed order, every argument described and typed, required ones defined", () => {
   const definitions = toolDefinitions();
   assert.deepEqual(definitions.map((d) => d.function.name),
-    ["read_file", "symbols", "search", "find_files", "changes", "edit_file", "write_file", "move_item", "remove_item", "problems", "plan"]);
+    ["read_file", "symbols", "search", "find_files", "changes", "edit_file", "write_file", "move_item", "remove_item", "problems"]);
   assert.deepEqual(toolDefinitions(), definitions, "the same every time");
   for (const { type, function: fn } of definitions) {
     assert.equal(type, "function");
@@ -139,7 +137,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "6fd0d4334dcc3f7d";
+const ASSIST_PINNED = "1ff5d6582332d242";
 
 function assistEverything() {
   return {
@@ -166,7 +164,7 @@ test("the Assist lane's texts match their own pinned fingerprint", () => {
 
 test("every shared text, as the Assist lane says it, is in first person: none says \"the user\"", () => {
   const all = everything();
-  const texts = [...Object.values(all.texts), ...Object.values(all.results), ...all.plan, ...all.context,
+  const texts = [...Object.values(all.texts), ...Object.values(all.results), ...all.context,
     ...Object.values(toolDefinitions()).map((/** @type {any} */ d) => d.function.description)];
   const left = texts.map((t) => assistText(String(t))).filter((t) => /the user/i.test(t));
   assert.deepEqual(left, []);

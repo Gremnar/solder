@@ -14,7 +14,7 @@
  */
 
 const { Cancelled, sessionId } = require("./gateway.js");
-const { READ_ONLY, TEXTS, TOOLS, PLAN, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
+const { READ_ONLY, TEXTS, TOOLS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
 const { sessionPlan, holdSession, parseReply, visibleText } = require("./assist.js");
 
@@ -42,10 +42,6 @@ const MAX_RESULT_CHARS = 40_000;
 const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
-/** A finished step's results shorter than this stay (an edit's "Edited a.js" costs less than its stand-in). */
-const PLAN_STUB_MIN_CHARS = 400;
-/** The most steps a plan keeps. */
-const MAX_PLAN_STEPS = 20;
 const MAX_BATCH = 5;
 const MAX_READ_BATCH = 8;
 const WRAP_UP_ROUNDS = 3;
@@ -283,7 +279,6 @@ class Engine {
     const settings = this.settings();
     const tools = toolDefinitions(!!settings.readOnly);
     let rounds = 0;
-    let nudged = false;
     let repairs = 0;
     for (;;) {
       const model = modelOf(chat, settings);
@@ -330,19 +325,8 @@ class Engine {
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
       if (!reply.calls.length) {
-        // A weak model sometimes ends a planned task partway, with steps still to do and nothing asked: once per
-        // message, it's asked to carry on (or say why it stopped). Not when it asks something: that's a real stop.
         // Its answer after the last reply with calls allowed: the turn ends here, paused (you choose whether to go on).
         const atLimit = rounds >= settings.maxRounds;
-        const left = unfinishedSteps(chat);
-        if (left.length && !nudged && !atLimit && !asksSomething(reply.content)) {
-          nudged = true;
-          chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${TEXTS.planLeft(left)}`,
-            meta: { typed: TEXTS.planLeftShown(left.length), resume: true, nudge: true } });
-          await this._save(chat);
-          this.emit({ type: "message", chat: chat.id });
-          continue;
-        }
         if (atLimit) { chat.limitHit = true; await this._save(chat); }
         this.emit({ type: "done", chat: chat.id, ...(atLimit ? { limit: settings.maxRounds } : {}) });
         this._title(chat);
@@ -426,12 +410,11 @@ class Engine {
    */
   async _batch(chat, assistant, cutOff, roundsLeft, signal) {
     const calls = assistant.tool_calls || [];
-    // Up to MAX_READ_BATCH calls run, at most MAX_BATCH of them changes; plan updates don't count.
+    // Up to MAX_READ_BATCH calls run, at most MAX_BATCH of them changes.
     let counted = 0;
     let changes = 0;
     const within = calls.map((call) => {
       const name = call.function.name;
-      if (name === "plan") return true;
       const change = !READ_ONLY.has(name);
       if (counted >= MAX_READ_BATCH || (change && changes >= MAX_BATCH)) return false;
       counted++;
@@ -461,9 +444,9 @@ class Engine {
         result = { output: skip, summary: "Not run: " + label, failed: true };
       } else if (!within[index]) {
         result = { output: TEXTS.notRunBatch(MAX_READ_BATCH, MAX_BATCH), summary: "Not run: " + label, failed: true };
-      } else if (READ_ONLY.has(name) && name !== "plan" && batchChars >= batchLimit) {
+      } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
-      } else if (readOnly && !READ_ONLY.has(name)) {
+      } else if (readOnly && Object.hasOwn(TOOLS, name) && !READ_ONLY.has(name)) {
         // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered.
         result = { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       } else if (parsed.problem) {
@@ -486,8 +469,7 @@ class Engine {
       const message = { role: "tool", tool_call_id: call.id, content: result.keep ? output + "\n\n" + result.keep : output,
         meta: { name, label, summary: result.summary, failed: !!result.failed, ...(result.keep ? { keep: result.keep } : {}),
           ...(result.ms !== undefined ? { ms: result.ms } : {}),
-          ...(result.change ? { change: result.change } : {}),
-          ...(result.plan ? { plan: result.plan } : {}) } };
+          ...(result.change ? { change: result.change } : {}) } };
       chat.messages.push(message);
       added.push(message);
       await this._save(chat);
@@ -525,7 +507,6 @@ class Engine {
   /** One call: asked about first when it must be, then run. @returns {Promise<ToolResult>} */
   async _runOne(/** @type {Chat} */ chat, /** @type {string} */ id, /** @type {string} */ name, /** @type {any} */ args,
     /** @type {string} */ label, /** @type {AbortSignal} */ signal, /** @type {{group: string, more: boolean} | undefined} */ edit) {
-    if (name === "plan") return planStep(chat, id, args); // the engine's own: nothing on disk, nothing to approve
     const reason = this.host.needsApproval(name, args);
     let note = "";
     if (reason) {
@@ -770,7 +751,10 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
       if (!message.content && !message.tool_calls?.length) continue;
       // An earlier turn's big writes and edits are on disk now: sent again in full they'd cost their
       // size on every step. (This turn's are sent as they came.)
-      const calls = start + offset < current ? message.tool_calls?.map(shortCall) : message.tool_calls;
+      // Plan calls from before plans were taken out (0.2.14): left out, their results with them (below).
+      const kept = message.tool_calls?.filter((/** @type {any} */ c) => c.function.name !== "plan");
+      if (!message.content && !kept?.length) continue;
+      const calls = start + offset < current ? kept?.map(shortCall) : kept;
       out.push({ role: "assistant", content: message.content, ...(calls?.length ? { tool_calls: calls } : {}) });
     } else if (message.role === "tool") {
       out.push({ role: "tool", tool_call_id: message.tool_call_id, content: resultText(message) });
@@ -919,27 +903,6 @@ function pathKey(given) {
   return typeof given === "string" ? given.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase() : "";
 }
 
-/**
- * The steps still to do of a plan this task has worked on (a plan call since the latest message), else [].
- * @param {Chat} chat @returns {{number: number, goal: string}[]}
- */
-function unfinishedSteps(chat) {
-  const plan = /** @type {any} */ (chat).plan;
-  if (!plan?.steps?.length) return [];
-  const since = chat.messages.slice(taskStart(chat));
-  if (!since.some((m) => m.role === "tool" && m.meta?.name === "plan" && !m.meta.failed)) return [];
-  return plan.steps.map((/** @type {any} */ step, /** @type {number} */ index) => ({ number: index + 1, goal: step.goal, state: step.state }))
-    .filter((/** @type {any} */ step) => step.state !== "done").map(({ number, goal }) => ({ number, goal }));
-}
-
-/** A reply that ends on a question for the user (its last lines ask something). @param {string} text */
-function asksSomething(text) {
-  // Only the prose counts: a ? in code, inline code or a URL isn't a question.
-  const prose = String(text || "").replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").replace(/\bhttps?:\/\/\S+/g, "");
-  const lines = prose.split("\n").map((line) => line.trim()).filter(Boolean);
-  return /\?/.test(lines.slice(-2).join(" "));
-}
-
 /** The model a chat uses: its own choice, unless the organisation enforces one. @param {Chat} chat @param {any} settings */
 function modelOf(chat, settings) {
   return settings.modelLocked ? settings.model : chat.model || settings.model;
@@ -964,9 +927,6 @@ function removeTurn(chat, index, rest = false) {
   }
   chat.messages.splice(index, end - index);
   if (end >= chat.messages.length + (end - index)) delete chat.limitHit; // the last turn went: its pause with it
-  // The plan, if the call that set it went too.
-  const planSet = chat.messages.some((m) => (m.tool_calls || []).some((/** @type {any} */ c) => c.function.name === "plan" && /"steps"\s*:/.test(c.function.arguments || "")));
-  if (!planSet) delete /** @type {any} */ (chat).plan;
   chat.updated = Date.now();
   return String(message.meta?.typed ?? message.content);
 }
@@ -977,7 +937,7 @@ function laterMessages(chat, index) {
 }
 
 /**
- * Where the current task started: the latest message you typed. Resume's and the plan nudge's "carry on" go on the
+ * Where the current task started: the latest message you typed. Resume's "carry on" goes on the
  * same task, so its results keep their in-task protection and it isn't summarised partway. @param {Chat} chat
  */
 function taskStart(chat) {
@@ -1013,107 +973,8 @@ function shortCall(call) {
   return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
 }
 
-/**
- * The plan tool: set the steps, or mark one done. Kept on the chat (chat.plan), with the calls where each step began
- * and ended, so trim() can leave a finished step's results out. @param {Chat} chat @param {string} id @param {any} args
- * @returns {ToolResult}
- */
-function planStep(chat, id, args) {
-  const plan = /** @type {any} */ (chat).plan;
-  if (Array.isArray(args.steps) && args.steps.length) {
-    const before = new Map((plan?.steps || []).map((/** @type {any} */ step) => [String(step.goal).trim().toLowerCase(), step]));
-    const steps = args.steps.slice(0, MAX_PLAN_STEPS).map((/** @type {any} */ given) => {
-      const goal = String(given?.goal ?? "").trim().slice(0, 200) || "(a step)";
-      const old = before.get(goal.toLowerCase()); // a step already done stays done; the one being done keeps where it began
-      const work = String(given?.work ?? "").trim().slice(0, 2000);
-      if (old && old.state === "done") return { ...old, goal };
-      if (old && old.state === "doing") return { ...old, goal, work: work || old.work };
-      return { goal, work, state: "todo", notes: "" };
-    });
-    /** @type {any} */ (chat).plan = { steps };
-    const next = steps.find((step) => step.state !== "done");
-    if (next) { next.startCall = next.state === "doing" && next.startCall ? next.startCall : id; next.state = "doing"; }
-  }
-  const current = /** @type {any} */ (chat).plan;
-  if (args.done !== undefined && args.done !== null) {
-    if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
-    const index = Math.round(Number(args.done)) - 1;
-    const step = current.steps[index];
-    if (!step) return { output: PLAN.badStep(current.steps.length), summary: "Plan · no such step", failed: true };
-    step.state = "done";
-    step.notes = String(args.notes ?? "").trim().slice(0, 1500);
-    // The step ends where the reply that finishes it begins: its other calls may already be the next step's.
-    const reply = [...chat.messages].reverse().find((m) => m.role === "assistant" && m.tool_calls?.some((c) => c.id === id));
-    step.endCall = reply?.tool_calls?.[0]?.id || id;
-    step.startCall ??= id;
-    const next = current.steps.find((/** @type {any} */ other) => other.state === "todo");
-    // The next step begins just after the last result before this reply, so this reply's other calls are its.
-    const at = reply ? chat.messages.lastIndexOf(reply) : -1;
-    const before = at > 0 ? chat.messages.slice(0, at).reverse().find((m) => m.role === "tool" && m.tool_call_id) : null;
-    if (next && !current.steps.some((/** @type {any} */ other) => other.state === "doing")) { next.state = "doing"; next.startCall = before?.tool_call_id || id; }
-  }
-  if (!current) return { output: PLAN.none, summary: "Plan · none yet", failed: true };
-  const done = current.steps.filter((/** @type {any} */ step) => step.state === "done").length;
-  // What this result holds, so a later one that holds all of it can stand in for it (supersedePlans).
-  const snapshot = { goals: current.steps.map((/** @type {any} */ step) => step.goal.toLowerCase()),
-    done: current.steps.filter((/** @type {any} */ step) => step.state === "done").map((/** @type {any} */ step) => [step.goal.toLowerCase(), step.notes]) };
-  return { output: PLAN.now(current.steps), summary: `Plan · ${done} of ${current.steps.length} done`, plan: snapshot };
-}
-
-/**
- * Finished steps' results, left out (sticky): those after the call that began the step, up to the one that ended it.
- * The newest reply's results are never cut, as everywhere: the model hasn't seen them yet. @param {Chat} chat @param {Set<Stored>} fresh
- */
-function trimFinishedSteps(chat, fresh) {
-  const plan = /** @type {any} */ (chat).plan;
-  if (!plan) return false;
-  /** @type {Map<string, number>} */
-  const at = new Map();
-  chat.messages.forEach((message, index) => { if (message.role === "tool" && message.tool_call_id) at.set(message.tool_call_id, index); });
-  let cut = false;
-  plan.steps.forEach((/** @type {any} */ step, /** @type {number} */ number) => {
-    if (step.state !== "done" || !step.startCall || !step.endCall) return;
-    const from = at.get(step.startCall);
-    const to = at.get(step.endCall);
-    if (from === undefined || to === undefined) return;
-    for (let index = from + 1; index < to; index++) {
-      const message = chat.messages[index];
-      if (message.role !== "tool" || message.meta?.stub || message.meta?.name === "plan" || fresh.has(message)) continue;
-      if (message.content.length <= PLAN_STUB_MIN_CHARS) continue;
-      message.meta = { ...message.meta, stub: true, stepDone: number + 1 };
-      cut = true;
-    }
-  });
-  return cut;
-}
-
-/**
- * Older plan results that the newest one holds all of (each of their goals, and each done step with the same notes):
- * a short stand-in, as every plan call returns the whole plan. One the newest doesn't cover (a re-plan that dropped
- * a step) stays whole. @param {Chat} chat @param {number} start
- */
-function supersedePlans(chat, start) {
-  const plans = chat.messages.slice(start).filter((m) => m.role === "tool" && m.meta?.name === "plan" && !m.meta.failed && m.meta.plan);
-  const newest = plans[plans.length - 1];
-  if (!newest) return false;
-  const goals = new Set(newest.meta.plan.goals);
-  const notes = new Map(newest.meta.plan.done);
-  let cut = false;
-  for (const older of plans.slice(0, -1)) {
-    if (older.meta.planOld) continue;
-    const held = older.meta.plan.goals.every((/** @type {string} */ goal) => goals.has(goal))
-      && older.meta.plan.done.every((/** @type {[string, string]} */ [goal, note]) => notes.get(goal) === note);
-    if (!held) continue;
-    older.meta = { ...older.meta, stub: true, planOld: true };
-    cut = true;
-  }
-  return cut;
-}
-
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
 function resultText(message) {
-  if (message.meta?.planOld) return PLAN.superseded + (message.meta.keep ? "\n\n" + message.meta.keep : "");
-  if (message.meta?.stub && message.meta.stepDone) return PLAN.stub(message.meta.stepDone, message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
   if (!message.meta?.stub) return message.content;
   return TEXTS.stub(message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
 }
@@ -1134,19 +995,13 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
     if (chat.messages[index].role === "assistant" && chat.messages[index].tool_calls?.length) { latest = index; break; }
   }
   const fresh = new Set(chat.messages.slice(latest + 1));
-  // Older states of a plan the newest holds all of: nothing is lost by leaving them out.
-  const superseded = supersedePlans(chat, start);
   const ratio = chat.tokenRatio || 1;
+  // What this task read stays whole up to the in-task ceiling (cutting it mid-task makes models read it again).
   const thisTask = new Set(chat.messages.slice(Math.max(start, taskStart(chat))));
   const ceiling = compactAt * IN_TASK_CEILING;
-  // A planned task trims as any task does: what it read stays whole (cutting it mid-task makes models read it again).
-  // Only once this task's results pass the in-task ceiling are finished steps' results cut, first, their notes standing in.
-  const inTask = chat.messages.filter((m) => thisTask.has(m) && m.role === "tool" && !m.meta?.stub).reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
-  const finished = inTask > ceiling && trimFinishedSteps(chat, new Set(chat.messages.slice(newestReply(chat) + 1)));
-  const stepped = finished || superseded;
   const results = chat.messages.slice(start).filter((m) => m.role === "tool" && !m.meta?.stub);
   const whole = results.reduce((sum, m) => sum + estimate(m.content), 0) * ratio;
-  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return stepped;
+  if (whole <= KEEP_RESULTS_TOKENS + TRIM_SLACK_TOKENS) return false;
   let kept = 0;
   let cut = false;
   for (let index = results.length - 1; index >= 0; index--) {
@@ -1158,14 +1013,7 @@ function trim(/** @type {Chat} */ chat, compactAt = 100_000) {
       cut = true;
     }
   }
-  return cut || stepped;
-}
-
-/** Where the newest reply (with calls) is: its results come after it, unseen by the model so far. @param {Chat} chat */
-function newestReply(chat) {
-  let index = chat.messages.length - 1;
-  while (index >= 0 && chat.messages[index].role === "tool") index--;
-  return index;
+  return cut;
 }
 
 /** A tool's output, capped (head and tail) so no single result can swamp the chat. @param {string} text */

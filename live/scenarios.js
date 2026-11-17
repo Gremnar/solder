@@ -18,7 +18,7 @@ const SCENARIOS = [];
 
 SCENARIOS.push({
   name: "typo",
-  about: "a one-line fix: done directly, no plan, no question",
+  about: "a one-line fix: done directly, no question",
   setup: (w) => w("src/greet.js", "function greet(name) {\n  return \"Helo, \" + name;\n}\nmodule.exports = { greet };\n"),
   task: "Fix the typo in greet.js.",
   check: ({ read, chat }) => !/"Hello, "/.test(read("src/greet.js")) ? "not fixed"
@@ -220,11 +220,11 @@ SCENARIOS.push({
     : /recommend|I'd (suggest|go with|use)|I suggest|\(Recommended\)|default/i.test(answer) ? "" : "asked without a recommendation",
 });
 
-// ---------------------------------------------------------------- longer tasks (plans) --
+// ---------------------------------------------------------------- longer tasks --
 
 SCENARIOS.push({
   name: "five-files",
-  about: "five small changes in five files: a plan, every step done, no early stop",
+  about: "five small changes in five files: every one done, no early stop",
   setup: (w) => {
     w("src/version.js", "module.exports = { VERSION: \"1.4.0\" };\n");
     w("src/banner.js", "const { VERSION } = require(\"./version\");\nmodule.exports = { banner: () => \"Tool v\" + VERSION };\n");
@@ -400,7 +400,7 @@ SCENARIOS.push({
     w("src/list.js", "\"use strict\";\nfunction first(list) {\n  return list[0];\n}\nmodule.exports = { first };\n");
   },
   task: "Add three functions, each exported: clamp(n, lo, hi) to src/math.js; slugify(text) to src/text.js (lowercase words joined by -, " +
-    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Make a plan first, one step per file, and do one step at a time.",
+    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Do one file at a time.",
   check: ({ ws, read, load }) => {
     if (!readFirst(ws, "js_style")) return "didn't read the skill before changing code";
     const math = traced(load, "src/math.js");
@@ -498,7 +498,7 @@ SCENARIOS.push({
 
 SCENARIOS.push({
   name: "limit-resume",
-  about: "a planned task that runs into a small step limit: it pauses, and after Resume it carries on (no 'still blocked' answer)",
+  about: "a task of several steps that runs into a small step limit: it pauses, and after Resume it carries on (no 'still blocked' answer)",
   maxRounds: 4,
   resumes: 3,
   setup: (w) => {
@@ -507,12 +507,12 @@ SCENARIOS.push({
     w("src/list.js", "\"use strict\";\nfunction first(list) {\n  return list[0];\n}\nmodule.exports = { first };\n");
   },
   task: "Add three functions, each exported: clamp(n, lo, hi) to src/math.js; slugify(text) to src/text.js (lowercase words joined by -, " +
-    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Make a plan first, one step per file, and do one step at a time.",
+    "anything that isn't a letter or digit dropped); and sum(list) to src/list.js. Do one file at a time.",
   check: ({ chat, load }) => {
     if (!chat.messages.some((/** @type {any} */ m) => m.meta?.typed === "Carry on")) return "it never paused at the limit (the test needs a smaller limit)";
     // After each Resume, the model's next reply acts (calls a tool) or finishes: it doesn't claim it's still blocked.
     const replies = chat.messages.map((/** @type {any} */ m, /** @type {number} */ i) => [m, chat.messages[i + 1]]).filter(([m]) => m.meta?.typed === "Carry on").map(([, next]) => next);
-    const stuck = replies.find((/** @type {any} */ m) => m && !m.tool_calls?.length && /reject|blocked|limit|allowance|new chat/i.test(m.content || ""));
+    const stuck = replies.find((/** @type {any} */ m) => m && !m.tool_calls?.length && /reject|blocked|allowance|new chat|(can't|cannot|unable|still)[^.]{0,60}limit/i.test(m.content || ""));
     if (stuck) return "after Resume it said it was still blocked: " + String(stuck.content).slice(0, 200);
     try {
       if (load("src/math.js").clamp(15, 0, 10) !== 10) return "clamp wrong";

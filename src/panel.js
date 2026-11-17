@@ -1013,9 +1013,8 @@ class SolderPanel {
 
   /**
    * The saved chat as what the panel shows. A turn (your message, up to the next one you type) that's finished folds
-   * its steps into one row (with Undo all), then its answer, then its plan, completed. The turn that's running shows
-   * every step as it happens; its plan is in the dock above the box (livePlan), not in the chat.
-   * @returns {{items: any[], livePlan: any}}
+   * its steps into one row (with Undo all), then its answer. The turn that's running shows every step as it happens.
+   * @returns {{items: any[]}}
    */
   items() {
     /** @type {any[]} */
@@ -1023,14 +1022,7 @@ class SolderPanel {
     /** @type {Map<string, any>} */
     const steps = new Map();
     const messages = this.chat.messages;
-    // The plan is the chat's latest: it belongs to the turn its steps were set in.
-    const plan = /** @type {any} */ (this.chat).plan;
-    let planAt = "";
-    for (const message of messages) for (const call of message.tool_calls || []) {
-      if (call.function.name === "plan" && /"steps"\s*:/.test(call.function.arguments || "")) planAt = call.id;
-    }
     let turn = -1;
-    let planTurn = -1;
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
       if (message.role === "user" && !message.meta?.resume) turn = index;
@@ -1043,7 +1035,7 @@ class SolderPanel {
       } else if (message.role === "assistant") {
         if (message.content?.trim()) flat.push({ kind: "answer", text: message.content, incomplete: !!message.meta?.incomplete, turn });
         for (const call of message.tool_calls || []) {
-          if (call.function.name === "plan") { if (call.id === planAt) planTurn = turn; continue; }
+          if (call.function.name === "plan") continue; // from before plans were taken out: not shown
           const args = parseArguments(call.function.name, call.function.arguments, false).args;
           const step = { kind: "step", id: call.id, name: call.function.name, label: labelOf(call.function.name, args),
             pending: true, path: args.path || "", turn };
@@ -1070,7 +1062,6 @@ class SolderPanel {
     }
     // The turn that's running in this chat now (none when it's done, or when Solder works in another chat).
     const running = this.engine.busy && !this.awayBusy() ? turn : -2;
-    const planned = plan?.steps?.length ? plan.steps.map((/** @type {any} */ step) => ({ goal: step.goal, state: step.state, notes: step.notes || "" })) : null;
     /** @type {any[]} */
     const items = [];
     if (this.chat.forkedFrom) items.push({ kind: "note", key: "fork", text: `A copy of "${this.chat.forkedFrom.title}" to carry on in. The original is unchanged.` });
@@ -1081,7 +1072,7 @@ class SolderPanel {
       const segment = flat.slice(from, to);
       from = to;
       if (at === running || at < 0) { items.push(...segment); continue; }
-      // A finished turn: your message, its steps (and any words between them) folded, then the answer and the plan.
+      // A finished turn: your message, its steps (and any words between them) folded, then the answer.
       // Up to and including your message (a "summarised here" note can come before it).
       const head = segment.findIndex((item) => item.kind === "user" && !item.resume) + 1;
       const lastStep = segment.reduce((found, item, index) => item.kind === "step" ? index : found, -1);
@@ -1097,9 +1088,8 @@ class SolderPanel {
           undoAll: changes >= 2 ? { at, count: changes } : null });
       } else items.push(...inner);
       items.push(...segment.slice(tail));
-      if (at === planTurn && planned) items.push({ kind: "plan", id: planAt, active: false, steps: planned });
     }
-    return { items, livePlan: running >= 0 && planTurn === running && planned ? planned : null };
+    return { items };
   }
 
   updateStatusBar() {

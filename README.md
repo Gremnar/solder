@@ -2,7 +2,7 @@
 
 **A lean coding agent beside your editor.** Solder sits in VS Code's side bar and reads, searches and edits the code in your workspace. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling, such as your company's gateway or a server on your own PC, and to nothing else.
 
-<p><img src="media/screenshots/plan.png" width="380" alt="A longer task in Solder: its plan as a checklist (one step done with its notes, the next in progress), and the steps it has run"> <img src="media/screenshots/finished-chat.png" width="380" alt="A finished chat: the steps Solder ran, Review and Undo on its edit, and its answer"></p>
+<p><img src="media/screenshots/finished-chat.png" width="380" alt="A finished chat: the steps Solder ran, Review and Undo on its edit, and its answer"></p>
 
 ## Built for organizations
 
@@ -91,7 +91,6 @@ Solder has eleven tools, and no shell. It never runs commands: when something ne
 | `move_item` | Moves, renames or copies a file or folder, creating any folders it needs. It never overwrites, and lists the lines that still use the old path so they get fixed. It can be undone. |
 | `remove_item` | Deletes a file or folder, after asking. It can be undone. |
 | `problems` | Lists the errors and warnings VS Code shows. |
-| `plan` | For a task of two or more steps: a checklist above the box while it works (each step's goal, ticked off as it's done), shown completed after the answer. What the model read stays in the chat as with any task; only if a long task outgrows its room do finished steps' results go first, their notes standing in. |
 
 ## Your docs
 
@@ -134,7 +133,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
   - one `.md` file per skill, directly in a skills folder (subfolders aren't read);
   - no scripts or other files: Solder doesn't run anything, so a skill is instructions only;
   - keep each to a page or two: the model reads up to 20,000 characters of one, and at most 50 skills are offered.
-- **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even after its plan steps are done. Reading your skills folders never needs your approval; changing a skill does. A file with no "When to use" line isn't offered to the model (so a README in the same folder isn't mistaken for a skill), and Settings says so.
+- **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even when older results are cut. Reading your skills folders never needs your approval; changing a skill does. A file with no "When to use" line isn't offered to the model (so a README in the same folder isn't mistaken for a skill), and Settings says so.
 - **For organizations:** the `SkillsFolders` policy gives everyone the same skills, from a share if you like; `AllowUserSkills` lets users add folders of their own beside them. See the [admin guide](docs/POLICY.md).
 
 ## Two kinds of model (optional)

@@ -250,7 +250,7 @@ async function main() {
     panel.chat.notes = [];
     for (const name of ["ua1.txt", "ua2.txt"]) fs.rmSync(path.join(wsRoot, name), { force: true });
 
-    // ---- the plan: in the dock while its turn runs, then once, completed, at the end of the turn
+    // ---- a chat from before plans were taken out: its plan calls aren't shown, and a finished turn still folds
     panel.chat.messages.push({ role: "user", content: "plan it" },
       { role: "assistant", content: "", tool_calls: [{ id: "pl1", type: "function", function: { name: "plan", arguments: JSON.stringify({ steps: [{ goal: "A" }, { goal: "B" }] }) } }] },
       { role: "tool", tool_call_id: "pl1", content: "Plan", meta: { name: "plan", summary: "Plan" } },
@@ -259,14 +259,13 @@ async function main() {
       { role: "assistant", content: "Both done." });
     panel.chat.plan = { steps: [{ goal: "A", state: "done", notes: "" }, { goal: "B", state: "done", notes: "" }] };
     const finished = panel.items();
-    check("a finished turn's plan comes once, after its answer, and not in the dock", JSON.stringify(finished.items.map((i) => i.kind)) === JSON.stringify(["user", "fold", "answer", "plan"])
-      && finished.livePlan === null, finished.items.map((i) => i.kind));
+    check("an old chat's plan isn't shown: the finished turn is your message, its steps folded, then the answer", JSON.stringify(finished.items.map((i) => i.kind)) === JSON.stringify(["user", "fold", "answer"])
+      && finished.items[1].steps === 1, finished.items.map((i) => i.kind));
     const realBusy = Object.getOwnPropertyDescriptor(panel.engine, "busy");
     panel.engine.busy = true; // as if the turn were still running, in this chat
     panel.runId = panel.chat.id;
     const live = panel.items();
-    check("while its turn runs, the plan is only in the dock, and the steps aren't folded", !live.items.some((i) => i.kind === "plan" || i.kind === "fold")
-      && Array.isArray(live.livePlan) && live.livePlan.length === 2, [live.items.map((i) => i.kind), live.livePlan]);
+    check("while its turn runs, the steps aren't folded", !live.items.some((i) => i.kind === "plan" || i.kind === "fold"), live.items.map((i) => i.kind));
     if (realBusy) Object.defineProperty(panel.engine, "busy", realBusy); else panel.engine.busy = false;
     panel.chat.messages.length = 0;
     panel.chat.plan = undefined;

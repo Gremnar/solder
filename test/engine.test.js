@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Engine, outbound, trim, parseArguments, transcriptOf } = require("../src/engine.js");
 const { GatewayError, Cancelled } = require("../src/gateway.js");
-const { TEXTS, PLAN } = require("../src/prompt.js");
+const { TEXTS } = require("../src/prompt.js");
 
 /** A fake gateway: each reply() takes the next scripted answer (an object, or a function of the request). */
 function fakeClient(script) {
@@ -637,88 +637,6 @@ test("/fork copies the chat to carry on in: its own id and title, the same histo
   assert.equal(Engine.fork(copy).title, "Fix the cart (fork)", "a fork of a fork isn't (fork) (fork)");
 });
 
-test("plan: a finished step's results stay while the task is small, and go first (notes standing in) once it's big", async () => {
-  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
-  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A", work: "a.js, the null check" }, { goal: "Fix B", work: "b.js" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
-    { calls: [call("r2", "read_file", { path: "a2.js" })] },
-    // Step 1 done, in the same reply as step 2's first read.
-    { calls: [plan({ done: 1, notes: "a.js: defaulted $Path." }, "p2"), call("r3", "read_file", { path: "b.js" })] },
-    (req) => {
-      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      // A small task: what step 1 read stays whole, so step 2 needn't read it again.
-      assert.match(results.r1, /^a\.js x/, "a finished step's read stays while the task is small");
-      assert.match(results.r2, /^a2\.js x/);
-      assert.match(results.r3, /^b\.js x/, "step 2's read stays whole");
-      assert.match(results.p2, /\[done\] Fix A\n   Notes: a\.js: defaulted \$Path\./);
-      assert.match(results.p2, /\[now\] Fix B\n   Work: b\.js/);
-      return { calls: [plan({ done: 2, notes: "b.js done." }, "p3")] };
-    },
-    { content: "Both fixed." },
-  ]);
-  const chat = Engine.newChat();
-  await engine(client, host).ask(chat, "fix a and b");
-  assert.deepEqual(chat.plan.steps.map((step) => step.state), ["done", "done"]);
-  assert.equal(chat.plan.steps[0].notes, "a.js: defaulted $Path.");
-  // A new plan keeps the steps already done; a step that isn't there is an error the model can read.
-  const again = fakeClient([{ calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix C" }] }, "p4"), plan({ done: 7 }, "p5")] }, { content: "ok" }]);
-  await engine(again, host).ask(chat, "now C");
-  assert.deepEqual(chat.plan.steps.map((step) => [step.goal, step.state]), [["Fix A", "done"], ["Fix C", "doing"]]);
-  const p5 = chat.messages.find((m) => m.tool_call_id === "p5");
-  assert.match(p5.content, /done needs a step number from 1 to 2/);
-
-  // A big task (past the in-task ceiling): finished steps' results are cut first, their notes standing in.
-  const huge = (/** @type {string} */ what) => ({ output: what + " " + "y".repeat(80_000), summary: "Read " + what });
-  const bigHost = fakeHost({ tools: { read_file: (args) => huge(args.path) } });
-  // Results are kept to about 30,000 characters each, so it takes a few to pass the ceiling (45k tokens at 30k).
-  const bigClient = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Read A" }, { goal: "Read B" }] }, "q1"), call("s1", "read_file", { path: "a.js" }), call("s1b", "read_file", { path: "a2.js" }),
-      call("s1c", "read_file", { path: "a3.js" })] },
-    { calls: [plan({ done: 1, notes: "A read." }, "q2"), call("s2", "read_file", { path: "b.js" }), call("s2b", "read_file", { path: "b2.js" })] },
-    { calls: [call("s3", "read_file", { path: "c.js" }), call("s3b", "read_file", { path: "c2.js" })] },
-    (req) => {
-      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      assert.match(results.s1, /^\(Step 1 is done; this result \(Read a\.js\) is left out/, "the finished step's read goes first");
-      assert.match(results.s3, /^c\.js y/, "the newest stays");
-      return { content: "done" };
-    },
-    { content: "B read too." }, // the nudge about step 2, still to do
-  ]);
-  const bigEvents = [];
-  await engine(bigClient, bigHost, bigEvents, { compactAt: 30_000 }).ask(Engine.newChat(), "read them");
-  assert.deepEqual(bigEvents.filter((e) => e.type === "error").map((e) => e.message), [], "the checks in the scripted reply passed");
-});
-
-test("plan: done before any plan says so; a plan alone isn't a step to approve", async () => {
-  const client = fakeClient([{ calls: [call("p1", "plan", { done: 1 })] }, { content: "ok" }]);
-  const chat = Engine.newChat();
-  const events = [];
-  await engine(client, fakeHost(), events).ask(chat, "go");
-  assert.match(chat.messages.find((m) => m.tool_call_id === "p1").content, /no plan yet/);
-  assert.ok(!events.some((e) => e.type === "approval"));
-});
-
-test("plan: a step marked done after the next step's first read leaves that read alone", async () => {
-  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
-  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
-    // the next step's read first, then step 1 marked done, in one reply
-    { calls: [call("r2", "read_file", { path: "b.js" }), plan({ done: 1, notes: "a.js fixed." }, "p2")] },
-    { calls: [call("r3", "read_file", { path: "c.js" })] },
-    (req) => {
-      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      assert.match(results.r1, /^\(Step 1 is done/);
-      assert.match(results.r2, /^b\.js x/, "the read in the reply that finished step 1 isn't step 1's");
-      return { content: "done" };
-    },
-  ]);
-  await engine(client, host).ask(Engine.newChat(), "fix a and b");
-});
-
 test("several edits to one file in a reply: the problems check waits for the last; one that's left waiting is settled", async () => {
   const seen = [];
   const host = fakeHost();
@@ -744,16 +662,15 @@ test("several edits to one file in a reply: the problems check waits for the las
   assert.equal(e2.meta.summary, "Edited · 1 new problem");
 });
 
-test("the batch limit: up to 8 calls, 5 of them changes, and plan calls aside", async () => {
+test("the batch limit: up to 8 calls, 5 of them changes", async () => {
   const reads = (n, from = 0) => Array.from({ length: n }, (_, i) => call(`r${from + i}`, "read_file", { path: `f${from + i}.js` }));
   const edits = (n) => Array.from({ length: n }, (_, i) => call(`e${i}`, "edit_file", { path: `g${i}.js`, old_text: "a", new_text: "b" }));
-  const plan = call("p1", "plan", { steps: [{ goal: "Look" }, { goal: "Fix" }] });
   const run = async (calls) => {
     const host = fakeHost();
     await engine(fakeClient([{ calls }, { content: "ok" }]), host).ask(Engine.newChat(), "go");
     return host.ran.length;
   };
-  assert.equal(await run([plan, ...reads(8)]), 8, "plan with 8 reads: all of them run");
+  assert.equal(await run(reads(8)), 8);
   assert.equal(await run(reads(9)), 8);
   assert.equal(await run(edits(6)), 5);
   assert.equal(await run([...reads(3), ...edits(5)]), 8, "a mixed batch runs 8 when 5 or fewer are changes");
@@ -761,26 +678,6 @@ test("the batch limit: up to 8 calls, 5 of them changes, and plan calls aside", 
   const chat = Engine.newChat();
   await engine(fakeClient([{ calls: edits(6) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
   assert.match(chat.messages.find((m) => m.tool_call_id === "e5").content, /up to 8 calls from one reply, 5 of them changes/);
-});
-
-test("an older plan result the newest holds all of is left out; one the newest doesn't hold stays", async () => {
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C" }] }, "p1")] },
-    { calls: [plan({ done: 1, notes: "A done." }, "p2")] },
-    { calls: [plan({ done: 2, notes: "B done." }, "p3")] },
-    // a re-plan without step C: the result before it (which had C) stays whole
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix D" }] }, "p4")] },
-    (req) => {
-      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      assert.equal(results.p1, PLAN.superseded);
-      assert.equal(results.p2, PLAN.superseded);
-      assert.match(results.p3, /Fix C/, "it had step C, which the newest plan doesn't");
-      assert.match(results.p4, /\[done\] Fix B\n   Notes: B done\./);
-      return { content: "ok" };
-    },
-  ]);
-  await engine(client, fakeHost()).ask(Engine.newChat(), "fix them");
 });
 
 test("argument problems: every missing one at once, and ones a tool doesn't take are named", async () => {
@@ -809,51 +706,7 @@ test("a failed summary isn't asked for again before every step of the same task"
   assert.equal(chat.messages.at(-1).content, "answer");
 });
 
-test("a task that stops with plan steps left is asked once to carry on; a question or a second stop ends it", async () => {
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  // Stops after step 1 with nothing asked: one nudge, then it finishes.
-  const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
-    { calls: [plan({ done: 1, notes: "A fixed." }, "p2")] },
-    { content: "I fixed A." },
-    (req) => {
-      const last = req.messages.at(-1);
-      assert.equal(last.role, "user");
-      assert.match(last.content, /The plan still has a step to do: 2\. Fix B\. Please carry on with it\./);
-      return { calls: [plan({ done: 2, notes: "B fixed." }, "p3")] };
-    },
-    { content: "Both fixed." },
-  ]);
-  const chat = Engine.newChat();
-  await engine(client, fakeHost()).ask(chat, "fix a and b");
-  assert.equal(chat.messages.at(-1).content, "Both fixed.");
-  const nudges = chat.messages.filter((m) => m.meta?.nudge);
-  assert.equal(nudges.length, 1);
-  assert.equal(nudges[0].meta.typed, "Carry on (the plan had 1 step left)");
-  // A reply that asks something isn't nudged; nor is a second stop.
-  const asking = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "q1")] },
-    { content: "Before B: should it keep the old name too?" },
-  ]);
-  const other = Engine.newChat();
-  await engine(asking, fakeHost()).ask(other, "fix a and b");
-  assert.ok(!other.messages.some((m) => m.meta?.nudge));
-  const stubborn = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "s1")] },
-    { content: "Stopping here." },
-    { content: "Still stopping." },
-  ]);
-  const third = Engine.newChat();
-  await engine(stubborn, fakeHost()).ask(third, "fix a and b");
-  assert.equal(third.messages.filter((m) => m.meta?.nudge).length, 1);
-  assert.equal(third.messages.at(-1).content, "Still stopping.");
-  // A plan from an earlier message, not touched in this one, isn't nudged about.
-  const later = fakeClient([{ content: "Hello." }]);
-  await engine(later, fakeHost()).ask(third, "something else");
-  assert.equal(third.messages.filter((m) => m.meta?.nudge).length, 1);
-});
-
-test("the plan nudge's and Resume's \"carry on\" keep the task's results protected (they're the same task)", () => {
+test("Resume's \"carry on\" keeps the task's results protected (it's the same task)", () => {
   const big = "x".repeat(80_000);
   const chat = Engine.newChat();
   chat.messages.push(
@@ -863,45 +716,11 @@ test("the plan nudge's and Resume's \"carry on\" keep the task's results protect
     { role: "assistant", content: "", tool_calls: [{ id: "r2", type: "function", function: { name: "read_file", arguments: "{\"path\":\"b.js\"}" } }] },
     { role: "tool", tool_call_id: "r2", content: big, meta: { name: "read_file", summary: "Read b.js" } },
     { role: "assistant", content: "I read them." },
-    { role: "user", content: "carry on", meta: { typed: "Carry on", resume: true, nudge: true } },
+    { role: "user", content: "carry on", meta: { typed: "Carry on", resume: true } },
     { role: "assistant", content: "", tool_calls: [{ id: "r3", type: "function", function: { name: "read_file", arguments: "{\"path\":\"c.js\"}" } }] },
     { role: "tool", tool_call_id: "r3", content: "small", meta: { name: "read_file", summary: "Read c.js" } });
   trim(chat, 100_000);
-  assert.ok(!chat.messages[2].meta.stub && !chat.messages[4].meta.stub, "the reads before the nudge are this task's, and stay whole");
-});
-
-test("the plan nudge isn't put off by a ? in code or a URL; a question in the last lines still counts", async () => {
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  const run = async (/** @type {string} */ last) => {
-    const client = fakeClient([{ calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1")] }, { content: last }, { content: "ok" }]);
-    const chat = Engine.newChat();
-    await engine(client, fakeHost()).ask(chat, "fix a and b");
-    return chat.messages.filter((m) => m.meta?.nudge).length;
-  };
-  assert.equal(await run("Done: I replaced `a ? b : c` in src/x.js, see https://example.com/x?page=2."), 1);
-  assert.equal(await run("I fixed A.\n\n```js\nconst y = x ? 1 : 2;\n```"), 1);
-  assert.equal(await run("A is done. Should B keep the old name too?"), 0);
-});
-
-test("plan steps: a read in the reply that finishes a step is the next step's (and leaves with it); a re-plan keeps the step in progress", async () => {
-  const big = (/** @type {string} */ what) => ({ output: what + " " + "x".repeat(3000), summary: "Read " + what });
-  const host = fakeHost({ tools: { read_file: (args) => big(args.path) } });
-  const plan = (/** @type {any} */ args, /** @type {string} */ id) => call(id, "plan", args);
-  const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
-    // a re-plan partway through A (C reworded): A keeps where it began
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }, { goal: "Fix C and D" }] }, "p2")] },
-    { calls: [call("r2", "read_file", { path: "b.js" }), plan({ done: 1, notes: "A fixed." }, "p3")] },
-    { calls: [plan({ done: 2, notes: "B fixed." }, "p4")] },
-    { calls: [call("r3", "read_file", { path: "c.js" })] },
-    (req) => {
-      const results = Object.fromEntries(req.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content]));
-      assert.match(results.r1, /^\(Step 1 is done/, "A's read leaves with A, though the plan was re-made partway");
-      assert.match(results.r2, /^\(Step 2 is done/, "the read in A's finishing reply was B's");
-      return { content: "done" };
-    },
-  ]);
-  await engine(client, host).ask(Engine.newChat(), "fix them");
+  assert.ok(!chat.messages[2].meta.stub && !chat.messages[4].meta.stub, "the reads before the carry-on are this task's, and stay whole");
 });
 
 test("where the tokens went: every request's prompt tokens shared out by kind, side requests apart, repeat reads counted", async () => {
@@ -953,19 +772,17 @@ test("where the tokens went: every request's prompt tokens shared out by kind, s
   assert.match(tokenReport({ ...Engine.newChat(), usage: { tokens: 5000 } }, "S", []).join("\n"), /not recorded \(its 5,000 tokens/);
 });
 
-test("at the step limit: no plan nudge, the turn ends paused, and Resume says there's a fresh allowance", async () => {
-  const plan = (args, id) => call(id, "plan", args);
-  // It wraps up as told at the limit, with a plan step left: not nudged (you're asked instead), and paused.
+test("at the step limit: no nudge, the turn ends paused, and Resume says there's a fresh allowance", async () => {
+  // It wraps up as told at the limit, with work left: not nudged (you're asked instead), and paused.
   const client = fakeClient([
-    { calls: [plan({ steps: [{ goal: "Fix A" }, { goal: "Fix B" }] }, "p1"), call("r1", "read_file", { path: "a.js" })] },
-    { calls: [plan({ done: 1, notes: "A fixed." }, "p2"), call("r2", "read_file", { path: "b.js" })] },
+    { calls: [call("r1", "read_file", { path: "a.js" })] },
+    { calls: [call("r2", "read_file", { path: "b.js" })] },
     { content: "A is fixed; B is still to do." },
     { content: "A title" }, // the chat's title, asked for after its first answer
     (req) => {
       assert.equal(req.messages.at(-1).content.split("\n\n").pop(), TEXTS.resumeLimit(2));
       return { content: "Carrying on with B." };
     },
-    { content: "B is done too." }, // the resumed run may be nudged once, as any run
   ]);
   const events = [];
   const chat = Engine.newChat();

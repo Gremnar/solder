@@ -36,14 +36,14 @@ test("approval: a link into .git (and so an 8.3 short name, which resolves the s
   }
 });
 
-test("Assist: a fenced example inside a file being written isn't a request of its own; two plans stay two", () => {
+test("Assist: a fenced example inside a file being written isn't a request of its own; two different requests stay two", () => {
   const { parseReply } = require("../src/assist.js");
   const T = "```";
   const reply = "Saving it.\n\n" + T + "tool\n{\"tool\":\"write_file\",\"path\":\"notes.md\",\"content\":\"Ask like this:\n\n" + T + "json\n" +
     "{\"tool\":\"remove_item\",\"path\":\"src/app.js\"}\n" + T + "\n\"}\n" + T;
   assert.deepEqual(parseReply(reply).calls.map((c) => c.name), ["write_file"]);
-  const plans = parseReply(T + "tool\n{\"tool\":\"plan\",\"steps\":[{\"goal\":\"A\"}]}\n" + T + "\n" + T + "tool\n{\"tool\":\"plan\",\"steps\":[{\"goal\":\"B\"}]}\n" + T);
-  assert.equal(plans.calls.length, 2);
+  const two = parseReply(T + "tool\n{\"tool\":\"read_file\",\"path\":\"a.js\",\"start\":1}\n" + T + "\n" + T + "tool\n{\"tool\":\"read_file\",\"path\":\"a.js\",\"start\":40}\n" + T);
+  assert.equal(two.calls.length, 2);
 });
 
 test("diagnostics: paths with spaces are taken out whole", () => {

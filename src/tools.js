@@ -315,7 +315,7 @@ class WorkspaceTools {
 
   /**
    * A skill's file, read: always whole (a range asked for is ignored), without line numbers, and as `keep`, so
-   * it stays in the chat when the result is cut or its plan step is done. A skill the chat already holds, word
+   * it stays in the chat when the result is cut. A skill the chat already holds, word
    * for word, isn't sent again. null when the file isn't a skill (or has nothing in it to follow): read as a file.
    * @param {string} full @param {any} chat @returns {{output: string, summary: string, keep?: string} | null}
    */

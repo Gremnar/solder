@@ -8,7 +8,7 @@ const { sessionPlan, prefixHash } = require("../src/assist.js");
 
 const call = (/** @type {string} */ id, /** @type {string} */ name, /** @type {any} */ args) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
 
-/** Three turns: a read, a planned one with a "carry on", and a question. */
+/** Three turns: a read, a search with a "carry on", and a question. */
 function chat() {
   return /** @type {any} */ ({
     id: "c", title: "t", created: 0, updated: 0, compaction: null, usage: { tokens: 0 },
@@ -18,14 +18,13 @@ function chat() {
       { role: "tool", tool_call_id: "a", content: "A", meta: {} },
       { role: "assistant", content: "Read it." },
       { role: "user", content: "(time)\n\nsecond, with the wrong paste", meta: { typed: "second, with the wrong paste" } },
-      { role: "assistant", content: "", tool_calls: [call("p", "plan", { steps: ["x"] })] },
-      { role: "tool", tool_call_id: "p", content: "plan", meta: {} },
+      { role: "assistant", content: "", tool_calls: [call("s", "search", { query: "x" })] },
+      { role: "tool", tool_call_id: "s", content: "found", meta: {} },
       { role: "user", content: "Please carry on", meta: { typed: "Carry on", resume: true } },
       { role: "assistant", content: "Done." },
       { role: "user", content: "(time)\n\nthird", meta: { typed: "third" } },
       { role: "assistant", content: "Answer." },
     ],
-    plan: { steps: [{ goal: "x", state: "todo" }] },
   });
 }
 
@@ -33,7 +32,6 @@ test("Delete takes out one turn: your message, its steps, its carry-ons and its 
   const c = chat();
   assert.equal(removeTurn(c, 4), "second, with the wrong paste");
   assert.deepEqual(c.messages.map((/** @type {any} */ m) => m.meta?.typed ?? m.content), ["first", "", "A", "Read it.", "third", "Answer."]);
-  assert.equal(c.plan, undefined, "the plan its turn set went with it");
 });
 
 test("Edit takes your message and everything after it, and gives back what you typed", () => {
@@ -69,4 +67,22 @@ test("after a delete, an Assist session that held the removed messages isn't con
   const plan = sessionPlan(c, "model-a", settings, context, text);
   assert.equal(plan.kind, "carry_over");
   assert.ok(!plan.messages[0].content.includes("wrong paste"), "the deleted message isn't sent");
+});
+
+test("an old chat's plan calls (from before plans were taken out) aren't sent, nor their results; the rest is", () => {
+  const { outbound } = require("../src/engine.js");
+  const c = /** @type {any} */ ({ id: "c", title: "t", created: 0, updated: 0, compaction: null, usage: { tokens: 0 }, messages: [
+    { role: "user", content: "(t)\n\ngo", meta: { typed: "go" } },
+    { role: "assistant", content: "", tool_calls: [call("p", "plan", { steps: [{ goal: "A" }] }), call("r", "read_file", { path: "a.js" })] },
+    { role: "tool", tool_call_id: "p", content: "Plan: 1 step", meta: {} },
+    { role: "tool", tool_call_id: "r", content: "A", meta: {} },
+    { role: "assistant", content: "", tool_calls: [call("p2", "plan", { done: 1 })] },
+    { role: "tool", tool_call_id: "p2", content: "Plan: done", meta: {} },
+    { role: "assistant", content: "Done." },
+    { role: "user", content: "(t)\n\nnext", meta: { typed: "next" } },
+  ] });
+  const sent = outbound(c, "SYSTEM");
+  assert.ok(!JSON.stringify(sent).includes("\"plan\""), "no plan call");
+  assert.ok(!sent.some((m) => m.role === "tool" && /^Plan:/.test(m.content)), "no plan result");
+  assert.deepEqual(sent.map((m) => m.role), ["system", "user", "assistant", "tool", "assistant", "user"], "the read and its result stay; a plan-only reply goes");
 });

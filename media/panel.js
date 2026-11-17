@@ -877,7 +877,6 @@
     }
     // no entrance: an answer arrives word by word, through the fade-in
     if (item.kind === "answer") return `<div class="answer${item.incomplete ? " incomplete" : ""}">${renderedOnce(item.text)}</div>`;
-    if (item.kind === "plan") return planCard(item);
     if (item.kind === "note") return `<div class="note" data-enter="${key}">${escape(item.text)}</div>`;
     return "";
   }
@@ -966,20 +965,6 @@
     return html;
   }
 
-  /** The plan: each step's goal, done (with its notes), now (a spinner while it works) or to do. @param {any} item */
-  function planCard(item) {
-    const done = item.steps.filter((/** @type {any} */ step) => step.state === "done").length;
-    const rows = item.steps.map((/** @type {any} */ step, /** @type {number} */ index) => {
-      const mark = step.state === "done" ? ICONS.check : step.state === "doing" && item.active ? `<span class="spinner"></span>` : `<span class="dot"></span>`;
-      const state = step.state === "done" ? "Done" : step.state === "doing" ? "Now" : "To do";
-      return `<li class="${step.state}"><span class="mark" aria-hidden="true">${mark}</span><span class="sr-only">${state}: </span>` +
-        `<span class="goal">${index + 1}. ${escape(step.goal)}</span>` +
-        (step.state === "done" && step.notes ? `<span class="notes" title="${escape(step.notes)}">${escape(step.notes)}</span>` : "") + `</li>`;
-    }).join("");
-    return `<section class="plan" aria-label="Plan" data-enter="i:plan${escape(item.id)}"><div class="plan-head"><span>Plan</span>` +
-      `<span class="count">${done} of ${item.steps.length} done</span></div><ol>${rows}</ol></section>`;
-  }
-
   /** A step's label: the tool's name in code type while it waits; after it, the summary with its detail quieter. @param {any} item @param {string} label */
   function stepLabel(item, label) {
     if (item.pending && item.name && label.startsWith(item.name + " ")) return `<span class="tool">${escape(item.name)}</span>${escape(label.slice(item.name.length))}`;
@@ -1045,34 +1030,7 @@
   let shownBanner = "";
   let shownChips = "";
 
-  /** @type {string} */
-  let shownDock = "";
-
-  /** While a task with unfinished steps runs: its checklist, compact, above the box (the card in the chat scrolls away). */
-  function renderPlanDock() {
-    const dock = $("plan-dock");
-    const plan = state.busy && state.chat.livePlan ? { steps: state.chat.livePlan } : null;
-    const open = !!plan;
-    let html = "";
-    if (open) {
-      const done = plan.steps.filter((/** @type {any} */ step) => step.state === "done").length;
-      html = `<div class="plan-head"><span>Plan</span><span class="count">${done} of ${plan.steps.length} done</span></div><ol>` +
-        plan.steps.map((/** @type {any} */ step, /** @type {number} */ index) => {
-          const mark = step.state === "done" ? ICONS.check : step.state === "doing" ? `<span class="spinner"></span>` : `<span class="dot"></span>`;
-          return `<li class="${step.state}"><span class="mark" aria-hidden="true">${mark}</span><span class="goal">${index + 1}. ${escape(step.goal)}</span></li>`;
-        }).join("") + "</ol>";
-    }
-    if (html === shownDock) return;
-    shownDock = html;
-    dock.classList.toggle("hidden", !html);
-    dock.innerHTML = html;
-    // The current step in view, if the list scrolls.
-    const now = /** @type {HTMLElement | null} */ (dock.querySelector("li.doing"));
-    if (now) dock.scrollTop = Math.max(0, now.offsetTop - dock.clientHeight / 2);
-  }
-
   function renderComposer() {
-    renderPlanDock();
     // approvals (announced through the status region, not as alerts)
     const approvals = state.approvals.map((/** @type {any} */ a) => `<div class="approval" data-id="${escape(a.id)}" data-enter="a:${escape(a.id)}" role="region" aria-label="Approval needed">` +
       `<div class="what" id="ap-what-${escape(a.id)}">${ICONS.shield}<span>${escape(a.label)}</span></div><div class="why" id="ap-why-${escape(a.id)}">${escape(a.reason)}</div>` +
