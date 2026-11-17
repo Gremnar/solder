@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.15 (2026-11-17)
 
 - **First start with your organization's gateway.** When the gateway comes from policy and you have no key yet, Solder now starts the guided setup (at the key, as the gateway is set) instead of showing a connection error (HTTP 401). A key that's there but turned away still shows the connection problem, now with **Guided setup** beside Try again, Settings and Set API key.
 
