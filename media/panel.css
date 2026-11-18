@@ -96,6 +96,11 @@ svg circle { fill: currentColor; stroke: none; }
 #btn-new:hover svg { transform: rotate(90deg); }
 .icon[aria-expanded="true"] { background: var(--press); }
 
+/* Settings → Rules: what an instruction file is, and the button that makes one */
+.settings .about-file { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--hairline); border-radius: var(--r); background: var(--raised); }
+.settings .about-file .hint:first-child { margin-top: 0; }
+.settings .about-file code { font-size: 0.95em; }
+
 /* ---- attachments: the paperclip beside Send, and what's attached as chips above the box ---- */
 .row .icon.attach { color: var(--muted); margin-right: 2px; }
 .row .icon.attach:hover { color: var(--fg); }

@@ -348,7 +348,7 @@
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
     const shape = JSON.stringify({ tab: settingsTab, noEndpoint: !s.endpoint, models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
-      skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills, skillForm: s.skillForm, kinds: s.kinds,
+      skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills, skillForm: s.skillForm, kinds: s.kinds, instructionsHere: s.instructionsHere,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
     const values = JSON.stringify({ ...s, docsStatus: null, notice: null, noticeKind: null, checking: null, saved: null });
     const savedNow = s.saved && (s.saved !== settingsSaved || values !== settingsValues) ? s.saved : "";
@@ -437,7 +437,8 @@
         label("Your rules", "rules", saved("rules")) + `<textarea class="field area" id="sf-rules" data-field="rules" rows="4" placeholder="We target Python 3.10 and Node 18.&#10;Never edit files under generated/.">${escape(s.rules)}</textarea>` +
         (s.orgRules ? `<div class="field-label"><span>Added by your organization</span></div><div class="org-rules">${escape(s.orgRules)}</div>` : "") +
         label("Instruction files", "instructionFiles", saved("instructionFiles")) + `<input class="field" id="sf-instructionFiles" data-field="instructionFiles" spellcheck="false" value="${escape(s.instructionFiles)}">` +
-        `<div class="hint">Files in the workspace the model follows, separated by commas, such as AGENTS.md, CLAUDE.md.</div>` +
+        `<div class="hint">The names Solder looks for, separated by commas, such as AGENTS.md, CLAUDE.md.</div>` +
+        instructionsHtml(s) +
         `<div class="hint">Rules and instruction files go into every chat. For instructions that only fit one kind of task, make <button class="link" data-stab="skills">a skill</button>: the model reads it only when a task needs it.</div>`),
       advanced: section("Cost",
         `<div class="pair"><div>${label("Compact at tokens", "compactAt", saved("compactAt"))}<input class="field" id="sf-compactAt" data-field="compactAt" type="number" min="30000" step="10000" value="${s.compactAt}"></div>` +
@@ -617,6 +618,23 @@
   }
 
   /** @param {any} d */
+  /**
+   * Settings → Rules: what an instruction file is (one you make yourself: people look for it and it isn't there), whether
+   * this workspace has one, and a button that makes it or opens it. @param {any} s
+   */
+  function instructionsHtml(s) {
+    const here = s.instructionsHere || { folder: "", name: "AGENTS.md", found: [] };
+    const name = escape(here.name);
+    const status = !here.folder ? `Open a folder to give its project one.`
+      : here.found.length ? `This workspace has ${here.found.map((/** @type {string} */ f) => `<code>${escape(f)}</code>`).join(", ")}.`
+      : `<b>${escape(here.folder)}</b> has no ${name} yet: it isn't made for you.`;
+    const button = !here.folder ? "" : `<div class="actions-row"><button class="link-button" data-sact="openInstructions">${here.found.length ? "Open " + escape(here.found[0].split("/").pop()) : "Create " + name}</button></div>`;
+    return `<div class="about-file"><div class="hint"><b>${name} is a file you write yourself,</b> in a project's top folder: plain text saying what the model should always know about that project ` +
+      `(what it is, the languages and versions, what not to touch). Solder reads it at the start of every chat there, and one in a subfolder when it first reads a file in that subfolder. ` +
+      `Your rules above go with every project; this file goes with one, and can be kept with the code.</div>` +
+      `<div class="hint">${status}</div>${button}</div>`;
+  }
+
   /** Today's embedding against the daily budget, for the Docs tab (with Raise for today once it's reached). @param {any} s */
   function embedTodayHtml(s) {
     const m = s.docsStatus?.meaning;

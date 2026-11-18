@@ -34,8 +34,8 @@ const MIN_COMPACT_SHARE = 0.15;
 const DRAFTING_EVERY_MS = 400;
 /** The most of /compact's "what to keep" that goes into the summary request. */
 const MAX_FOCUS_CHARS = 500;
-/** This task's results are cut only past this many times the compaction limit (a runaway task). */
-const IN_TASK_CEILING = 1.5;
+/** This task's results are cut only past this many times the compaction limit (a runaway task). Twice it: what a task read is what it works from, and cutting it mid-task (a long file read whole) made it read again. */
+const IN_TASK_CEILING = 2;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
 const MAX_RESULT_CHARS = 40_000;
 /** Earlier turns' write and edit texts longer than this are left out of what's sent. */

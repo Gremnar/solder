@@ -45,6 +45,18 @@ function fenceFor(text) {
   return "`".repeat(Math.max(3, longest + 1));
 }
 
+/** What a new instruction file starts with (Settings → Rules → Create): what it's for, to be written over. */
+const INSTRUCTIONS_STARTER = `# Project instructions
+
+Solder reads this file at the start of every chat in this folder. Write what it should always know about this
+project, in plain words, then delete these lines. For example:
+
+- What this project is, in a sentence or two.
+- The languages and versions it must work with.
+- How it's laid out, and what must not be changed.
+- How you want changes made: style, naming, comments.
+`;
+
 const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
 
 /**
@@ -143,7 +155,8 @@ class SolderPanel {
         return { dims: vectors[0].length, tokens };
       },
       refreshDocs: (/** @type {boolean} */ ask) => { if (ask) this.tools.embedDeclinedAt = 0; this.tools.refreshDocs(); },
-      raiseEmbedBudget: () => this.tools.raiseEmbedBudget(), refreshModels: () => this.refreshModels() }, () => this.post());
+      raiseEmbedBudget: () => this.tools.raiseEmbedBudget(),
+      instructions: () => this.instructionsStatus(), openInstructions: () => this.openInstructions(), refreshModels: () => this.refreshModels() }, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "solder.focus";
     context.subscriptions.push(this.statusBar);
@@ -461,6 +474,42 @@ class SolderPanel {
       }
     }
     return found;
+  }
+
+  /**
+   * For Settings → Rules: where this workspace's instruction file goes (its main folder, under the first name in the
+   * Instruction files setting) and which ones are there now.
+   * @returns {{folder: string, name: string, found: string[]}} folder: "" with no folder open
+   */
+  instructionsStatus() {
+    const roots = this.tools.roots();
+    const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
+    /** @type {string[]} */
+    const found = [];
+    for (const root of roots) {
+      for (const name of names) if (ownFile(path.join(root, name), root)) found.push(roots.length > 1 ? `${path.basename(root)}/${name}` : name);
+    }
+    return { folder: roots[0] ? path.basename(roots[0]) : "", name: names[0] || "AGENTS.md", found };
+  }
+
+  /**
+   * Settings' Create (or Open) for the instruction file: it's a file you make yourself, so this makes it, with a few
+   * lines on what to put in it, and opens it to write. One that's there is opened as it is, never overwritten.
+   * @returns {Promise<string>} what to say ("" when it opened)
+   */
+  async openInstructions() {
+    const root = this.tools.roots()[0];
+    if (!root) return "Open a folder first: an instruction file lives in a project's top folder.";
+    const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
+    const name = names.find((candidate) => ownFile(path.join(root, candidate), root)) || names[0] || "AGENTS.md";
+    const file = path.join(root, name);
+    try {
+      fs.writeFileSync(file, INSTRUCTIONS_STARTER, { flag: "wx" });
+    } catch (error) {
+      if (/** @type {any} */ (error)?.code !== "EEXIST") return `Solder couldn't make ${name} (${/** @type {any} */ (error)?.code || error}).`;
+    }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(file)), { preview: false });
+    return "";
   }
 
   settings() {

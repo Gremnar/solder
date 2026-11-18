@@ -575,7 +575,7 @@ test("results from a task's last two steps stay whole, so reading spread over tw
   assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["s1a", "s1b"]);
 });
 
-test("this task's results stay whole up to 1.5× the compaction limit; earlier tasks' are cut past the budget", () => {
+test("this task's results stay whole up to twice the compaction limit; earlier tasks' are cut past the budget", () => {
   const chat = Engine.newChat();
   const big = "y".repeat(80_000); // 20k tokens each
   const task = (/** @type {string} */ name, /** @type {number} */ steps) => {
@@ -586,15 +586,15 @@ test("this task's results stay whole up to 1.5× the compaction limit; earlier t
     }
   };
   task("old", 2);
-  task("now", 6); // 120k tokens: past the 30k budget, under the 150k ceiling
+  task("now", 9); // 180k tokens: past the 30k budget, under the 200k ceiling (it was cut at 150k before)
   trim(chat, 100_000);
   assert.deepEqual(chat.messages.filter((m) => m.meta?.stub).map((m) => m.meta.summary), ["old0", "old1"]);
   task("runaway", 0);
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 12; i++) {
     chat.messages.push({ role: "assistant", content: "", tool_calls: [readCall("r" + i)] },
       { role: "tool", tool_call_id: "r" + i, content: big, meta: { summary: "r" + i } });
   }
-  trim(chat, 100_000); // 180k tokens in this task: the oldest go, the newest 150k stay
+  trim(chat, 100_000); // 240k tokens in this task: the oldest go, the newest 200k stay
   assert.deepEqual(chat.messages.filter((m) => m.meta?.stub && m.meta.summary.startsWith("r")).map((m) => m.meta.summary), ["r0", "r1"]);
 });
 

@@ -83,6 +83,26 @@ async function main() {
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- Settings → Rules: the instruction file is one you make; the button makes it (once) and opens it
+    {
+      const ws = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      const file = path.join(ws, "AGENTS.md");
+      fs.rmSync(file, { force: true });
+      await again.onMessage({ type: "settings" });
+      check("Settings says this workspace has no AGENTS.md yet", again.settingsScreen.view.instructionsHere.found.length === 0 && again.settingsScreen.view.instructionsHere.name === "AGENTS.md",
+        again.settingsScreen.view.instructionsHere);
+      await again.onMessage({ type: "settingsScreen", action: "openInstructions" });
+      check("Create makes it, with a few lines on what to write, and opens it", fs.existsSync(file) && /Solder reads this file at the start of every chat/.test(fs.readFileSync(file, "utf8"))
+        && (vscode.window.activeTextEditor?.document.uri.fsPath || "").toLowerCase() === file.toLowerCase(), vscode.window.activeTextEditor?.document.uri.fsPath);
+      check("... Settings then shows it, and the model is given it", JSON.stringify(again.settingsScreen.view.instructionsHere.found) === JSON.stringify(["AGENTS.md"])
+        && again.promptContext().instructions.some((i) => i.path === "AGENTS.md"), again.settingsScreen.view.instructionsHere);
+      fs.writeFileSync(file, "Target Windows PowerShell 5.1.\n");
+      await again.onMessage({ type: "settingsScreen", action: "openInstructions" });
+      check("... and one that's there is opened, never written over", fs.readFileSync(file, "utf8") === "Target Windows PowerShell 5.1.\n");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      fs.rmSync(file, { force: true });
+    }
+
     // ---- your organization's Tool models pattern: Kinds of model is shown by it, and locked
     await raw().update("assistModels", ["model-a-tools"], vscode.ConfigurationTarget.Global);
     again.models = [{ id: "model-a-tools", name: "A" }, { id: "model-a", name: "A (Assist)" }];

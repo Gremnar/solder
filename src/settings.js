@@ -15,7 +15,8 @@ class SettingsScreen {
   /**
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
-   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, raiseEmbedBudget: () => void, refreshModels: () => Promise<void>,
+   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, raiseEmbedBudget: () => void,
+   *          instructions: () => {folder: string, name: string, found: string[]}, openInstructions: () => Promise<string>, refreshModels: () => Promise<void>,
    *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>, interviewSkill: () => Promise<void>,
    *          createSkill: (name: string, when: string) => Promise<{file: string} | {problem: string}>,
    *          deleteSkill: (name: string) => Promise<boolean>, orgSkillsFolders: () => string[], policyChanged?: () => void,
@@ -69,6 +70,8 @@ class SettingsScreen {
       access: readOnly() ? "read" : "change",
       rules: String(config.get("rules", "")),
       instructionFiles: (config.get("instructionFiles", ["AGENTS.md"]) || []).join(", "),
+      // This workspace's instruction file: where it goes, and whether it's there (it's one you make yourself).
+      instructionsHere: this.hooks.instructions(),
       docs: (Array.isArray(raw) ? raw : []).map((item) => typeof item === "string" ? { path: item, about: "" }
         : { path: String(item?.path ?? ""), about: String(item?.about ?? "") }).filter((d) => d.path),
       docsStatus: this.hooks.docs(),
@@ -283,6 +286,12 @@ class SettingsScreen {
       }
       case "deleteSkill": {
         if (await this.hooks.deleteSkill(String(message.name || ""))) { Object.assign(this.view, { skills: this.skills() }); this.changed(); }
+        return;
+      }
+      case "openInstructions": {
+        const problem = await this.hooks.openInstructions();
+        Object.assign(this.view, { instructionsHere: this.hooks.instructions() });
+        this.notice(problem, problem ? "bad" : "");
         return;
       }
       case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;

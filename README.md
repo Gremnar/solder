@@ -150,7 +150,7 @@ Some gateways offer two kinds of model: **Tool models**, which take a system pro
 
 ## Instructions it follows
 
-- **`AGENTS.md`:** if your workspace has one at its root, Solder follows it. One in a subfolder applies once Solder reads files there. The **Instruction files** setting adds others, such as `CLAUDE.md`.
+- **`AGENTS.md`:** a plain text file you write yourself, in a project's top folder, saying what the model should always know about that project. It isn't made for you: **Settings → Rules → Create AGENTS.md** makes one to fill in. If your workspace has one at its root, Solder follows it. One in a subfolder applies once Solder reads files there. The **Instruction files** setting adds others, such as `CLAUDE.md`.
 - **Your rules:** a few plain lines in the **Rules** setting, or in the guided setup, added to every chat.
 - **Your skills:** instructions for particular kinds of task, read only when a task needs them (see [Skills](#skills)).
 
