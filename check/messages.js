@@ -104,6 +104,66 @@ async function main() {
       for (const back of restore) back?.();
     }
 
+    // ---- attachments: a long paste and text files go above the box as chips, then with the message
+    {
+      const told = [];
+      const quiet = stub(own.window, "showInformationMessage", async (text) => { told.push(String(text)); return undefined; });
+      const asked2 = [];
+      const realAsk = panel.engine.ask;
+      panel.engine.ask = async (chat, text, extra) => { asked2.push({ text, extra }); };
+      try {
+        const dir = path.join(T, "attach");
+        fs.mkdirSync(dir, { recursive: true });
+        const small = path.join(dir, "app.log");
+        const big = path.join(dir, "big.log");
+        const binary = path.join(dir, "data.bin");
+        fs.writeFileSync(small, Array.from({ length: 50 }, (_, i) => `line ${i + 1}: ok`).join("\r\n") + "\r\n");
+        fs.writeFileSync(big, Array.from({ length: 4000 }, (_, i) => `entry ${i + 1}: something happened here`).join("\n"));
+        fs.writeFileSync(binary, Buffer.from([1, 2, 0, 3, 0, 0, 4]));
+        const log = Array.from({ length: 120 }, (_, i) => `ERR ${i}`).join("\n");
+        panel.chat.messages = [];
+        panel.chat.compaction = null;
+
+        panel.attachPaste(log + "\n\n");
+        check("a long paste becomes an attachment, with how long it is", panel.attachments.length === 1 && panel.attachments[0].lines === 120 && panel.attachments[0].kind === "paste", panel.attachments.map((a) => [a.kind, a.lines]));
+        await panel.attachFiles([vscode.Uri.file(small), vscode.Uri.file(big), vscode.Uri.file(binary), vscode.Uri.file(small)]);
+        check("text files attach: a short one whole, a long one by its path; a binary one is refused, and none twice",
+          JSON.stringify(panel.attachments.map((a) => [a.kind, a.name, a.lines])) === JSON.stringify([["paste", "Pasted", 120], ["file", "app.log", 50], ["path", "big.log", 4000]])
+          && /data\.bin isn't a text file/.test(told.join(" ")), [panel.attachments.map((a) => [a.kind, a.name, a.lines]), told]);
+        check("... and the long one can then be read without asking", panel.tools.needsApproval("read_file", { path: big }) === null
+          && panel.tools.needsApproval("read_file", { path: binary }) !== null);
+        await panel.onMessage({ type: "removeAttachment", id: panel.attachments[1].id });
+        check("an attachment can be taken off again", panel.attachments.length === 2 && panel.attachments.every((a) => a.name !== "app.log"));
+        await panel.attachFiles([vscode.Uri.file(small)]);
+
+        await panel.send({ text: "What went wrong?" });
+        const sent = asked2[0];
+        check("they go with the message: whole text in fences after it, the long file by path", !!sent && sent.text === "What went wrong?"
+          && sent.extra.context.includes("(Pasted text, 120 lines:)\n```\nERR 0\n") && sent.extra.context.includes("(Attached file app.log, 50 lines:)\n```\nline 1: ok\nline 2: ok")
+          && /\(Attached file .*big\.log, 4,000 lines: too long to send whole\./.test(sent.extra.context) && !sent.extra.context.includes("entry 2000"), sent && sent.extra.context.slice(0, 300));
+        check("... as chips on the message, kept with it, and cleared from the box", JSON.stringify(sent.extra.chips.slice(-3)) === JSON.stringify(["Pasted · 120 lines", "big.log · 4,000 lines", "app.log · 50 lines"])
+          && sent.extra.attachments.length === 3 && panel.attachments.length === 0, [sent.extra.chips, panel.attachments.length]);
+
+        panel.attachPaste(log);
+        await panel.send({ text: "" });
+        check("something attached and nothing typed still goes, with a line saying so", asked2.length === 2 && asked2[1].text === "(See what I've attached.)", asked2[1]?.text);
+        await panel.send({ text: "" });
+        check("nothing attached and nothing typed doesn't", asked2.length === 2);
+
+        // Edit puts a message's attachments back above the box with its words.
+        panel.chat.messages = [{ role: "user", content: "(t)\n\nWhat went wrong?\n\n(Pasted text…)", meta: { typed: "What went wrong?", chips: ["Pasted · 120 lines"], attachments: sent.extra.attachments } },
+          { role: "assistant", content: "It broke." }];
+        posted.length = 0;
+        await panel.onMessage({ type: "editMessage", index: 0 });
+        check("Edit brings a message's attachments back with its words", panel.attachments.length === 3 && panel.attachments[0].text.startsWith("ERR 0")
+          && posted.some((m) => m.type === "editText" && m.text === "What went wrong?"), [panel.attachments.length, posted.filter((m) => m.type === "editText")]);
+        panel.attachments = [];
+      } finally {
+        panel.engine.ask = realAsk;
+        quiet?.();
+      }
+    }
+
     // ---- what can't be changed
     fill();
     panel.chat.compaction = { through: 2, summary: "S" };

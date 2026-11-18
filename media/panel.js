@@ -265,6 +265,8 @@
 
   const ICONS = {
     pencil: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.6 3.4l2 2L6 12H4v-2zM9.4 4.6l2 2"/></svg>`,
+    clip: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.9 4.6 6.2 9.3a1.3 1.3 0 0 0 1.9 1.9l4.6-4.7a2.6 2.6 0 0 0-3.7-3.7L4.3 7.5a3.9 3.9 0 0 0 5.5 5.5l3.6-3.6"/></svg>`,
+    clipboard: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5h-2v10h9v-10h-2M5.5 2.5h5v2h-5zM5.5 7.5h5M5.5 10h3.5"/></svg>`,
     bin: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 5h9M6.5 5V3.5h3V5M5 5l.6 7.5h4.8L11 5"/></svg>`,
     check: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M4.2 8.4 6.9 11l4.9-5.8"/></svg>`,
     cross: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5 5l6 6M11 5l-6 6"/></svg>`,
@@ -1109,6 +1111,12 @@
     }
     if (editor.selection) chips.push(`<button class="chip${chipsOn.selection ? " on" : ""}" data-chip="selection" aria-pressed="${chipsOn.selection}" title="Send the selected lines with your message"><span aria-hidden="true">✂</span> ${escape(base(editor.file))}:${editor.selection}</button>`);
     else if (editor.file) chips.push(`<button class="chip${chipsOn.file ? " on" : ""}" data-chip="file" aria-pressed="${chipsOn.file}" title="Tell Solder which file is open">${escape(base(editor.file))}</button>`);
+    // What goes with your next message: text files you attached, and long text you pasted (kept out of the box).
+    for (const a of state.attachments || []) {
+      chips.push(`<button class="chip on attached" data-open-attachment="${escape(a.id)}" title="${escape(a.peek || "")}&#10;&#10;Goes with your next message. Click to look at it.">` +
+        `${a.paste ? ICONS.clipboard : ICONS.clip}${escape(a.label)}</button>` +
+        `<button class="chip clear" data-remove-attachment="${escape(a.id)}" title="Don't send it" aria-label="Remove ${escape(a.label)}">✕</button>`);
+    }
     if (chips.join("") !== shownChips) {
       shownChips = chips.join("");
       keepFocus($("chips"), () => { $("chips").innerHTML = shownChips; }, input);
@@ -1134,7 +1142,7 @@
       button.setAttribute("aria-pressed", String(button.dataset.level === level));
     }
     // send / stop
-    $("send").classList.toggle("hidden", state.busy && !input.value.trim());
+    $("send").classList.toggle("hidden", state.busy && !input.value.trim() && !(state.attachments || []).length);
     $("stop").classList.toggle("hidden", !state.busy);
     $("send").classList.toggle("idle", !input.value.trim());
     $("send").title = state.busy ? "Send with the next step (Enter)" : "Send (Enter)";
@@ -1533,9 +1541,26 @@
   });
   input.addEventListener("blur", hideSlash);
 
+  /** Pasted text longer than this goes above the box as a chip, not into it (a hundred lines of log are in the way there, and in the chat). */
+  const PASTE_CHIP_LINES = 40;
+  const PASTE_CHIP_CHARS = 4000;
+
+  /** Whether pasted text should be a chip. @param {string} text */
+  function pasteAsChip(text) {
+    return text.length > PASTE_CHIP_CHARS || text.split("\n").length > PASTE_CHIP_LINES;
+  }
+
+  input.addEventListener("paste", (event) => {
+    const text = event.clipboardData?.getData("text/plain") || "";
+    if (!state || state.setup || state.settings || !pasteAsChip(text)) return;
+    event.preventDefault();
+    vscode.postMessage({ type: "attachPaste", text });
+    announce("Pasted as an attachment");
+  });
+
   function send() {
     const text = input.value.trim();
-    if (!text || !state) return;
+    if (!state || (!text && !(state.attachments || []).length)) return;
     // "/name what" for a command we have runs it; anything else that starts with "/" goes as a message.
     const typed = /^\/(\w+)(?:\s+([\s\S]*))?$/.exec(text);
     if (typed && COMMANDS.some((c) => c.name === typed[1].toLowerCase())) {
@@ -1555,7 +1580,7 @@
   function autosize() {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px";
-    if (state) $("send").classList.toggle("hidden", state.busy && !input.value.trim());
+    if (state) $("send").classList.toggle("hidden", state.busy && !input.value.trim() && !(state.attachments || []).length);
     $("send").classList.toggle("idle", !input.value.trim());
   }
 
@@ -1646,7 +1671,7 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -1658,6 +1683,8 @@
     }
     if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
+    if (d.openAttachment) { vscode.postMessage({ type: "openAttachment", id: d.openAttachment }); return; }
+    if (d.removeAttachment) { vscode.postMessage({ type: "removeAttachment", id: d.removeAttachment }); input.focus(); return; }
     if (d.editMsg !== undefined) { vscode.postMessage({ type: "editMessage", index: Number(d.editMsg) }); return; }
     if (d.deleteMsg !== undefined) { vscode.postMessage({ type: "deleteMessage", index: Number(d.deleteMsg) }); return; }
     if (d.action) { closeMenus(); vscode.postMessage({ type: d.action }); }
@@ -1721,5 +1748,5 @@
   autosize();
   vscode.postMessage({ type: "ready" });
   // @ts-ignore: for the browser preview harness
-  window.__solder = { markdown };
+  window.__solder = { markdown, pasteAsChip };
 })();

@@ -24,8 +24,8 @@ function element() {
   });
 }
 
-/** media/panel.js loaded once; its markdown function. @returns {(text: string) => string} */
-function markdownRenderer() {
+/** media/panel.js loaded once: what it exposes for tests (its markdown function, and the paste rule). @returns {any} */
+function loadPanel() {
   const source = fs.readFileSync(path.join(__dirname, "..", "media", "panel.js"), "utf8");
   const sandbox = /** @type {any} */ ({ document: element(), setInterval: () => 0, setTimeout: () => 0, clearTimeout() {}, console, performance: { now: () => 0 } });
   sandbox.window = sandbox;
@@ -33,10 +33,11 @@ function markdownRenderer() {
   sandbox.window.matchMedia = () => ({ matches: true });
   sandbox.window.innerHeight = 800;
   vm.runInNewContext(source, sandbox, { filename: "panel.js" });
-  return sandbox.__solder.markdown;
+  return sandbox.__solder;
 }
 
-const markdown = markdownRenderer();
+const panel = loadPanel();
+const markdown = panel.markdown;
 
 test("a reply's text is escaped before any Markdown: tags, attributes and quotes in it can't become markup", () => {
   const html = markdown('<img src=x onerror=alert(1)> **b<i>old</i>** `a"b` [x](https://h/?a="b)');
@@ -78,4 +79,12 @@ test("a shell's code block gets Paste in terminal beside Copy; other code doesn'
   for (const lang of ["bash", "PS1", "cmd", "console"]) assert.match(markdown(T + lang + "\nx\n" + T), /class="paste"/, lang);
   assert.doesNotMatch(markdown(T + "js\nlet a = 1;\n" + T), /class="paste"/);
   assert.doesNotMatch(markdown(T + "\nplain\n" + T), /class="paste"/, "no language: no guess");
+});
+
+test("a paste of more than 40 lines, or 4,000 characters, goes as a chip; a shorter one into the box", () => {
+  const { pasteAsChip } = panel;
+  assert.equal(pasteAsChip("one line"), false);
+  assert.equal(pasteAsChip(Array.from({ length: 40 }, (_, i) => "line " + i).join("\n")), false, "40 lines still fit the box");
+  assert.equal(pasteAsChip(Array.from({ length: 41 }, (_, i) => "line " + i).join("\n")), true);
+  assert.equal(pasteAsChip("x".repeat(4001)), true, "one very long line too");
 });

@@ -18,9 +18,33 @@ const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
 const { MAX_SKILLS, offered } = require("./skills.js");
+const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
 
 const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so it can't change files.";
+/** Attachments: the most with one message, the longest text sent whole (a longer file goes by its path), and the biggest read at all. */
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACH_CHARS = 40_000;
+const MAX_ATTACH_BYTES = 20_000_000;
+/** A paste has no file to read it from, so it goes whole: up to this. */
+const MAX_PASTE_CHARS = 400_000;
+
+let attachmentCount = 0;
+function attachmentId() {
+  return "a" + (++attachmentCount).toString(36) + Date.now().toString(36);
+}
+
+/** An attachment's chip: "app.log · 320 lines", "Pasted · 132 lines". @param {{name: string, lines: number}} a */
+function attachmentLabel(a) {
+  return `${a.name} · ${a.lines.toLocaleString("en-US")} line${a.lines === 1 ? "" : "s"}`;
+}
+
+/** A code fence longer than any run of backticks in the text, so the text can't end it. @param {string} text */
+function fenceFor(text) {
+  const longest = (String(text).match(/`+/g) || []).reduce((most, run) => Math.max(most, run.length), 0);
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
 const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
 
 /**
@@ -98,6 +122,8 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
+    /** @type {any[]} what goes with your next message: pasted text and text files, as chips above the box */
+    this.attachments = [];
     this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter(offered).length,
       // Your skills folder, ready (and in the setting) once setup is done, so New skill and /skill need no folder picking.
       skillsHome: async () => {
@@ -257,7 +283,88 @@ class SolderPanel {
     if (this.errorChat === chat.id || !this.errorChat) this.error = null;
     await this.store.save(chat);
     this.post();
-    if (edit) this.view?.webview.postMessage({ type: "editText", text: typed });
+    if (edit) {
+      // What the message had attached comes back above the box with its words.
+      const back = Array.isArray(message.meta?.attachments) ? message.meta.attachments : [];
+      if (back.length) {
+        this.attachments = back.map((/** @type {any} */ a) => ({ ...a, id: attachmentId() }));
+        for (const a of this.attachments) if (a.kind === "path" && a.full) this.tools.attached.add(String(a.full).toLowerCase());
+        this.post();
+      }
+      this.view?.webview.postMessage({ type: "editText", text: typed === CONTEXT.attachedOnly ? "" : typed });
+    }
+  }
+
+  // -------------------------------------------------------------- attachments --
+
+  /**
+   * Text pasted into the box that's long enough to be in the way there: it goes above the box as a chip, and with
+   * your next message. @param {string} text
+   */
+  attachPaste(text) {
+    const clean = String(text ?? "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+    if (!clean.trim()) return;
+    if (clean.length > MAX_PASTE_CHARS) { vscode.window.showInformationMessage("That's too much to paste into a chat. Save it as a file and attach that: Solder then reads the parts it needs."); return; }
+    if (this.attachments.length >= MAX_ATTACHMENTS) { vscode.window.showInformationMessage(`Up to ${MAX_ATTACHMENTS} things can go with one message.`); return; }
+    this.attachments.push({ id: attachmentId(), kind: "paste", name: "Pasted", lines: clean.split("\n").length, text: clean });
+    this.post();
+  }
+
+  /**
+   * Attach text files (the paperclip): each is read now. One of a size to send goes whole, after your message; a longer
+   * one goes by its path, for the model to read the parts it needs (without asking: you attached it). Word, Excel and
+   * PowerPoint files go as their text, as read_file reads them. @param {vscode.Uri[]} [given] for the checks
+   */
+  async attachFiles(given) {
+    const start = this.chat.folder ? this.tools.resolve(this.chat.folder).full : this.tools.root();
+    const picked = given ?? await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
+      openLabel: "Attach", title: "Solder: attach text files", ...(start ? { defaultUri: vscode.Uri.file(start) } : {}) });
+    /** @type {string[]} */
+    const refused = [];
+    for (const uri of picked || []) {
+      if (this.attachments.length >= MAX_ATTACHMENTS) { refused.push(`only ${MAX_ATTACHMENTS} things can go with one message`); break; }
+      const full = uri.fsPath;
+      const name = path.basename(full);
+      if (this.attachments.some((a) => a.full && a.full.toLowerCase() === full.toLowerCase())) continue;
+      let text = null;
+      try {
+        if (fs.statSync(full).size > MAX_ATTACH_BYTES) { refused.push(`${name} is too big`); continue; }
+        text = isOffice(full) ? await documentText(full) : decodeText(fs.readFileSync(full));
+      } catch { text = null; }
+      if (text === null || text.includes("\uFFFD")) { refused.push(`${name} isn't a text file Solder can read`); continue; }
+      text = withoutSignatures(text.replace(/\r\n?/g, "\n")).replace(/\s+$/, "");
+      const lines = text.split("\n").length;
+      if (text.length <= MAX_ATTACH_CHARS) this.attachments.push({ id: attachmentId(), kind: "file", name, lines, text, full });
+      else { this.attachments.push({ id: attachmentId(), kind: "path", name, lines, full }); this.tools.attached.add(full.toLowerCase()); }
+    }
+    if (refused.length) vscode.window.showInformationMessage(`Not attached: ${refused.join("; ")}.`);
+    this.post();
+  }
+
+  /** @param {string} id */
+  removeAttachment(id) {
+    this.attachments = this.attachments.filter((a) => a.id !== id);
+    this.post();
+  }
+
+  /** A chip clicked: what it holds, in an editor tab to look at (a file by its path opens as itself). @param {string} id */
+  async openAttachment(id) {
+    const found = this.attachments.find((a) => a.id === id);
+    if (!found) return;
+    const document = found.text === undefined ? await vscode.workspace.openTextDocument(vscode.Uri.file(found.full))
+      : await vscode.workspace.openTextDocument({ content: found.text });
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  /** What's attached, as it goes to the model after your message, with each one's chip. */
+  attachmentParts() {
+    this.tools.useFolder(this.chat.folder);
+    return this.attachments.map((a) => {
+      const chip = attachmentLabel(a);
+      if (a.kind === "path") return { block: CONTEXT.attachedPath(this.tools.shown(a.full), a.lines), chip };
+      const fence = fenceFor(a.text);
+      return { block: a.kind === "paste" ? CONTEXT.pasted(a.lines, a.text, fence) : CONTEXT.attached(a.name, a.lines, a.text, fence), chip };
+    });
   }
 
   /** The panel's Enable tools: read-only mode off, for good (only you, in Settings, can turn it on again). */
@@ -531,6 +638,10 @@ class SolderPanel {
         this.post();
         return;
       }
+      case "attach": return this.attachFiles();
+      case "attachPaste": return this.attachPaste(String(message.text ?? ""));
+      case "removeAttachment": return this.removeAttachment(String(message.id || ""));
+      case "openAttachment": return this.openAttachment(String(message.id || ""));
       case "pasteInTerminal": return this.pasteInTerminal(String(message.text ?? ""));
       case "editMessage": case "deleteMessage": return this.changeMessage(message.type === "editMessage", Number(message.index));
       case "new":
@@ -778,7 +889,9 @@ class SolderPanel {
   }
 
   async send(message) {
-    const text = String(message.text || "").trim();
+    const attached = this.attachmentParts();
+    // Something attached and nothing typed: it still goes, with a line saying so.
+    const text = String(message.text || "").trim() || (attached.length ? CONTEXT.attachedOnly : "");
     if (!text) return;
     if (this.awayBusy()) {
       vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Go back to it to add to that task, or send this once it's done.`);
@@ -788,7 +901,9 @@ class SolderPanel {
     if (this.engine.busy) {
       // Busy: it goes with the next step, the selection with it when it came from the menu.
       const picked = message.picked ?? (message.editor ? this.selectionBlock(message.editor) : null);
-      this.engine.steer(text, picked ? { context: picked.block, chips: [picked.chip] } : {});
+      const going = [...(picked ? [picked] : []), ...attached];
+      this.engine.steer(text, going.length ? { context: going.map((part) => part.block).join("\n\n"), chips: going.map((part) => part.chip) } : {});
+      this.attachments = [];
       this.post();
       return;
     }
@@ -820,8 +935,11 @@ class SolderPanel {
         chips.push(path.basename(shown));
       }
     }
+    for (const part of attached) { parts.push(part.block); chips.push(part.chip); }
+    const kept = this.attachments;
+    this.attachments = [];
     this.error = null;
-    this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips });
+    this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips, attachments: kept });
   }
 
   /** The selected text as context for the model, and its chip ("cart.js:12–18"), or null with nothing selected. @param {vscode.TextEditor} editor */
@@ -1027,6 +1145,8 @@ class SolderPanel {
       steers: this.awayBusy() ? [] : this.engine.steers.map((s) => s.text),
       workspace: !!this.tools.root(),
       readOnly: readOnly(), readOnlyLocked: policy.locked("readOnly"),
+      attachments: this.attachments.map((a) => ({ id: a.id, label: attachmentLabel(a), paste: a.kind === "paste",
+        peek: a.text === undefined ? a.full : String(a.text).split("\n").slice(0, 6).join("\n").slice(0, 400) })),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
       settings: this.setup.view ? null : this.settingsScreen.view,

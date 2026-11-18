@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Attach text files.** A paperclip beside Send attaches text files to your next message (Word, Excel and PowerPoint as their text). A file up to about 40,000 characters is sent whole; a longer one goes by its path, and the model reads only the parts it needs, without asking (you attached it). A signed script goes without its signature block.
+- **Long pastes become chips.** Text you paste that's over 40 lines (or 4,000 characters) goes above the box as a chip, not into it, and shows in the chat as a chip too, so a hundred lines of log don't fill the scroll. ✕ takes it off before sending; a click shows it. Edit on a message brings its attachments back with its words.
+
 ## 0.2.18 (2026-11-18)
 
 - **Fix: edits to a file on a network drive could lock up.** When a file changed outside VS Code (a script signed again, say) and VS Code never noticed, as happens on mapped and network drives, every edit was refused with "changed on disk a moment ago", and reading the file again gave the same old copy, so it never cleared. Now a read gives what's on disk, and before an edit Solder has VS Code reload the file, then makes the change. Your unsaved changes are never reloaded away.

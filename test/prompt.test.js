@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "e910879e7dfa728e";
+const PINNED = "fef4942ce3d5bbda";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -60,7 +60,8 @@ function everything() {
     tools: toolDefinitions(),
     readOnlyTools: toolDefinitions(true),
     starters: STARTERS,
-    context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js")],
+    context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js"),
+      CONTEXT.pasted(132, "LOG", "```"), CONTEXT.pasted(1, "LOG", "```"), CONTEXT.attached("app.log", 320, "LOG", "````"), CONTEXT.attachedPath("logs/big.log", 5000), CONTEXT.attachedOnly],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
     skill: [SKILL.fromChat, SKILL.about("WHAT"), SKILL.interview],
     texts: filled(TEXTS, SAMPLES, "TEXTS"),

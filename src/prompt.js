@@ -427,6 +427,16 @@ const CONTEXT = {
   selected: (/** @type {string} */ file, /** @type {number} */ first, /** @type {number} */ last, /** @type {string} */ language,
     /** @type {string} */ text, /** @type {string} */ fence) => `(Selected in ${file}, lines ${first}–${last}:)\n${fence}${language}\n${text}\n${fence}`,
   cutShort: "\n…(cut short)",
+  /** Text you pasted that's long enough to go as a chip, and a text file you attached: whole, after your message. */
+  pasted: (/** @type {number} */ lines, /** @type {string} */ text, /** @type {string} */ fence) =>
+    `(Pasted text, ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}:)\n${fence}\n${text}\n${fence}`,
+  attached: (/** @type {string} */ file, /** @type {number} */ lines, /** @type {string} */ text, /** @type {string} */ fence) =>
+    `(Attached file ${file}, ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}:)\n${fence}\n${text}\n${fence}`,
+  /** A file too long to send whole: where it is, for the model to read what it needs (reading it needs no approval). */
+  attachedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
+    `(Attached file ${file}, ${lines.toLocaleString("en-US")} lines: too long to send whole. Read the parts you need with read_file, which takes a range of lines.)`,
+  /** Sent as your message when you attach something and type nothing. */
+  attachedOnly: "(See what I've attached.)",
   undid: (/** @type {string} */ file, /** @type {string} */ step) => `(I undid your change to ${file}: ${step}.)`,
 };
 

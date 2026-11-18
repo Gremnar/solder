@@ -164,13 +164,15 @@ class Engine {
 
   /**
    * Your message, then the loop until the model answers.
-   * @param {Chat} chat @param {string} text what you typed @param {{context?: string, chips?: string[]}} [extra]
+   * @param {Chat} chat @param {string} text what you typed @param {{context?: string, chips?: string[], attachments?: any[]}} [extra]
    */
   async ask(chat, text, extra = {}) {
     await this._run(chat, async (signal) => {
       // Saved first, so nothing that fails after this (compaction included) can lose what you typed.
       const content = `${timeNote(this.now())}\n\n${text}` + (extra.context ? `\n\n${extra.context}` : "");
-      chat.messages.push({ role: "user", content, meta: { typed: text, chips: extra.chips || [] } });
+      // What was attached is kept with the message too (its text is in the content): Edit puts it back above the box.
+      chat.messages.push({ role: "user", content, meta: { typed: text, chips: extra.chips || [],
+        ...(extra.attachments?.length ? { attachments: extra.attachments } : {}) } });
       delete chat.limitHit;
       if (chat.title === "New chat") chat.title = titleFrom(text);
       await this._save(chat);

@@ -635,4 +635,29 @@ SCENARIOS.push({
   },
 });
 
+// ---- attachments: a pasted log sent whole after the message, and a long file attached by its path
+const LOG_LINES = Array.from({ length: 120 }, (_, i) => i === 87
+  ? "2026-11-18 09:14:07 ERROR deploy step 'migrate-db' failed: timeout after 300s waiting for lock on table orders"
+  : `2026-11-18 09:${String(Math.floor(i / 6)).padStart(2, "0")}:${String((i * 7) % 60).padStart(2, "0")} INFO step ${i} ok`);
+
+SCENARIOS.push({
+  name: "attached-paste",
+  about: "a 120-line log pasted with the message (as the panel sends it): answered from it, with no tool calls needed",
+  setup: (w) => w("README.md", "# Deploy\n"),
+  task: (/** @type {any} */ prompt) => "Why did this deploy fail?\n\n" + prompt.CONTEXT.pasted(LOG_LINES.length, LOG_LINES.join("\n"), "```"),
+  check: ({ answer, ws }) => !/migrate-db/i.test(answer) || !/lock|timeout/i.test(answer) ? "the answer misses the failing step: " + answer.slice(0, 200)
+    : ws.calls.length > 2 ? `${ws.calls.length} tool calls for something it was handed` : "",
+});
+
+SCENARIOS.push({
+  name: "attached-path",
+  about: "a 5,000-line log attached by its path (too long to send whole): the model reads or searches for what it needs",
+  setup: (w) => w("logs/big.log", Array.from({ length: 5000 }, (_, i) => i === 4320
+    ? "2026-11-18 11:02:44 FATAL worker 7 crashed: out of memory while resizing image batch 9913"
+    : `2026-11-18 10:${String(i % 60).padStart(2, "0")}:00 INFO request ${i} served`).join("\n") + "\n"),
+  task: (/** @type {any} */ prompt) => "Something crashed in this log. What was it, and on which line?\n\n" + prompt.CONTEXT.attachedPath("logs/big.log", 5000),
+  check: ({ answer }) => !/memory/i.test(answer) || !/9913/.test(answer) ? "the crash wasn't found: " + answer.slice(0, 200)
+    : !/4,?321/.test(answer) ? "the line number is missing or wrong: " + answer.slice(0, 200) : "",
+});
+
 module.exports = { SCENARIOS };

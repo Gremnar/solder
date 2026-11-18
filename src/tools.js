@@ -91,6 +91,8 @@ class WorkspaceTools {
   /** @param {vscode.ExtensionContext} context */
   constructor(context) {
     this.context = context;
+    /** @type {Set<string>} files you attached by path (lower case): read without asking */
+    this.attached = new Set();
     /** @type {string | null | undefined} */
     this._rg = undefined;
     /** Languages whose symbol provider has answered: an empty outline from them is real, not a slow start. */
@@ -191,6 +193,8 @@ class WorkspaceTools {
       let file;
       try { file = this.resolve(args.path); } catch { return null; }
       if (file.inside || this.inReferenceFolder(file.full)) return null;
+      // A file you attached to a message yourself (too long to send whole): reading it is what you asked for.
+      if (name === "read_file" && this.attached.has(file.full.toLowerCase())) return null;
       return "It reads a file outside the workspace folder, your docs folders and your skills folders.";
     }
     if (name === "changes" && args.path) {
