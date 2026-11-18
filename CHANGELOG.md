@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- **Projects.** A project is a folder you work in, with its own rules, skills and chats. The new **Projects** button at the top of the panel opens a screen listing your projects with their chats under each (**+** starts a chat in one) and your other chats below. A project's page shows all of it to read: its `AGENTS.md` in full, each of its skills, and its chats; you can rename it, edit or create its rules, and add, edit or delete its skills from there. A project's chat works in the project's folder, follows its rules and is offered its skills, and the chats list shows that project's chats. Everything a project is lives in its own folder (`AGENTS.md`, and a `.solder` folder with its name and skills), so copying or zipping the folder shares it; chats stay on your PC. Solder asks before using a project someone else set up, and a project can't change your settings.
+- **Projects.** A project is a folder you work in, with its own rules, skills and chats.
+  - **Starting a chat in one:** the arrow beside **+** lists your projects (**+** itself starts a chat in no project).
+  - **The chats list is grouped by project:** the project you're in first, your other projects folded under it, then **Other chats**; each group sorted as before (pinned, then by age).
+  - **The Projects screen** (the new button at the top of the panel) lists your projects with their chats, and has **New project…**.
+  - **A project's page** shows all of it to read: its `AGENTS.md` in full, each of its skills, and its chats. You can rename it, edit or create its rules, and add, edit or delete its skills from there.
+  - **Sharing:** everything a project is lives in its own folder (`AGENTS.md`, and a `.solder` folder with its name and skills), so copying or zipping the folder shares it; chats stay on your PC. Solder asks before using a project someone else set up, and a project can't change your settings.
+- **The version shows in Settings,** at the top right of every tab.
 - **A turn keeps more of what it read.** What the turn in progress has read now stays whole up to twice **Compact at** (it was one and a half times), so reading a long file through is less likely to have its start cut while the model still needs it.
 - **Settings explains AGENTS.md, and makes one.** Settings → Rules now says what an instruction file is (one you write yourself, in a project's top folder), whether this workspace has one, and has **Create AGENTS.md** (or **Open** when it's there).
 - **Fix: Resume and Continue could summarise the task in progress.** Pressing Resume or Continue (after the step limit, a Stop or an error) in a chat past **Compact at** summarised everything, the task being resumed included, so the model lost its place and read things again. Now only earlier turns are summarised, as before any other step.

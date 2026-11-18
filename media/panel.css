@@ -765,3 +765,20 @@ body.in-projects #transcript { padding-top: 4px; }
 .projects .pskill > summary .chev { align-self: center; transform: rotate(-90deg); }
 .projects .pskill[open] > summary .chev { transform: none; }
 .projects .pskill-when.warn { color: var(--warn); }
+/* New chat: + starts a chat in no project; the arrow beside it lists your projects */
+.icon.slim { width: 14px; margin-left: -2px; }
+.icon.slim .chev { width: 10px; height: 10px; }
+body.in-settings #btn-new-more { display: none; }
+body.in-setup #btn-new-more { visibility: hidden; }
+#new-menu button { align-items: center; }
+/* the chats dropdown, grouped by project */
+.menu button.fold.pfold { align-items: center; color: var(--fg); font-size: 1em; font-weight: 600; margin-top: 2px; }
+.menu button.fold.pfold.other { font-size: 0.78em; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.menu button.fold.pfold .pfold-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu button.fold.pfold .grey { font-weight: 400; font-size: 0.85em; letter-spacing: 0; }
+.menu button.fold.pfold .chev { margin-left: 6px; }
+.menu .pfold-body { padding-left: 10px; }
+.menu .pfold-body .group { font-size: 0.72em; padding-top: 5px; }
+.menu .pfold-body .empty { font-size: 0.9em; }
+/* Settings: the version, at the top of every tab */
+.settings-version { margin: -4px 0 4px; text-align: right; font-size: 0.8em; color: var(--muted); font-variant-numeric: tabular-nums; }

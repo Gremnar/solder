@@ -114,12 +114,13 @@ async function main() {
     plain.title = "Just a question";
     await panel.store.save(plain);
     s = state();
-    check("in a project's chat, the dropdown shows that project's chats only, and the chip names the project", s.chats.map((c) => c.title).join() === "Restore the copy" && s.project?.name === "decloning", [s.chats.map((c) => c.title), s.project]);
+    const grouped = (/** @type {any} */ st) => st.chats.map((/** @type {any} */ c) => c.title + (c.project ? " @" + (st.projectList.find((/** @type {any} */ p) => p.key === c.project)?.name ?? "?") : "")).sort().join();
+    check("the dropdown gets every chat marked with its project, the projects to group them by, and the chip names this chat's", grouped(s) === "Just a question,Restore the copy @decloning" && s.project?.name === "decloning" && s.project.key === s.projectList[0]?.key && s.projectList[0].missing === false, [grouped(s), s.project, s.projectList]);
     await panel.onMessage({ type: "new" });
-    check("New chat stays in the project you're in", panel.chat.project?.toLowerCase() === mine.toLowerCase() && panel.chat.folder === "decloning" && panel.chat.id !== chat.id);
+    check("New chat (the + button) is in no project, and not in the project's folder", !panel.chat.project && !panel.chat.folder && panel.chat.id !== chat.id && state().project === null && panel.tools.projectSkills === "", [panel.chat.project, panel.chat.folder, panel.tools.projectSkills]);
     await panel.onMessage({ type: "open", id: plain.id });
     s = state();
-    check("in a chat with no project, the dropdown shows the chats that are in none", s.chats.map((c) => c.title).join() === "Just a question" && s.project === null, s.chats.map((c) => c.title));
+    check("in a chat with no project, the dropdown has the same chats and no project chip", grouped(s) === "Just a question,Restore the copy @decloning" && s.project === null, grouped(s));
     await panel.onMessage({ type: "projects" });
     s = state();
     check("the Projects screen groups them: the project with its chat, the rest under other chats", s.projects.projects[0].chats.map((c) => c.title).join() === "Restore the copy"

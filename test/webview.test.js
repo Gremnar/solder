@@ -108,3 +108,10 @@ test("a project's own text (its name, folder, rules, skills, chats) is escaped o
   assert.match(list, /Use it…/);
   assert.match(page, /Only its first 40,000 characters are used/);
 });
+
+test("the Projects screen with no projects yet says what one is, offers New project, and still lists the other chats", () => {
+  const html = panel.projectsHtml({ projects: [], other: [], found: [], page: null, skillForm: false, notice: "", noticeKind: "", current: "" });
+  assert.match(html, /New project…/);
+  assert.match(html, /A project is a folder you work in/);
+  assert.match(html, /Other chats/);
+});

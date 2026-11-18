@@ -364,8 +364,9 @@ class SolderPanel {
     const key = projectKey(folder);
     const known = this.projectNames.get(key);
     if (known && Date.now() - known.at < 5000) return known.name;
-    const name = readProject(folder, [])?.name ?? path.basename(folder);
-    this.projectNames.set(key, { name, at: Date.now() });
+    const project = readProject(folder, []);
+    const name = project?.name ?? path.basename(folder);
+    this.projectNames.set(key, { name, missing: !project, at: Date.now() });
     return name;
   }
 
@@ -957,11 +958,12 @@ class SolderPanel {
       case "new":
         if (!this.engine.busy) {
           this.awayDone = "";
-          const folder = this.chat.folder || "";
-          const project = this.chat.project && this.projects.has(this.chat.project) ? this.chat.project : "";
+          // A new chat is in no project (a project's are started from the New chat menu, or the Projects screen). It
+          // keeps working where you were, unless that was a project's folder.
+          const folder = this.chat.project && this.projects.has(this.chat.project) ? "" : this.chat.folder || "";
           this.chat = Engine.newChat();
-          if (folder) this.chat.folder = folder; // a new chat keeps working where you were
-          if (project) this.chat.project = project; // and stays in the project you were in
+          if (folder) this.chat.folder = folder;
+          this.useChat(this.chat);
           this.projectsView = null;
           this.error = null;
           this.post();
@@ -1440,11 +1442,14 @@ class SolderPanel {
       type: "state",
       chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0,
         context: /** @type {any} */ (chat.usage).context || 0, compactAt: this.settings().compactAt },
-      // The title's dropdown: the chats of the project this chat is in, or this window's chats that are in none.
-      chats: chatList(chat.project && this.projects.has(chat.project)
-        ? this.store.all().filter((item) => item.project && projectKey(item.project) === projectKey(chat.project))
-        : this.store.list().filter((item) => !(item.project && this.projects.has(item.project)))),
-      project: chat.project && this.projects.has(chat.project) ? { path: chat.project, name: this.projectName(chat.project) } : null,
+      // The title's dropdown: your projects' chats (whichever window they were started in), each marked with its
+      // project, and this window's chats that are in none. The panel groups them.
+      chats: chatList([...this.store.all().filter((item) => item.project && this.projects.has(item.project)).map((item) => ({ ...item, project: projectKey(item.project) })),
+        ...this.store.list().filter((item) => !(item.project && this.projects.has(item.project))).map((item) => ({ ...item, project: "" }))]
+        .sort((a, b) => b.updated - a.updated)),
+      project: chat.project && this.projects.has(chat.project) ? { path: chat.project, key: projectKey(chat.project), name: this.projectName(chat.project) } : null,
+      // Your projects, for the dropdown's groups and the New chat menu.
+      projectList: this.projects.paths().map((folder) => ({ path: folder, key: projectKey(folder), name: this.projectName(folder), missing: !!this.projectNames.get(projectKey(folder))?.missing })),
       projects: this.setup.view || this.settingsScreen.view ? null : this.projectsState(),
       // Assist models are tagged in the picker: free, slower, and no thinking level.
       models: (this.models.length || !current ? this.models : [{ id: current, name: current }]).map((m) => ({ ...m, assist: laneOf(m.id, settings) === "assist" })),

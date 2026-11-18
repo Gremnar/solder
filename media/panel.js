@@ -478,6 +478,7 @@
     const html = `<div class="setup settings${fresh ? " enter" : ""}">` +
       `<div class="settings-top"><div class="stabs" role="tablist" aria-label="Settings">${tabs}</div></div>` +
       `<div id="settings-panel" class="settings-panel${!fresh && settingsTabShown !== settingsTab ? " swap" : ""}" role="tabpanel" aria-labelledby="stab-${settingsTab}">` +
+      (s.version ? `<div class="settings-version">Solder ${escape(s.version)}</div>` : "") +
       `<div id="settings-notice" class="settings-notice ${s.noticeKind || ""}" role="status">${escape(s.notice || "")}</div>` +
       (s.policyError ? `<div class="settings-notice bad">${escape(s.policyError)}</div>` : "") +
       panels[settingsTab] + `</div></div>`;
@@ -1218,36 +1219,69 @@
 
   /** Whether the dropdown shows the archived chats (folded away by default). */
   let archivedOpen = false;
+  /** Groups of the dropdown opened or folded by hand, by project key ("" is Other chats): kept while the panel lives. @type {Map<string, boolean>} */
+  const menuFolds = new Map();
 
-  /** The chats dropdown: pinned first, then by age (today, the last 7 and 30 days, older), archived folded at the end. */
+  /**
+   * The chats dropdown. With projects: a group per project (this chat's first, open; the others folded until clicked),
+   * then the chats in none. In each group, pinned first, then by age (today, the last 7 and 30 days, older). Archived
+   * chats are folded at the end.
+   */
   function renderChatMenu() {
     const now = Date.now();
     const day = 86400000;
+    const chev = `<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg>`;
     const item = (/** @type {any} */ c) =>
       `<button role="menuitemradio" aria-checked="${c.id === state.chat.id}" tabindex="-1" data-open="${escape(c.id)}" data-pinned="${!!c.pinned}" data-archived="${!!c.archived}" class="${c.id === state.chat.id ? "active" : ""}"` +
       ` aria-haspopup="menu" aria-keyshortcuts="Shift+F10">${c.pinned ? `<svg class="pin" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5h4l-.5 4 2 2v1h-7v-1l2-2zM8 9.5V14"/></svg>` : ""}` +
       `<span>${escape(c.title)}</span><span class="when">${ago(now - c.updated)}</span></button>`;
+    const byAge = (/** @type {any[]} */ list) => /** @type {[string, any[]][]} */ ([
+      ["Pinned", list.filter((c) => c.pinned)],
+      ["Today", list.filter((c) => !c.pinned && now - c.updated < day)],
+      ["Last 7 days", list.filter((c) => !c.pinned && now - c.updated >= day && now - c.updated < 7 * day)],
+      ["Last 30 days", list.filter((c) => !c.pinned && now - c.updated >= 7 * day && now - c.updated < 30 * day)],
+      ["Older", list.filter((c) => !c.pinned && now - c.updated >= 30 * day)],
+    ]).filter(([, chats]) => chats.length).map(([name, chats]) => `<div class="group" role="presentation">${name}</div>` + chats.map(item).join("")).join("");
     const live = state.chats.filter((/** @type {any} */ c) => !c.archived);
     const archived = state.chats.filter((/** @type {any} */ c) => c.archived);
-    /** @type {[string, any[]][]} */
-    const groups = [
-      ["Pinned", live.filter((/** @type {any} */ c) => c.pinned)],
-      ["Today", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated < day)],
-      ["Last 7 days", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= day && now - c.updated < 7 * day)],
-      ["Last 30 days", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= 7 * day && now - c.updated < 30 * day)],
-      ["Older", live.filter((/** @type {any} */ c) => !c.pinned && now - c.updated >= 30 * day)],
-    ];
-    let html = groups.filter(([, list]) => list.length)
-      .map(([name, list]) => `<div class="group" role="presentation">${name}</div>` + list.map(item).join("")).join("");
+    const projects = /** @type {any[]} */ (state.projectList || []);
+    let html = "";
+    if (!projects.length) html = byAge(live);
+    else {
+      const mine = state.project ? state.project.key : "";
+      const group = (/** @type {string} */ key, /** @type {string} */ name, /** @type {any[]} */ chats, /** @type {boolean} */ isProject) => {
+        const open = menuFolds.get(key) ?? (key === mine || key === "");
+        return `<button class="fold pfold${isProject ? "" : " other"}" role="menuitem" tabindex="-1" data-fold="p:${escape(key)}" aria-expanded="${open}">${isProject ? P_FOLDER : ""}` +
+          `<span class="pfold-name">${escape(name)}</span><span class="grey">${chats.length}</span>${chev}</button>` +
+          (open ? `<div class="pfold-body" role="presentation">${byAge(chats) || `<div class="empty" role="presentation">No chats yet.</div>`}</div>` : "");
+      };
+      html = [...projects.filter((p) => p.key === mine), ...projects.filter((p) => p.key !== mine)]
+        .map((p) => group(p.key, p.name, live.filter((/** @type {any} */ c) => c.project === p.key), true)).join("") +
+        group("", "Other chats", live.filter((/** @type {any} */ c) => !c.project), false);
+    }
     if (archived.length) {
-      html += `<button class="fold" role="menuitem" tabindex="-1" data-fold="archived" aria-expanded="${archivedOpen}">Archived · ${archived.length}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>` +
+      html += `<button class="fold" role="menuitem" tabindex="-1" data-fold="archived" aria-expanded="${archivedOpen}">Archived · ${archived.length}${chev}</button>` +
         (archivedOpen ? archived.map(item).join("") : "");
     }
-    // In a project's chat the list is that project's chats; the Projects screen has every project and the rest.
-    const head = state.project ? `<div class="group project" role="presentation" title="${escape(state.project.path)}">${P_FOLDER}<span>${escape(state.project.name)}</span></div>` : "";
-    $("chat-menu").innerHTML = head + (html || `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">${state.project ? "No other chats in this project yet." : "No saved chats yet."}</div>`) +
-      `<div class="sep" role="separator"></div><button class="all-projects" role="menuitem" tabindex="-1" data-action="projects">${state.project ? "All projects and chats…" : "Projects…"}</button>`;
+    $("chat-menu").innerHTML = (html || `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No saved chats yet.</div>`) +
+      `<div class="sep" role="separator"></div><button class="all-projects" role="menuitem" tabindex="-1" data-action="projects">Projects…</button>`;
   }
+
+  /** The New chat menu (the arrow beside +): a chat in no project, or one in a project of yours. */
+  function renderNewMenu() {
+    const projects = /** @type {any[]} */ (state.projectList || []).filter((p) => !p.missing);
+    $("new-menu").innerHTML = `<button role="menuitem" tabindex="-1" data-action="new">New chat</button>` +
+      (projects.length ? `<div class="group" role="presentation">New chat in a project</div>` +
+        projects.map((p) => `<button role="menuitem" tabindex="-1" data-new-in="${escape(p.path)}" title="${escape(p.path)}">${P_FOLDER}<span>${escape(p.name)}</span></button>`).join("") : "") +
+      `<div class="sep" role="separator"></div><button role="menuitem" tabindex="-1" data-action="projectAdd">New project…</button>`;
+  }
+  $("new-menu").addEventListener("click", (event) => {
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-new-in]"));
+    if (!el) return;
+    closeMenus();
+    focusInput = true;
+    vscode.postMessage({ type: "projectChat", path: el.dataset.newIn });
+  });
 
   // ---- the right-click menu on a chat: pin, rename, fork, archive, delete ----
   const chatActions = $("chat-actions");
@@ -1825,7 +1859,7 @@
   $("btn-new").addEventListener("click", () => { vscode.postMessage({ type: "new" }); input.focus(); });
 
   /** Each menu and the button that opens it (its chevron turns while it's open). */
-  const OPENERS = { "chat-menu": "chat-title", "more-menu": "btn-more", "model-menu": "model-button" };
+  const OPENERS = { "chat-menu": "chat-title", "more-menu": "btn-more", "model-menu": "model-button", "new-menu": "btn-new-more" };
   /** A menu's items, in order. @param {Element} menu */
   function menuItems(menu) { return /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('[role^="menuitem"]')]); }
   /** Closes the menus; one that had focus gives it back to its button. */
@@ -1845,6 +1879,7 @@
     closeMenus();
     if (show) {
       if (id === "chat-menu") renderChatMenu();
+      if (id === "new-menu") renderNewMenu();
       menu.classList.remove("hidden");
       document.getElementById(OPENERS[/** @type {keyof typeof OPENERS} */ (id)])?.setAttribute("aria-expanded", "true");
       const items = menuItems(menu);
@@ -1865,6 +1900,7 @@
     toggle("chat-menu");
   });
   $("btn-more").addEventListener("click", (e) => { e.stopPropagation(); toggle("more-menu"); });
+  $("btn-new-more").addEventListener("click", (e) => { e.stopPropagation(); toggle("new-menu"); });
   $("model-button").addEventListener("click", (e) => { e.stopPropagation(); toggle("model-menu"); });
   for (const [menuId, openerId] of Object.entries(OPENERS)) {
     // the arrows open a menu from its button
@@ -1927,6 +1963,12 @@
       vscode.postMessage({ type: "setup", action: d.setup, ...extra });
     } else if (d.pickModel) pickModel(el);
     else if (d.open) { closeMenus(); vscode.postMessage({ type: "open", id: d.open }); }
+    else if (d.fold && d.fold.startsWith("p:")) {
+      const key = d.fold.slice(2);
+      menuFolds.set(key, el.getAttribute("aria-expanded") !== "true");
+      renderChatMenu();
+      /** @type {HTMLElement | null} */ ([...$("chat-menu").querySelectorAll("[data-fold]")].find((row) => /** @type {HTMLElement} */ (row).dataset.fold === d.fold) || null)?.focus();
+    }
     else if (d.fold === "archived") { archivedOpen = !archivedOpen; renderChatMenu(); /** @type {HTMLElement | null} */ ($("chat-menu").querySelector('[data-fold="archived"]'))?.focus(); }
     else if (d.model) { closeMenus(); vscode.postMessage({ type: "model", id: d.model }); }
     else if (d.level) vscode.postMessage({ type: "effort", level: d.level });

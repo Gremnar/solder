@@ -94,6 +94,7 @@ class SettingsScreen {
         ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
       orgDocs: policy.orgDocs(), docsLocked: policy.locked("docsFolders"), orgRules: policy.orgRules, policyError: policy.error,
+      version: String(this.context.extension?.packageJSON?.version ?? ""),
       skillsFolders: (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean),
       orgSkills: policy.orgSkills(), skillsLocked: policy.locked("skillsFolders"), skills: this.skills(), skillsOffered: MAX_SKILLS,
       skillsHome: this.hooks.skillsHome(),
