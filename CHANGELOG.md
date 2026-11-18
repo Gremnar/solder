@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.17 (2026-11-17)
 
 - **Paste in terminal.** A shell's code block in an answer (PowerShell, bash, cmd and the like) has **Paste in terminal** beside **Copy**. It puts the command into VS Code's terminal for you to check and run with Enter; Solder never runs it. Several lines go through VS Code's own paste, with its warning where the shell would run each line as it arrives, and your clipboard is put back.
 
