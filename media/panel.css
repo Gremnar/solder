@@ -330,12 +330,14 @@ pre { position: relative; margin: 0 0 10px; padding: 9px 12px; overflow: auto; w
   background: var(--code-bg); border: 1px solid var(--hairline); font-family: var(--vscode-editor-font-family); font-size: 0.9em; line-height: 1.5; }
 pre code { background: none; padding: 0; font-size: 1em; white-space: inherit; border: 0; }
 pre:has(> .copy) { padding-right: 4.2em; } /* wrapped lines never run under the Copy button */
-pre .copy { position: absolute; top: 5px; right: 5px; padding: 2px 8px; border-radius: var(--r-sm); font-family: var(--vscode-font-family); font-size: 0.82em;
+pre.shell:has(> .paste) { padding-top: 2.1em; } /* two buttons: the code starts below them */
+pre.shell .paste { right: 4.6em; } /* beside Copy (more specific, so it wins over the shared right: 5px) */
+pre .copy, pre .paste { position: absolute; top: 5px; right: 5px; padding: 2px 8px; border-radius: var(--r-sm); font-family: var(--vscode-font-family); font-size: 0.82em;
   opacity: 0; background: var(--vscode-editorWidget-background, var(--bg)); border: 1px solid var(--line);
   transition: opacity var(--t) ease, background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) ease; }
-pre:hover .copy, pre .copy:focus-visible, pre .copy.done { opacity: 1; }
-pre .copy:hover { background: var(--hover); }
-pre .copy:active { transform: scale(0.94); }
+pre:hover .copy, pre .copy:focus-visible, pre .copy.done, pre:hover .paste, pre .paste:focus-visible { opacity: 1; }
+pre .copy:hover, pre .paste:hover { background: var(--hover); }
+pre .copy:active, pre .paste:active { transform: scale(0.94); }
 pre .copy.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
 table { border-collapse: collapse; margin: 0 0 10px; font-size: 0.95em; display: block; overflow-x: auto; }
 th, td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }

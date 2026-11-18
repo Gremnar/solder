@@ -29,6 +29,9 @@
 
   const PATHLIKE = /^(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9]{1,8}(?::\d+)?$|^(?:[\w.-]+\/)+[\w.-]+(?::\d+)?$/;
 
+  /** Code block languages that are a shell's: their blocks get Paste in terminal. */
+  const SHELL_LANGS = new Set(["powershell", "ps", "ps1", "pwsh", "posh", "bash", "sh", "shell", "zsh", "console", "terminal", "cmd", "bat", "batch"]);
+
   /** Inline Markdown on one escaped line. @param {string} raw */
   function inline(raw) {
     const codes = [];
@@ -73,7 +76,10 @@
         i++;
         while (i < lines.length && !lines[i].trim().startsWith(close)) body.push(lines[i++]);
         i++;
-        out.push(`<pre><button class="copy">Copy</button><code>${escape(body.join("\n"))}</code></pre>`);
+        // A shell's code gets Paste in terminal too: into VS Code's terminal, for you to run (it never presses Enter).
+        const shell = SHELL_LANGS.has(fence[2].toLowerCase());
+        out.push(`<pre${shell ? ' class="shell"' : ""}>${shell ? `<button class="paste" title="Paste into the terminal, to run it yourself (Enter runs it)">Paste in terminal</button>` : ""}` +
+          `<button class="copy">Copy</button><code>${escape(body.join("\n"))}</code></pre>`);
         continue;
       }
       const heading = /^(#{1,4})\s+(.*)$/.exec(line);
@@ -1640,7 +1646,7 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -1694,6 +1700,10 @@
       event.preventDefault();
       const [file, line] = String(d.path).split(/:(\d+)$/);
       vscode.postMessage({ type: "openFile", path: file, line: line ? Number(line) : undefined });
+    } else if (el.matches("pre .paste")) {
+      const code = el.parentElement?.querySelector("code")?.textContent || "";
+      vscode.postMessage({ type: "pasteInTerminal", text: code });
+      announce("Pasted in the terminal");
     } else if (el.matches("pre .copy")) {
       const code = el.parentElement?.querySelector("code")?.textContent || "";
       navigator.clipboard.writeText(code).then(() => {

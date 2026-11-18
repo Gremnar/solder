@@ -212,6 +212,28 @@ class SolderPanel {
   }
 
   /**
+   * A shell code block's Paste in terminal: the code goes into VS Code's terminal for you to run. Solder never runs
+   * it: nothing presses Enter (trailing newlines are left off). One line is typed in; several go through VS Code's
+   * own terminal paste, which warns before a multi-line paste where the shell would run each line as it arrives. The
+   * clipboard that paste needs is put back as it was (when it held text).
+   * @param {string} text
+   */
+  async pasteInTerminal(text) {
+    const code = text.replace(/\s+$/, "");
+    if (!code || code.length > 100_000) return;
+    const terminal = vscode.window.activeTerminal ?? vscode.window.terminals[0] ?? vscode.window.createTerminal({ name: "Solder" });
+    terminal.show(false);
+    if (!code.includes("\n")) { terminal.sendText(code, false); return; }
+    const before = await Promise.resolve(vscode.env.clipboard.readText()).catch(() => "");
+    await vscode.env.clipboard.writeText(code);
+    try {
+      await vscode.commands.executeCommand("workbench.action.terminal.paste");
+    } finally {
+      if (before) setTimeout(() => { Promise.resolve(vscode.env.clipboard.writeText(before)).catch(() => {}); }, 800);
+    }
+  }
+
+  /**
    * A message of yours, from its bubble: Delete takes it out with its turn; Edit takes it and everything after it, and
    * puts what you typed back in the box. Files the turns changed stay as they are. It asks first when more than the
    * message and its own reply would go.
@@ -509,6 +531,7 @@ class SolderPanel {
         this.post();
         return;
       }
+      case "pasteInTerminal": return this.pasteInTerminal(String(message.text ?? ""));
       case "editMessage": case "deleteMessage": return this.changeMessage(message.type === "editMessage", Number(message.index));
       case "new":
         if (!this.engine.busy) {

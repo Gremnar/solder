@@ -70,3 +70,12 @@ test("a link's address keeps its underscores and stars: only its label is format
   assert.match(html, /<em>this<\/em>/);
   assert.doesNotThrow(() => markdown("stray \u00013\u0001 marker"));
 });
+
+test("a shell's code block gets Paste in terminal beside Copy; other code doesn't", () => {
+  const T = "```";
+  const shell = markdown(T + "powershell\nGet-ChildItem\n" + T);
+  assert.match(shell, /<pre class="shell"><button class="paste"[^>]*>Paste in terminal<\/button><button class="copy">Copy<\/button>/);
+  for (const lang of ["bash", "PS1", "cmd", "console"]) assert.match(markdown(T + lang + "\nx\n" + T), /class="paste"/, lang);
+  assert.doesNotMatch(markdown(T + "js\nlet a = 1;\n" + T), /class="paste"/);
+  assert.doesNotMatch(markdown(T + "\nplain\n" + T), /class="paste"/, "no language: no guess");
+});

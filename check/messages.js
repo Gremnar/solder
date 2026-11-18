@@ -82,6 +82,28 @@ async function main() {
     await panel.onMessage({ type: "editMessage", index: 0 });
     check("Edit on an earlier message says how many go with it, then takes them all", /The 2 messages after it, and their replies/.test(asked.at(-1)?.text || "") && saved().length === 0, [asked.at(-1), saved()]);
 
+    // ---- Paste in terminal: into a terminal, never run (no Enter), the clipboard put back
+    const typed = [];
+    const fakeTerminal = { name: "Solder", show() {}, sendText(text, run) { typed.push([text, run]); }, dispose() {} };
+    const pastes = [];
+    const restore = [
+      stub(own.window, "createTerminal", () => fakeTerminal),
+      stub(own.commands, "executeCommand", async (id, ...rest) => { if (id === "workbench.action.terminal.paste") { pastes.push(await own.env.clipboard.readText()); return; } return vscode.commands.executeCommand(id, ...rest); }),
+    ];
+    try {
+      if (!own.window.activeTerminal && !own.window.terminals.length) {
+        await panel.onMessage({ type: "pasteInTerminal", text: "Get-ChildItem -Recurse\n\n" });
+        check("one line is typed into the terminal without Enter, trailing newlines left off", JSON.stringify(typed) === JSON.stringify([["Get-ChildItem -Recurse", false]]), typed);
+        await own.env.clipboard.writeText("what you had copied");
+        await panel.onMessage({ type: "pasteInTerminal", text: "$a = 1\nWrite-Output $a\n" });
+        check("several lines go through VS Code's own terminal paste (its multi-line warning), still without Enter", JSON.stringify(pastes) === JSON.stringify(["$a = 1\nWrite-Output $a"]), pastes);
+        await sleep(1200);
+        check("... and your clipboard is put back", await own.env.clipboard.readText() === "what you had copied");
+      } else log("SKIP Paste in terminal: this window already has a terminal");
+    } finally {
+      for (const back of restore) back?.();
+    }
+
     // ---- what can't be changed
     fill();
     panel.chat.compaction = { through: 2, summary: "S" };
