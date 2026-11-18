@@ -88,3 +88,23 @@ test("a paste of more than 40 lines, or 4,000 characters, goes as a chip; a shor
   assert.equal(pasteAsChip(Array.from({ length: 41 }, (_, i) => "line " + i).join("\n")), true);
   assert.equal(pasteAsChip("x".repeat(4001)), true, "one very long line too");
 });
+
+test("a project's own text (its name, folder, rules, skills, chats) is escaped on the Projects screen: someone else's project can't put markup in the panel", () => {
+  const bad = '"><img src=x onerror=alert(1)>';
+  const chats = [{ id: bad, title: bad, updated: 0 }];
+  const list = panel.projectsHtml({ projects: [{ path: bad, name: bad, missing: false, here: true, chats }, { path: "gone" + bad, name: bad, missing: true, here: false, chats: [] }],
+    other: chats, found: [{ path: bad, name: bad }], page: null, skillForm: false, notice: bad, noticeKind: bad, current: "" });
+  const page = panel.projectsHtml({ projects: [], other: [], found: [], skillForm: true, notice: bad, noticeKind: "bad", current: "",
+    page: { path: bad, name: bad, here: true, ruleName: bad, skillsLocked: false, chats,
+      rules: [{ name: bad, text: bad + "\n\n<script>alert(1)</script>", cut: true }],
+      skills: [{ name: bad, when: bad, text: bad, cut: false, problem: "" }, { name: "b", when: "", text: "", cut: false, problem: bad }] } });
+  const none = panel.projectsHtml({ projects: [], other: [], found: [], skillForm: false, notice: "", noticeKind: "", current: "",
+    page: { path: bad, name: bad, here: true, ruleName: bad, skillsLocked: false, chats: [], rules: [], skills: [] } });
+  for (const html of [list, page, none]) {
+    assert.doesNotMatch(html, /<img|<script/);
+    assert.doesNotMatch(html, /="[^"]*"><img/, "no attribute is closed early");
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  }
+  assert.match(list, /Use it…/);
+  assert.match(page, /Only its first 40,000 characters are used/);
+});

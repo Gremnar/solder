@@ -302,20 +302,26 @@
 
   function render() {
     if (!state) return;
-    $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : state.chat.title;
+    // The Projects screen shows in the chat's place as Settings does (never over the setup or the settings).
+    const projects = !state.setup && !state.settings && state.projects ? state.projects : null;
+    $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : projects ? (projects.page ? projects.page.name : "Projects") : state.chat.title;
     // An open dropdown follows the chats (a pin or rename from its right-click menu), keeping its focus.
     if (!$("chat-menu").classList.contains("hidden")) keepFocus($("chat-menu"), renderChatMenu);
-    document.body.classList.toggle("in-setup", !!state.setup || !!state.settings);
-    document.body.classList.toggle("in-settings", !state.setup && !!state.settings);
-    // The title is the chats menu, except in Settings (it closes them) and the guided setup (it's only a title).
+    document.body.classList.toggle("in-setup", !!state.setup || !!state.settings || !!projects);
+    document.body.classList.toggle("in-settings", !state.setup && (!!state.settings || !!projects));
+    document.body.classList.toggle("in-projects", !!projects);
+    // The title is the chats menu, except in Settings and Projects (it closes them) and the guided setup (it's only a title).
     const title = $("chat-title");
-    title.title = state.setup ? "" : state.settings ? "Close the settings" : "Your chats";
-    if (state.setup || state.settings) title.removeAttribute("aria-haspopup"); else title.setAttribute("aria-haspopup", "menu");
+    title.title = state.setup ? "" : state.settings ? "Close the settings" : projects ? (projects.page ? "Back to all projects" : "Back to the chat") : "Your chats";
+    $("btn-done").title = projects ? "Back to the chat" : "Close the settings";
+    if (state.setup || state.settings || projects) title.removeAttribute("aria-haspopup"); else title.setAttribute("aria-haspopup", "menu");
     document.body.classList.toggle("busy", !!state.busy && !state.setup);
     renderReadOnly();
     // The setup and settings screens draw into the transcript's place: the chat is redrawn whole afterwards.
     if (state.setup) { shownParts = []; awayFromChat = true; renderSetup(); updateToBottom(); return; }
-    if (state.settings) { shownParts = []; awayFromChat = true; renderSettings(); updateToBottom(); return; }
+    if (state.settings) { shownParts = []; awayFromChat = true; shownProjects = ""; renderSettings(); updateToBottom(); return; }
+    if (projects) { shownParts = []; awayFromChat = true; settingsShape = ""; settingsTabShown = ""; renderProjects(); updateToBottom(); return; }
+    shownProjects = "";
     // Back from settings or setup: the chat was redrawn from nothing, so it opens at its end, not its start.
     if (awayFromChat) { awayFromChat = false; stickToBottom = true; }
     settingsShape = "";
@@ -1122,6 +1128,10 @@
       : away && !away.done ? "Solder is working in another chat…" : state.readOnly ? "Ask Solder about your code…" : "Ask Solder to read or change your code…";
     // chips
     const chips = [];
+    if (state.project) {
+      chips.push(`<button class="chip project" data-ppage="${escape(state.project.path)}" title="This chat is in the project ${escape(state.project.name)}: it follows the project's rules and can use its skills. Click to open the project.">` +
+        `${P_FOLDER}${escape(state.project.name)}</button>`);
+    }
     if (state.workspace) {
       chips.push(`<button class="chip folder" data-action="folder" title="The folder you're working in: relative paths and searches start here. Click to change.">` +
         `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>${escape(folderLabel(state.folder) || state.workspaceName || "Workspace")}</button>` +
@@ -1233,7 +1243,10 @@
       html += `<button class="fold" role="menuitem" tabindex="-1" data-fold="archived" aria-expanded="${archivedOpen}">Archived · ${archived.length}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>` +
         (archivedOpen ? archived.map(item).join("") : "");
     }
-    $("chat-menu").innerHTML = html || `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No saved chats yet.</div>`;
+    // In a project's chat the list is that project's chats; the Projects screen has every project and the rest.
+    const head = state.project ? `<div class="group project" role="presentation" title="${escape(state.project.path)}">${P_FOLDER}<span>${escape(state.project.name)}</span></div>` : "";
+    $("chat-menu").innerHTML = head + (html || `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">${state.project ? "No other chats in this project yet." : "No saved chats yet."}</div>`) +
+      `<div class="sep" role="separator"></div><button class="all-projects" role="menuitem" tabindex="-1" data-action="projects">${state.project ? "All projects and chats…" : "Projects…"}</button>`;
   }
 
   // ---- the right-click menu on a chat: pin, rename, fork, archive, delete ----
@@ -1299,6 +1312,186 @@
     // Rename and delete ask in VS Code itself; fork opens the copy: the dropdown closes for those.
     if (action === "rename" || action === "delete" || action === "fork") closeMenus();
     vscode.postMessage({ type: "chatAction", action, id });
+  });
+
+  // ------------------------------------------------------------------ projects --
+  // The Projects screen, in the transcript's place as Settings is: your projects with their chats, and one project's
+  // page, where its rules and skills can be read in full (they're edited in the editor, which is better at it).
+
+  /** Kept while the panel lives: groups folded shut, groups showing every chat, and skills opened on a page. */
+  const projectsShut = new Set();
+  const projectsAll = new Set();
+  const skillsOpen = new Set();
+  let shownProjects = "";
+  let projectsPage = "";
+  let projectFormShown = false;
+  let projectsCurrent = ""; // the chat that's open, marked in the lists
+  const SHOWN_CHATS = 5;
+  const P_FOLDER = `<svg class="pfolder" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5zM2.5 8.5 8 11.5l5.5-3"/></svg>`;
+  const P_CHEV = `<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg>`;
+
+  /** A group's chats: the newest few, and a link to the rest. @param {any[]} chats @param {string} key */
+  function projectChats(chats, key) {
+    if (!chats.length) return `<div class="hint pnone">No chats yet.</div>`;
+    const all = projectsAll.has(key);
+    const now = Date.now();
+    const rows = (all ? chats : chats.slice(0, SHOWN_CHATS)).map((/** @type {any} */ c) =>
+      `<li><button class="pchat${c.id === projectsCurrent ? " on" : ""}" data-open="${escape(c.id)}" title="${escape(c.title)}">` +
+      `<span class="ptitle">${escape(c.title)}</span><span class="when">${ago(now - c.updated)}</span></button></li>`).join("");
+    return `<ul class="pchats">${rows}</ul>` + (chats.length > SHOWN_CHATS
+      ? `<button class="link pmore" data-pmore="${escape(key)}">${all ? "Show fewer" : `Show ${chats.length - SHOWN_CHATS} older`}</button>` : "");
+  }
+
+  /** One group of the list: a project (or the chats in none), folded or open. */
+  function projectGroup(/** @type {string} */ name, /** @type {string} */ key, /** @type {any[]} */ chats, /** @type {string} */ buttons, /** @type {boolean} */ isProject) {
+    const shut = projectsShut.has(key);
+    return `<section class="pgroup${isProject ? "" : " other"}"><div class="pgroup-head">` +
+      `<button class="ptoggle" data-ptoggle="${escape(key)}" aria-expanded="${!shut}">${P_CHEV}${isProject ? P_FOLDER : ""}<span class="pname">${escape(name)}</span></button>` +
+      `<span class="count" title="${chats.length} chat${chats.length === 1 ? "" : "s"}">${chats.length}</span>${buttons}</div>` +
+      (shut ? "" : projectChats(chats, key)) + `</section>`;
+  }
+
+  /** @param {any} p */
+  function projectListHtml(p) {
+    projectsCurrent = p.current;
+    const notice = p.notice ? `<div class="settings-notice ${escape(p.noticeKind)}">${escape(p.notice)}</div>` : "";
+    const found = p.found.map((/** @type {any} */ f) => `<div class="pfound"><div><b>${escape(f.name)}</b> is a project in this window that isn't one of yours yet.` +
+      `<div class="grey ppath" title="${escape(f.path)}">${escape(f.path)}</div></div><button class="link-button" data-puse="${escape(f.path)}">Use it…</button></div>`).join("");
+    const groups = p.projects.map((/** @type {any} */ pr) => projectGroup(pr.name + (pr.missing ? " (folder not found)" : ""), pr.path, pr.chats,
+      (pr.missing ? `<button class="link-button" data-premove="${escape(pr.path)}">Remove</button>`
+        : `<button class="icon" data-pchat="${escape(pr.path)}" title="New chat in this project" aria-label="New chat in ${escape(pr.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>` +
+          `<button class="icon" data-ppage="${escape(pr.path)}" title="Open the project: its rules and skills" aria-label="Open the project ${escape(pr.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>`), true)).join("");
+    const other = p.other.length || !p.projects.length ? projectGroup("Other chats", "", p.other, "", false) : "";
+    return `<div class="setup settings projects"><div class="actions-row ptop"><button class="link-button primary" data-padd>New project…</button></div>` +
+      (p.projects.length ? "" : `<div class="hint">A project is a folder you work in. Its rules and its own skills are kept in the folder (in a <code>.solder</code> folder beside your files), ` +
+        `so the project can be shared by copying the folder. Its chats are grouped here, and work in that folder.</div>`) +
+      notice + found + groups + other + `</div>`;
+  }
+
+  /** One project's page: everything in it, to read; a few things to change. @param {any} p */
+  function projectPageHtml(p) {
+    projectsCurrent = p.current;
+    const page = p.page;
+    const at = escape(page.path);
+    const notice = `<div id="projects-notice" class="settings-notice ${escape(p.noticeKind)}" role="status">${escape(p.notice)}</div>`;
+    const rules = page.rules.length
+      ? page.rules.map((/** @type {any} */ rule) => `<div class="pfile"><div class="pfile-head"><span class="pfile-name">${escape(rule.name)}</span><span class="grow"></span>` +
+          `<button class="link" data-prules="${at}">Edit</button></div><div class="answer pfile-text">${markdown(rule.text)}</div>` +
+          (rule.cut ? `<div class="hint warn">Only its first 40,000 characters are used.</div>` : "") + `</div>`).join("")
+      : `<div class="hint">This project has no ${escape(page.ruleName)} yet. It's a plain text file in the project's folder saying what the model should always know here ` +
+        `(what the project is, the languages and versions, what not to touch).</div><div class="actions-row"><button class="link-button" data-prules="${at}">Create ${escape(page.ruleName)}</button></div>`;
+    const skills = page.skills.map((/** @type {any} */ skill) => {
+      const key = page.path + "|" + skill.name;
+      return `<details class="pskill" data-pskill="${escape(skill.name)}"${skillsOpen.has(key) ? " open" : ""}><summary><span class="pskill-name">${escape(skill.name)}</span>` +
+        `<span class="pskill-when${skill.problem ? " warn" : ""}">${escape(skill.problem || skill.when)}</span>${P_CHEV}</summary>` +
+        `<div class="answer pfile-text">${skill.text ? markdown(skill.text) : `<p class="grey">No instructions yet.</p>`}</div>` +
+        (skill.cut ? `<div class="hint warn">Only its first 20,000 characters are used.</div>` : "") +
+        `<div class="actions-row"><button class="link" data-pskill-open="${escape(skill.name)}">Edit</button> <button class="link" data-pskill-delete="${escape(skill.name)}">Delete</button></div></details>`;
+    }).join("");
+    const skillForm = page.skillsLocked ? `<div class="hint">Your organization sets the skills, so a project's own aren't used.</div>`
+      : p.skillForm
+        ? `<div class="skill-form"><label class="field-label" for="pf-skillName"><span>Name</span></label>` +
+          `<input class="field" id="pf-skillName" spellcheck="false" placeholder="restore steps" maxlength="60">` +
+          `<label class="field-label" for="pf-skillWhen"><span>When the model should use it</span></label>` +
+          `<input class="field" id="pf-skillWhen" placeholder="Restoring a copy of the database.">` +
+          `<div class="hint">It's saved in this project's folder, and only this project's chats are offered it. After Create, write the instructions in the editor.</div>` + notice +
+          `<div class="actions-row"><button class="link-button primary" data-pskill-create>Create</button> <button class="link-button" data-pskill-form="">Cancel</button></div></div>`
+        : `<div class="actions-row"><button class="link-button" data-pskill-form="1">New skill…</button></div>`;
+    return `<div class="setup settings projects ppage"><button class="link pback" data-pback>‹ All projects</button>` +
+      section("", `<label class="field-label" for="pf-name"><span>Name</span></label><input class="field" id="pf-name" data-pname="${at}" maxlength="60" value="${escape(page.name)}">` +
+        `<div class="hint ppath" title="${at}">${at} · <button class="link" data-preveal="${at}">Show in file explorer</button></div>` + (p.skillForm ? "" : notice) +
+        `<div class="actions-row"><button class="link-button primary" data-pchat="${at}">New chat in this project</button></div>`) +
+      section("Rules", rules) +
+      section("Skills", (skills ? `<div class="pskills">${skills}</div>` : `<div class="hint">No skills of its own yet. A project's skill is instructions for a kind of task here; the model reads it only when a task needs it.</div>`) + skillForm) +
+      section("Chats", projectChats(page.chats, page.path)) +
+      section("Sharing", `<div class="hint">Everything above is in the project's own folder: its rules file, and the <code>.solder</code> folder with its name and skills. ` +
+        `Copy or zip the folder (or just those two) and someone else can use the project as it is. Chats aren't in the folder: they stay on this PC.</div>` +
+        `<div class="actions-row"><button class="link-button" data-premove="${at}">Remove from my projects</button></div>`) + `</div>`;
+  }
+
+  function renderProjects() {
+    const p = state.projects;
+    const html = p.page ? projectPageHtml(p) : projectListHtml(p);
+    const at = p.page ? p.page.path : "";
+    const there = !!transcript.querySelector(".projects");
+    if (html === shownProjects && there) return;
+    const moved = !there || at !== projectsPage;
+    // The name being typed isn't thrown away by a redraw.
+    const typing = /** @type {HTMLInputElement | null} */ (document.activeElement && /** @type {HTMLElement} */ (document.activeElement).id === "pf-name" ? document.activeElement : null);
+    const typed = typing ? typing.value : null;
+    const form = { name: /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillName"))?.value, when: /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillWhen"))?.value };
+    shownProjects = html;
+    projectsPage = at;
+    const top = transcript.scrollTop;
+    keepFocus(transcript, () => { transcript.innerHTML = html; });
+    transcript.scrollTop = moved ? 0 : top;
+    const name = /** @type {HTMLInputElement | null} */ (document.getElementById("pf-name"));
+    if (name && typed !== null && !moved) name.value = typed;
+    const formName = /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillName"));
+    const formWhen = /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillWhen"));
+    if (formName && form.name !== undefined) formName.value = form.name;
+    if (formWhen && form.when !== undefined) formWhen.value = form.when;
+    if (formName && !projectFormShown) formName.focus();
+    projectFormShown = !!formName;
+  }
+
+  /** The new skill form on a project's page. */
+  function createProjectSkill() {
+    const page = state?.projects?.page;
+    if (!page) return;
+    vscode.postMessage({ type: "projectSkillNew", path: page.path, name: /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillName"))?.value ?? "",
+      when: /** @type {HTMLInputElement | null} */ (document.getElementById("pf-skillWhen"))?.value ?? "" });
+  }
+
+  transcript.addEventListener("click", (event) => {
+    if (!state?.projects) return;
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest(
+      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete]"));
+    if (!el) return;
+    const d = el.dataset;
+    const page = state.projects.page?.path || "";
+    const fold = (/** @type {Set<string>} */ set, /** @type {string} */ key) => { if (set.has(key)) set.delete(key); else set.add(key); shownProjects = ""; renderProjects(); };
+    if (d.padd !== undefined) vscode.postMessage({ type: "projectAdd" });
+    else if (d.puse !== undefined) vscode.postMessage({ type: "projectAdd", path: d.puse });
+    else if (d.ptoggle !== undefined) fold(projectsShut, d.ptoggle);
+    else if (d.pmore !== undefined) fold(projectsAll, d.pmore);
+    else if (d.pchat !== undefined) { focusInput = true; vscode.postMessage({ type: "projectChat", path: d.pchat }); }
+    else if (d.ppage !== undefined) vscode.postMessage({ type: "projects", path: d.ppage });
+    else if (d.pback !== undefined) vscode.postMessage({ type: "projects" });
+    else if (d.prules !== undefined) vscode.postMessage({ type: "projectRules", path: d.prules });
+    else if (d.preveal !== undefined) vscode.postMessage({ type: "projectReveal", path: d.preveal });
+    else if (d.premove !== undefined) vscode.postMessage({ type: "projectRemove", path: d.premove });
+    else if (d.pskillForm !== undefined) vscode.postMessage({ type: "projectSkillForm", open: d.pskillForm === "1" });
+    else if (d.pskillCreate !== undefined) createProjectSkill();
+    else if (d.pskillOpen !== undefined) vscode.postMessage({ type: "projectSkillOpen", path: page, name: d.pskillOpen });
+    else if (d.pskillDelete !== undefined) vscode.postMessage({ type: "projectSkillDelete", path: page, name: d.pskillDelete });
+  });
+  // The project chip under the box opens the project's page.
+  $("chips").addEventListener("click", (event) => {
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-ppage]"));
+    if (el) vscode.postMessage({ type: "projects", path: el.dataset.ppage });
+  });
+  // A skill opened to read stays open when the page is redrawn.
+  transcript.addEventListener("toggle", (event) => {
+    const el = /** @type {HTMLDetailsElement} */ (event.target);
+    const page = state?.projects?.page?.path;
+    if (!page || !el.dataset?.pskill) return;
+    const key = page + "|" + el.dataset.pskill;
+    if (el.open) skillsOpen.add(key); else skillsOpen.delete(key);
+  }, true);
+  // The project's name saves when you leave the field (or press Enter); Enter and Escape work the new skill form.
+  transcript.addEventListener("change", (event) => {
+    const el = /** @type {HTMLInputElement} */ (event.target);
+    if (state?.projects && el.dataset?.pname !== undefined && el.value.trim() !== state.projects.page?.name) vscode.postMessage({ type: "projectRename", path: el.dataset.pname, name: el.value });
+  });
+  transcript.addEventListener("keydown", (event) => {
+    const el = /** @type {HTMLInputElement} */ (event.target);
+    if (!state?.projects || el.tagName !== "INPUT") return;
+    if (el.id === "pf-name" && event.key === "Enter") { event.preventDefault(); el.blur(); }
+    if (el.id === "pf-skillName" || el.id === "pf-skillWhen") {
+      if (event.key === "Enter") { event.preventDefault(); createProjectSkill(); }
+      if (event.key === "Escape") { event.preventDefault(); vscode.postMessage({ type: "projectSkillForm", open: false }); }
+    }
   });
 
   /** @param {number} ms */
@@ -1663,6 +1856,12 @@
     // In Settings the title is "Settings": clicking it closes them (as Done does). In the guided setup it does nothing.
     if (state?.settings && !state.setup) { focusInput = true; vscode.postMessage({ type: "settingsScreen", action: "close" }); return; }
     if (state?.setup) return;
+    // In Projects it goes back: from a project's page to the list, from the list to the chat.
+    if (state?.projects) {
+      if (state.projects.page) vscode.postMessage({ type: "projects" });
+      else { focusInput = true; vscode.postMessage({ type: "projectsClose" }); }
+      return;
+    }
     toggle("chat-menu");
   });
   $("btn-more").addEventListener("click", (e) => { e.stopPropagation(); toggle("more-menu"); });
@@ -1711,6 +1910,7 @@
     else if (d.sact) {
       if (el.hasAttribute("disabled")) return;
       if (d.sact === "close") focusInput = true;
+      if (d.sact === "close" && state.projects && !state.settings) { vscode.postMessage({ type: "projectsClose" }); return; }
       if (d.sact === "key") {
         const key = /** @type {HTMLInputElement | null} */ (document.getElementById("settings-key"))?.value ?? "";
         if (key.trim()) vscode.postMessage({ type: "settingsScreen", action: "key", key });
@@ -1766,5 +1966,5 @@
   autosize();
   vscode.postMessage({ type: "ready" });
   // @ts-ignore: for the browser preview harness
-  window.__solder = { markdown, pasteAsChip };
+  window.__solder = { markdown, pasteAsChip, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
 })();

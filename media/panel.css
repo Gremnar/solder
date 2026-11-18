@@ -706,3 +706,62 @@ body.in-setup #btn-settings { display: none; }
 .settings .more-settings { margin-top: 12px; }
 .settings .more-settings > summary { cursor: pointer; color: var(--muted); font-size: 0.9em; }
 @media (max-width: 300px) { .settings .kinds { grid-template-columns: 1fr; } }
+/* Projects: your projects and their chats, and one project's page (its rules and skills, to read) */
+body.in-setup #btn-projects { display: none; }
+body.in-projects #transcript { padding-top: 4px; }
+.pfolder { flex: none; width: 13px; height: 13px; color: var(--link); }
+.chip.project { color: var(--fg); }
+.menu .group.project { display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 0.88em; color: var(--fg); }
+.menu .group.project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu button.all-projects { color: var(--muted); }
+.projects .ptop { margin: 0 0 12px; }
+.projects .pgroup { margin: 0 0 4px; }
+.projects .pgroup.other { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.projects .pgroup-head { display: flex; align-items: center; gap: 2px; min-height: 28px; }
+.projects .ptoggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 2px; border-radius: var(--r-sm); text-align: left; font-weight: 600; }
+.projects .ptoggle:hover { background: var(--hover); }
+.projects .ptoggle .chev { transform: rotate(-90deg); }
+.projects .ptoggle[aria-expanded="true"] .chev { transform: none; }
+.projects .pgroup.other .pname { font-size: 0.78em; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.projects .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects .pgroup-head .count { flex: none; margin: 0 4px; color: var(--muted); font-size: 0.82em; font-variant-numeric: tabular-nums; }
+.projects .pchats { list-style: none; margin: 0 0 2px; padding: 0 0 0 20px; }
+.projects .pchat { display: flex; width: 100%; gap: 8px; align-items: baseline; padding: 4px 8px; border-radius: var(--r-sm); text-align: left; }
+.projects .pchat:hover { background: var(--hover); }
+.projects .pchat.on { background: var(--press); font-weight: 500; }
+.projects .ptitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects .when { flex: none; color: var(--muted); font-size: 0.85em; font-variant-numeric: tabular-nums; }
+.projects .pmore { margin: 2px 0 6px 28px; font-size: 0.88em; }
+.projects .pnone { margin: 0 0 6px 28px; }
+.projects .pfound { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); font-size: 0.92em; }
+.projects .pfound > div { flex: 1; min-width: 0; }
+.projects .pfound .link-button { flex: none; }
+.projects .ppath { overflow-wrap: anywhere; }
+.projects .grey { color: var(--muted); font-size: 0.88em; }
+.projects .pback { display: inline-block; margin: 0 0 10px; text-decoration: none; }
+.projects .pback:hover { text-decoration: underline; }
+.projects.ppage > .settings-section:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.projects .settings-section .pchats { padding-left: 0; }
+.projects .settings-section .pmore, .projects .settings-section .pnone { margin-left: 0; }
+.projects .pfile { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.projects .pfile + .pfile { margin-top: 8px; }
+.projects .pfile-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--hairline); background: var(--raised); font-size: 0.88em; }
+.projects .pfile-name { font-family: var(--vscode-editor-font-family, monospace); }
+.projects .grow { flex: 1; }
+.projects .pfile-text { margin: 0; padding: 10px 12px; max-height: 420px; overflow: auto; font-size: 0.95em; }
+.projects .pfile-text::before { content: none; }
+.projects .pskills { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.projects .pskill + .pskill { border-top: 1px solid var(--hairline); }
+.projects .pskill > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 7px 12px; cursor: pointer; list-style: none; }
+.projects .pskill > summary::-webkit-details-marker { display: none; }
+.projects .pskill > summary:hover { background: var(--hover); }
+.projects .pskill > summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.projects .pskill[open] > summary { background: var(--raised); border-bottom: 1px solid var(--hairline); }
+.projects .pskill-name { font-weight: 600; }
+.projects .pskill-when { flex: 1; min-width: 12ch; color: var(--muted); font-size: 0.9em; }
+.projects .pskill .actions-row { margin: 0; padding: 0 12px 10px; display: flex; gap: 12px; }
+.projects > .hint { margin: 0 0 12px; }
+.projects .pskill > summary { flex-wrap: nowrap; }
+.projects .pskill > summary .chev { align-self: center; transform: rotate(-90deg); }
+.projects .pskill[open] > summary .chev { transform: none; }
+.projects .pskill-when.warn { color: var(--warn); }

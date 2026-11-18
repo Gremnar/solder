@@ -118,6 +118,12 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
   - **Stop** ends the reply. **Resume** continues after a failure from the last finished step.
 - **Status bar:** this chat's tokens and the allowance left (`2.1M left · resets 4h`). The tooltip breaks it down per answer.
 - **Chats:** a list per workspace (new, rename, delete), saved as JSON in `workspaceStorage`.
+- **Projects** (`src/projects.js`, decided 2026-11-18). A project is a folder; chats are grouped by it and share its folder, rules and skills.
+  - **The folder is the only source of truth.** `.solder\project.json` holds the name, `.solder\skills\*.md` the project's own skills, and its rules are the instruction files at its root (`AGENTS.md`). Nothing about a project's contents is kept anywhere else, so copying or zipping the folder shares the whole project. Paths inside are relative, so it works wherever it's put.
+  - **Solder keeps only a list of project folders** (`projects.json` in global storage), and each chat remembers its project's folder. Chats stay in the profile: they aren't the project's to share.
+  - **Being on the list is the yes.** A folder that's already a project (someone else set it up) is offered, never just used: its rules and skills are instructions the model follows, so there's a prompt first, and nothing of it reaches a chat before that.
+  - **A project file can't change settings.** `project.json` is read for a name and nothing else. Approvals, read-only mode, the endpoint and the policy are never a project's to set. When policy sets the skills and users can't add their own, a project's skills aren't offered.
+  - **Its own screen.** The Projects screen (in the chat's place, as Settings is) lists projects with their chats, and a project's page shows its rules and skills in full. They're read there and edited in the editor, which is better at it; the page only renames the project and makes or deletes files.
 - **Theme:** VS Code's own CSS variables (`--vscode-*`), so it matches every theme. No CDN, no web fonts.
 
 ## Settings

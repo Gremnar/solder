@@ -91,6 +91,8 @@ class WorkspaceTools {
   /** @param {vscode.ExtensionContext} context */
   constructor(context) {
     this.context = context;
+    /** The skills folder of the project the chat being worked in belongs to ("" for none): its skills are offered there. */
+    this.projectSkills = "";
     /** @type {Set<string>} files you attached by path (lower case): read without asking */
     this.attached = new Set();
     /** @type {string | null | undefined} */
@@ -344,7 +346,8 @@ class WorkspaceTools {
 
   /** The skills folders from the settings (or the list given) that exist, as full paths. @param {unknown} [given] */
   skillsFolders(given) {
-    const raw = given ?? solderSettings().get("skillsFolders", []);
+    // Your own and your organization's, then the project's (when the chat is in one): a given list is just itself.
+    const raw = given ?? [...(solderSettings().get("skillsFolders", []) || []), ...(this.projectSkills ? [this.projectSkills] : [])];
     /** @type {string[]} */
     const out = [];
     for (const item of Array.isArray(raw) ? raw : []) {
@@ -357,9 +360,12 @@ class WorkspaceTools {
     return out;
   }
 
-  /** The skills the model is told about: in the skills folders, the organisation's first. */
-  skills() {
-    return skills.listSkills(this.skillsFolders());
+  /**
+   * The skills the model is told about: in the skills folders, the organisation's first, the project's last.
+   * @param {boolean} [withProject] false for your own and your organization's alone (Settings lists those)
+   */
+  skills(withProject = true) {
+    return skills.listSkills(withProject ? this.skillsFolders() : this.skillsFolders(solderSettings().get("skillsFolders", []) || []));
   }
 
   /** The first read in a folder with its own AGENTS.md brings that file along (the nearest one wins). */

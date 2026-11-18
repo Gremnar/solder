@@ -34,18 +34,26 @@ class ChatStore {
     this.summaries = new Map();
   }
 
-  /** This window's chats, newest first: {id, title, updated, pinned, archived}. */
+  /** This window's chats, newest first: {id, title, updated, pinned, archived, project}. */
   list() {
     const homes = new Set(this.homes().map(homeKey));
     if (!homes.size) homes.add(""); // no folder open: the chats started with none
+    return this.all().filter((summary) => homes.has(homeKey(summary.home)))
+      .map(({ id, title, updated, pinned, archived, project }) => ({ id, title, updated, pinned, archived, project }));
+  }
+
+  /**
+   * Every chat there is, newest first, whichever window it was started in: a project's chats are found by the
+   * project they name, not by the window. {id, title, updated, pinned, archived, home, project}
+   */
+  all() {
     const found = [];
     for (const name of fs.readdirSync(this.folder)) {
       if (!name.endsWith(".json")) continue;
       const summary = this.summary(name);
-      if (summary && homes.has(homeKey(summary.home))) found.push(summary);
+      if (summary) found.push(summary);
     }
-    return found.sort((a, b) => b.updated - a.updated)
-      .map(({ id, title, updated, pinned, archived }) => ({ id, title, updated, pinned, archived }));
+    return found.sort((a, b) => b.updated - a.updated);
   }
 
   /** A file's list entry, read again only when the file changed (the chats of every workspace live here). @param {string} name */
@@ -57,7 +65,7 @@ class ChatStore {
     if (known && known.stamp === stamp) return known.summary;
     const chat = this.cache.get(name.slice(0, -5)) ?? this.read(name.slice(0, -5));
     const summary = chat ? { id: chat.id, title: chat.title, updated: chat.updated, pinned: !!chat.pinned, archived: !!chat.archived,
-      home: chat.home ?? "" } : null;
+      home: chat.home ?? "", project: typeof chat.project === "string" ? chat.project : "" } : null;
     this.summaries.set(name, { stamp, summary });
     return summary;
   }

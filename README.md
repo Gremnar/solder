@@ -139,6 +139,21 @@ A skill is your instructions for a kind of task: how you write PowerShell script
 - **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even when older results are cut. Reading your skills folders never needs your approval; changing a skill does. A file with no "When to use" line isn't offered to the model (so a README in the same folder isn't mistaken for a skill), and Settings says so.
 - **For organizations:** the `SkillsFolders` policy gives everyone the same skills, from a share if you like; `AllowUserSkills` lets users add folders of their own beside them. See the [admin guide](docs/POLICY.md).
 
+## Projects
+
+A project is a folder you work in, with its own rules, skills and chats. Everything that makes it a project is kept in the folder itself, so it can be shared by copying the folder.
+
+- **Making one:** the **Projects** button at the top of the panel (or **Projects…** at the end of the chats list) opens the Projects screen. **New project…** asks for the folder. Solder adds a small `.solder` folder to it, holding the project's name and its skills.
+- **Its chats:** the Projects screen lists each project with its chats under it; **+** starts a new chat in one. A project's chat works in the project's folder, follows its rules and is offered its skills. The chats list at the top of the panel then shows that project's chats; chats in no project are under **Other chats**.
+- **Its page:** the arrow beside a project (or the project chip above the box) opens its page, where you can read all of it:
+  - **Rules:** the project's `AGENTS.md`, shown in full. **Edit** opens it in the editor; **Create AGENTS.md** makes one if it has none.
+  - **Skills:** the project's own skills, in `.solder\skills`. Click one to read it; **Edit**, **Delete** and **New skill…** work as in Settings. Only this project's chats are offered them, beside your own skills.
+  - **Name:** change it there. The folder isn't renamed.
+- **Sharing one:** copy or zip the folder (or just `AGENTS.md` and `.solder`). Whoever gets it opens the folder in VS Code, and the Projects screen offers it with **Use it…**. Chats aren't in the folder: they stay on your PC.
+- **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode.
+- **Removing one:** **Remove from my projects** on its page takes it off your list. The folder, its rules and its skills stay as they are, and its chats move to **Other chats**.
+- **For organizations:** when the `SkillsFolders` policy sets the skills and users can't add their own, a project's skills aren't used either.
+
 ## Two kinds of model (optional)
 
 Some gateways offer two kinds of model: **Tool models**, which take a system prompt and native tool calls (what Solder uses by default), and **Assist models**, which take plain text only and often keep the conversation on their side. Solder can use both.
