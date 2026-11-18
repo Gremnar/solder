@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.19 (2026-11-18)
 
 - **Projects.** A project is a folder you work in, with its own rules, skills and chats.
   - **Starting a chat in one:** the arrow beside **+** lists your projects (**+** itself starts a chat in no project).
