@@ -218,8 +218,11 @@ or give your answer.)",
     ? "That was the last reply with tool calls allowed for this message, so answer now: say what's done and what's still left."
     : `${left} more ${left === 1 ? "reply" : "replies"} with tool calls left for this message: finish up, then say what's done.`,
   steer: (/** @type {string} */ text) => `Also, a message from the user while you were working:\n\n${text}`,
-  argumentLeftOut: (/** @type {number} */ lines) =>
-    `[Solder: ${lines.toLocaleString("en-US")} lines, left out of this copy of the chat to save space. They're in the file; read it if you need them.]`,
+  /** After the result of an earlier task's write or edit whose long text isn't sent again (never inside the call itself). */
+  argumentsLeftOut: "(Solder left this call's long text out of this copy of the chat to save space. Read the file for what's there now.)",
+  /** A change whose text is the note Solder used to put in old calls: refused, so it can't reach a file. */
+  standInArgument: "Not run: that text is a note Solder put in place of text it left out of the chat, not the text itself. \
+Send the call again with the real text written out in full.",
   resultCut: (/** @type {number} */ chars) =>
     `…(${chars.toLocaleString("en-US")} characters of this output are left out here; narrow the call down to see them)…`,
   stub: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}) and you saw the full output then; \
@@ -269,8 +272,8 @@ strings, or uses it missed, such as through require):`,
   notReported: (/** @type {string} */ file) => `Nothing was reported for ${file}, even opened in an editor, and nothing in VS Code has reported problems in this kind of file yet: it may have no language support that checks it. Its problems are unknown, not necessarily none. Tell the user it may not have been checked.`,
   pastEnd: (/** @type {string} */ file, /** @type {number} */ lines) => `${file} has only ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}.`,
   sameText: "old_text and new_text are the same, so there's nothing to change.",
-  changedOnDisk: (/** @type {string} */ file) => `${file} changed on disk a moment ago and VS Code hasn't caught up yet, so nothing \
-was changed. Read it again, then make the change.`,
+  changedOnDisk: (/** @type {string} */ file) => `${file} is different on disk from the copy VS Code has open, and VS Code \
+didn't reload it, so nothing was changed. Trying again won't help: ask the user to close the file's tab and open it again.`,
   notSaved: (/** @type {string} */ file) => `VS Code couldn't save ${file} (it may be read-only, or have changed on disk), so the \
 change was undone in the editor too. Read it again before trying anything else.`,
   notWritable: (/** @type {string} */ file) => `${file} couldn't be written: it may be read-only, or locked by another program.`,
@@ -549,6 +552,7 @@ request, or give me your answer.)"],
   ["Tell the user it wasn't checked, so they can open it to have it checked.", "Tell me it wasn't checked, so I can open it to have it checked."],
   ["Tell the user it may not have been checked.", "Tell me it may not have been checked."],
   ["The user can add them", "I can add them"],
+  ["ask the user to close the file's tab", "ask me to close the file's tab"],
   ["the user can turn on changes with Enable tools at the top of Solder's panel.", "I can turn on changes."],
   ["which asks the user first", "which asks me first"],
   ["Ask the user to save it first.", "Ask me to save it first."],

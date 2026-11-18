@@ -226,7 +226,8 @@ test("a diff's run of signature lines is one line; ordinary comments are left al
 });
 
 test("an edit isn't refused as 'changed on disk' for mixed line endings, a BOM or UTF-16; a real change still is", () => {
-  const { stale } = require("../src/tools.js");
+  const { diskTextIfNewer } = require("../src/tools.js");
+  const stale = (/** @type {any} */ document, /** @type {any} */ file) => { if (diskTextIfNewer(document, file.full) !== null) throw new Error("changed on disk a moment ago"); };
   const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-stale-"));
   try {
     const file = (/** @type {string} */ name, /** @type {Buffer | string} */ data) => {

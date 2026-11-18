@@ -193,6 +193,7 @@ The rules behind it:
 - **Scripts in AppData may be blocked** by policy. Never write a helper script there and run it.
 - **Output encoding:** ask PowerShell for UTF-8 output (`[Console]::OutputEncoding` can't be set in CLM). Read output as bytes and decode leniently.
 - **Proxies:** inside VS Code, use `node:http`/`node:https`, which the extension host routes through VS Code's proxy settings. Test the gateway from inside the extension host on day one (`Solder: Check connection`), not from a terminal.
+- **Network drives:** VS Code's file watcher often never hears of a change made outside it on a mapped or network drive, so its open copy of a file stays behind the disk indefinitely (a script signed again after an edit, say). Don't refuse the edit and tell the model to read again: the read comes from the same stale copy. Read the disk's text for reads, and before a change make VS Code reload (writing the file over itself, same bytes, through a WorkspaceEdit `createFile` with `overwrite` reloads its copy, with or without a tab).
 - **Destructive commands** never run automatically, even with "always allow". Alloy keeps a destructive-command check (Remove-Item -Recurse, Format-, git reset --hard, and so on) that always asks.
 
 ---
@@ -204,3 +205,4 @@ The rules behind it:
 - **Rewriting old turns every step.** It breaks any server-side session or prefix cache. Rewrite in batches, or not at all.
 - **Supporting formats that can't be made exactly reliable.** If it can't be made extremely reliable, don't support it.
 - **Retrying everything.** With stateless billing, a blind retry loop multiplies the cost of a flaky hour.
+- **A stand-in inside the model's own turns.** To save tokens, an earlier call's long arguments were sent as a one-line note ("[… lines, left out of this copy…]"). The model reads its earlier calls as examples of how it writes calls: it wrote that note as the text of new edits, and one went into a user's file. Leave long arguments out whole (a call copied from that lacks a required argument, so it's refused before it runs) and say so in the call's *result*, which the model reads as the program's words. Refuse the old note as an edit's text all the same.

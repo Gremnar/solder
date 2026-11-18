@@ -268,6 +268,13 @@ class WorkspaceTools {
       } catch {
         throw new ToolError(RESULTS.notText(file.shown));
       }
+      // VS Code's copy can be behind the disk without knowing (a network drive's changes often don't reach its
+      // watcher): then what's read is the disk's, with nothing written and nothing reloaded.
+      const fresh = diskTextIfNewer(/** @type {any} */ (document), file.full);
+      if (fresh !== null) {
+        const all = fresh.split(/\r\n|\r|\n/);
+        document = { lineCount: all.length, lineAt: (index) => ({ text: all[index] }), getText: () => fresh };
+      }
     }
     const total = document.lineCount;
     if (args.start_line > total) return { output: RESULTS.pastEnd(file.shown, total), summary: `Read ${file.shown} · past the end` };
@@ -976,7 +983,7 @@ class WorkspaceTools {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
     const document = await vscode.workspace.openTextDocument(file.uri);
-    stale(document, file);
+    await freshen(document, file);
     const text = document.getText();
     const eol = document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
     const old = toEol(String(args.old_text), eol);
@@ -1039,7 +1046,7 @@ class WorkspaceTools {
     /** @type {Buffer | null} what went to disk, for a file that wasn't open */
     let written = null;
     if (open) {
-      stale(open, file);
+      await freshen(open, file);
       const edit = new vscode.WorkspaceEdit();
       edit.replace(file.uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), toEol(content, open.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n"));
       if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
@@ -1574,18 +1581,49 @@ function parseNumstat(text) {
 }
 
 /**
- * The editor's copy of a file it hasn't changed is the disk's; if the disk changed a moment ago and VS Code
- * hasn't caught up, editing that copy would overwrite the change. Compared as text, the way Undo's check is:
- * VS Code evens out mixed line endings when it opens a file (a script signed after it was saved with LF has
- * CRLF in its signature), and drops the BOM, so a byte-for-byte comparison never matched and every edit was
- * refused. @param {{isDirty: boolean, getText: () => string}} document @param {any} file
+ * The disk's text, when VS Code's copy of a file is unchanged by you and differs from it; else null (the same, or you
+ * have unsaved changes, or it isn't text we can compare: another encoding, where VS Code is trusted). Compared as text,
+ * the way Undo's check is: VS Code evens out mixed line endings when it opens a file (a script signed after it was
+ * saved with LF has CRLF in its signature), and drops the BOM, so bytes never match.
+ * @param {{isDirty: boolean, getText: () => string}} document @param {string} full @returns {string | null}
  */
-function stale(document, file) {
-  if (document.isDirty) return;
+function diskTextIfNewer(document, full) {
+  if (document.isDirty) return null;
   let disk;
-  try { disk = decodeText(fs.readFileSync(file.full)); } catch { return; }
-  if (disk === null || disk.includes("\uFFFD")) return; // not text we can compare (another encoding): trust VS Code
-  if (hash(disk) !== hash(document.getText())) throw new ToolError(RESULTS.changedOnDisk(file.shown));
+  try { disk = decodeText(fs.readFileSync(full)); } catch { return null; }
+  if (disk === null || disk.includes("\uFFFD")) return null;
+  return hash(disk) === hash(document.getText()) ? null : disk;
+}
+
+/** How long VS Code is given to catch up with the disk by itself, then to reload when told to. */
+const CATCH_UP_MS = 300;
+const RELOAD_MS = 3000;
+
+/**
+ * Before a change to an open file: VS Code's copy must be the disk's, or the change would be made to old text (and
+ * saving it would overwrite what changed on disk). After a change outside VS Code its copy catches up by itself in a
+ * moment, when its file watcher says so; on a network drive the watcher often never does, and the copy stayed behind
+ * for good (every edit refused, every read the old text). So it's given a moment, then made to reload: the file is
+ * written over itself, the same bytes, through VS Code, which reloads its copy of a file it writes this way. Your
+ * unsaved changes are never touched (then nothing is compared: VS Code's own save says if the disk changed).
+ * @param {vscode.TextDocument} document @param {any} file
+ */
+async function freshen(document, file) {
+  if (diskTextIfNewer(document, file.full) === null) return;
+  for (let waited = 0; waited < CATCH_UP_MS; waited += 50) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (diskTextIfNewer(document, file.full) === null) return;
+  }
+  try {
+    const reload = new vscode.WorkspaceEdit();
+    reload.createFile(file.uri, { overwrite: true, contents: fs.readFileSync(file.full) });
+    await vscode.workspace.applyEdit(reload);
+  } catch { /* said below, if it's still behind */ }
+  for (let waited = 0; waited <= RELOAD_MS; waited += 50) {
+    if (diskTextIfNewer(document, file.full) === null) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new ToolError(RESULTS.changedOnDisk(file.shown));
 }
 
 /** Save, or put the editor back as it was and say so: a change only counts once it's on disk. */
@@ -2204,4 +2242,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, realPath, withoutSignatureLines, stale, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

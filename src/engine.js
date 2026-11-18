@@ -447,6 +447,9 @@ class Engine {
         result = { output: TEXTS.notRunBatch(MAX_READ_BATCH, MAX_BATCH), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
+      } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {
+        // A note Solder once put in old calls, sent back as the text of a change: never run (it went into a file once).
+        result = { output: TEXTS.standInArgument, summary: "Not run: " + label, failed: true };
       } else if (readOnly && Object.hasOwn(TOOLS, name) && !READ_ONLY.has(name)) {
         // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered.
         result = { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
@@ -768,20 +771,28 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
     out.push({ role: "user", content: TEXTS.compaction }, { role: "assistant", content: chat.compaction.summary });
     start = chat.compaction.through;
   }
-  const current = lastUser(chat);
+  // The task being worked on, a Resume's "carry on" included: its own calls are sent as they came.
+  const current = taskStart(chat);
+  /** @type {Set<string>} calls sent without their long text: each one's result says so */
+  const shortened = new Set();
   for (const [offset, message] of chat.messages.slice(start).entries()) {
     if (message.role === "user") out.push({ role: "user", content: message.content });
     else if (message.role === "assistant") {
       if (!message.content && !message.tool_calls?.length) continue;
-      // An earlier turn's big writes and edits are on disk now: sent again in full they'd cost their
-      // size on every step. (This turn's are sent as they came.)
+      // An earlier task's big writes and edits are on disk now: sent again in full they'd cost their
+      // size on every step. (This task's are sent as they came.)
       // Plan calls from before plans were taken out (0.2.14): left out, their results with them (below).
       const kept = message.tool_calls?.filter((/** @type {any} */ c) => c.function.name !== "plan");
       if (!message.content && !kept?.length) continue;
-      const calls = start + offset < current ? kept?.map(shortCall) : kept;
+      const calls = start + offset < current ? kept?.map((/** @type {any} */ call) => {
+        const short = shortCall(call);
+        if (short !== call) shortened.add(call.id);
+        return short;
+      }) : kept;
       out.push({ role: "assistant", content: message.content, ...(calls?.length ? { tool_calls: calls } : {}) });
     } else if (message.role === "tool") {
-      out.push({ role: "tool", tool_call_id: message.tool_call_id, content: resultText(message) });
+      out.push({ role: "tool", tool_call_id: message.tool_call_id,
+        content: resultText(message) + (shortened.has(message.tool_call_id) ? "\n\n" + TEXTS.argumentsLeftOut : "") });
     }
   }
   // A recap's kept part may start with results whose calls were summarised away: drop those.
@@ -811,7 +822,7 @@ function breakdown(chat, system, tools) {
     parts.recap = TEXTS.compaction.length + chat.compaction.summary.length;
     start = chat.compaction.through;
   }
-  const current = lastUser(chat);
+  const current = taskStart(chat); // as outbound sends it
   const offered = new Set();
   for (const [offset, message] of chat.messages.slice(start).entries()) {
     if (message.role === "user") parts.user += message.content.length;
@@ -991,7 +1002,13 @@ function lastUser(chat) {
 /** Arguments a write or edit no longer needs in full (they're in the file). */
 const LONG_ARGUMENTS = { write_file: ["content"], edit_file: ["old_text", "new_text"] };
 
-/** A call from an earlier turn with its long text arguments replaced by a note. @param {any} call */
+/**
+ * A call from an earlier task without its long text arguments. They're left out whole, never replaced by a note: a
+ * note in a call's arguments reads to the model as something it wrote, and it wrote the same again as the text of a
+ * new edit (which went into the user's file). A call copied from one of these lacks a required argument, so it's
+ * refused before anything runs. What's said about it goes with the call's result instead (outbound).
+ * @param {any} call
+ */
 function shortCall(call) {
   const fields = LONG_ARGUMENTS[/** @type {keyof LONG_ARGUMENTS} */ (call.function?.name)];
   if (!fields || (call.function.arguments || "").length <= LONG_ARGUMENT_CHARS) return call;
@@ -1001,11 +1018,19 @@ function shortCall(call) {
   let changed = false;
   for (const field of fields) {
     if (typeof args[field] === "string" && args[field].length > LONG_ARGUMENT_CHARS) {
-      args[field] = TEXTS.argumentLeftOut(args[field].split("\n").length);
+      delete args[field];
       changed = true;
     }
   }
   return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
+}
+
+/**
+ * The note Solder used to put in place of a long argument (before 0.2.18), should a model still write one as the text
+ * of a change: it isn't text, and must never reach a file. @param {any} args
+ */
+function standInArgument(args) {
+  return Object.values(args || {}).some((value) => typeof value === "string" && /^\s*\[Solder: [\d,.]+ lines?, left out of this copy of the chat\b/.test(value));
 }
 
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */

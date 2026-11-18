@@ -610,4 +610,29 @@ SCENARIOS.push({
     : !/ORCHID-7/i.test(answer) ? "the codename was lost after the summary: " + answer.slice(0, 200) : "",
 });
 
+// ---- big writes in earlier turns, then more: the earlier calls' long text isn't sent again, and nothing stands in for
+// it inside the calls (a note there was copied by a model as the text of a new edit, into the user's file)
+SCENARIOS.push({
+  name: "big-writes",
+  about: "two big files written in two turns, then a change to the first: real text every time, no note written into a file",
+  setup: (w) => w("README.md", "# Data\nSmall data modules live in src/.\n"),
+  task: "Create src/countries.js exporting an array of 40 objects, { code, name, capital }, for 40 countries of your choice (module.exports = [...]).",
+  then: ["Now create src/cities.js the same way: 40 objects, { name, country, population }, for 40 large cities.",
+    "In src/countries.js, add a continent field to every entry."],
+  check: ({ read, load, chat }) => {
+    for (const file of ["src/countries.js", "src/cities.js"]) {
+      const text = read(file);
+      if (text.includes("[Solder") || text.includes("left out of this copy")) return "a stand-in note was written into " + file;
+    }
+    const countries = load("src/countries.js");
+    const cities = load("src/cities.js");
+    if (!Array.isArray(countries) || countries.length !== 40) return "countries: " + (Array.isArray(countries) ? countries.length : typeof countries);
+    if (!Array.isArray(cities) || cities.length !== 40) return "cities: " + (Array.isArray(cities) ? cities.length : typeof cities);
+    if (!countries.every((c) => c.code && c.name && c.capital && c.continent)) return "a country lacks a field (continent?)";
+    // Calls refused before they ran: sent without their text (copied from a shortened call), or with a stand-in note as text.
+    const missing = chat.messages.filter((/** @type {any} */ m) => m.role === "tool" && /needs (old_text|new_text|content)|a note Solder put in place/.test(String(m.content || ""))).length;
+    return missing ? `${missing} call(s) sent without their text` : "";
+  },
+});
+
 module.exports = { SCENARIOS };

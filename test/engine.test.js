@@ -393,7 +393,26 @@ test("the summary transcript keeps your first goal even when big writes overflow
   assert.ok(text.length <= 12_100, `${text.length} characters`);
 });
 
-test("earlier turns' big writes are sent as a note, this turn's whole; compaction runs mid-task", async () => {
+test("a change whose text is Solder's old 'left out' note is refused, never run: it isn't text for a file", async () => {
+  const note = "[Solder: 59 lines, left out of this copy of the chat to save space. They're in the file; read it if you need them.]";
+  const client = fakeClient([
+    { calls: [call("e1", "edit_file", { path: "a.ps1", old_text: "real line", new_text: note }), call("w1", "write_file", { path: "b.ps1", content: note })] },
+    { content: "Sorry." },
+  ]);
+  const host = fakeHost();
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "add the block");
+  assert.deepEqual(host.ran, [], "neither reached the tools");
+  const results = client.sent[1].filter((m) => m.role === "tool").map((m) => m.content);
+  assert.equal(results[0], TEXTS.standInArgument);
+  // Real text that only mentions Solder goes through.
+  const fine = fakeClient([{ calls: [call("e2", "edit_file", { path: "a.md", old_text: "x", new_text: "See [Solder: the docs] for more." })] }, { content: "ok" }]);
+  const other = fakeHost();
+  await engine(fine, other).ask(Engine.newChat(), "edit");
+  assert.equal(other.ran.length, 1);
+});
+
+test("earlier tasks' big writes go without their text (said with the result, never inside the call); this task's whole, a Resume included", async () => {
   const write = (id) => ({ id, type: "function", function: { name: "write_file",
     arguments: JSON.stringify({ path: id + ".js", content: "line\n".repeat(2000) }) } });
   const chat = Engine.newChat();
@@ -402,8 +421,16 @@ test("earlier turns' big writes are sent as a note, this turn's whole; compactio
     { role: "user", content: "write b", meta: { typed: "x" } }, { role: "assistant", content: "", tool_calls: [write("b")] },
     { role: "tool", tool_call_id: "b", content: "Wrote b.js.", meta: {} });
   const sent = outbound(chat, "S");
-  assert.equal(JSON.parse(sent[2].tool_calls[0].function.arguments).content, TEXTS.argumentLeftOut(2001));
+  assert.deepEqual(JSON.parse(sent[2].tool_calls[0].function.arguments), { path: "a.js" }, "the long text is left out whole: no note in its place to copy");
+  assert.ok(!JSON.stringify(sent.filter((m) => m.role === "assistant")).includes("left out"), "nothing Solder wrote sits in the model's own turns");
+  assert.equal(sent[3].content, "Wrote a.js.\n\n" + TEXTS.argumentsLeftOut, "the result says so instead");
   assert.equal(sent[6].tool_calls[0], chat.messages[5].tool_calls[0], "this turn's call goes as it came");
+  assert.equal(sent[7].content, "Wrote b.js.");
+  // After a Resume's "carry on" it's still the same task: its calls stay whole.
+  chat.messages.push({ role: "user", content: "carry on", meta: { typed: "Carry on", resume: true } });
+  assert.equal(outbound(chat, "S")[6].tool_calls[0], chat.messages[5].tool_calls[0], "the task's own call, whole after a Resume");
+  // A call copied from a shortened one lacks a required argument: refused before it runs.
+  assert.match(parseArguments("write_file", JSON.stringify({ path: "a.js" }), false).problem || "", /write_file needs content/);
 
   // A long task: each step adds a big result; past the limit, the earlier turns are summarised mid-task.
   const long = Engine.newChat();

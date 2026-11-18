@@ -9,14 +9,14 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "d28f04424b5eec68";
+const PINNED = "e910879e7dfa728e";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
   notRunBatch: [[8, 5]], resumeLimit: [[30]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
   missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
-  wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]], argumentLeftOut: [[412]],
+  wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]],
 };
 const RESULT_SAMPLES = {
   signatureLeftOut: [[412, 520]], signatureInDiff: [[150]], error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
@@ -137,7 +137,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "1ff5d6582332d242";
+const ASSIST_PINNED = "c2fa9e3ff55948f8";
 
 function assistEverything() {
   return {

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: edits to a file on a network drive could lock up.** When a file changed outside VS Code (a script signed again, say) and VS Code never noticed, as happens on mapped and network drives, every edit was refused with "changed on disk a moment ago", and reading the file again gave the same old copy, so it never cleared. Now a read gives what's on disk, and before an edit Solder has VS Code reload the file, then makes the change. Your unsaved changes are never reloaded away.
+- **Fix: a placeholder could be written into a file.** To save tokens, Solder sent earlier edits' long text as a one-line note inside the call. A model could copy that note as the text of a new edit, which failed several times and once wrote the note into the file. The long text is now left out without a note in its place (what's said about it goes with the call's result), the task being worked on keeps its calls whole even after Resume, and an edit whose text is that note is refused.
+
 ## 0.2.17 (2026-11-17)
 
 - **Paste in terminal.** A shell's code block in an answer (PowerShell, bash, cmd and the like) has **Paste in terminal** beside **Copy**. It puts the command into VS Code's terminal for you to check and run with Enter; Solder never runs it. Several lines go through VS Code's own paste, with its warning where the shell would run each line as it arrives, and your clipboard is put back.
