@@ -841,3 +841,25 @@ test("at the step limit: no nudge, the turn ends paused, and Resume says there's
   await p.resume(other);
   assert.equal(other.messages.at(-1).content, "done");
 });
+
+test("Resume never summarises the task it resumes, however big: only the turns before it", async () => {
+  const big = "x".repeat(60_000);
+  const read = (id) => [{ role: "assistant", content: "", tool_calls: [{ id, type: "function", function: { name: "read_file", arguments: "{\"path\":\"big.log\"}" } }] },
+    { role: "tool", tool_call_id: id, content: big, meta: { name: "read_file", summary: "Read big.log" } }];
+  // One turn, far past the limit, paused: Resume carries on with everything it read.
+  const single = Engine.newChat();
+  single.messages.push({ role: "user", content: "read all of big.log", meta: { typed: "read all of big.log" } }, ...read("r1"), ...read("r2"), ...read("r3"));
+  const client = fakeClient([{ content: "Here's what it says." }]);
+  await engine(client, fakeHost(), [], { compactAt: 30_000 }).resume(single);
+  assert.equal(single.compaction, null, "nothing was summarised");
+  assert.ok(!client.sent.some((messages) => String(messages.at(-1).content).startsWith(TEXTS.compactionTranscript)), "no summary was asked for");
+  assert.ok(client.sent[0].some((m) => m.role === "tool" && m.content === big), "what it read is still there");
+  // With an earlier turn: that one is summarised, the resumed task is kept whole.
+  const two = Engine.newChat();
+  two.messages.push({ role: "user", content: "earlier " + "e".repeat(80_000), meta: { typed: "earlier" } }, { role: "assistant", content: "earlier answer" },
+    { role: "user", content: "read all of big.log", meta: { typed: "read all of big.log" } }, ...read("r1"), ...read("r2"));
+  const second = fakeClient([{ content: "SUMMARY" }, { content: "Done." }]);
+  await engine(second, fakeHost(), [], { compactAt: 30_000 }).resume(two);
+  assert.equal(two.compaction?.through, 2, "summarised up to the task's own message, not past it");
+  assert.ok(second.sent[1].some((m) => m.role === "tool" && m.content === big), "the task's reads go on whole");
+});

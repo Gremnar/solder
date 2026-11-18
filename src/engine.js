@@ -184,7 +184,9 @@ class Engine {
   async resume(chat) {
     await this._run(chat, async (signal) => {
       if (!chat.messages.length) throw new Error("There's nothing to resume.");
-      await this._compactIfDue(chat, signal, chat.messages.length);
+      // As before any step: only earlier turns are summarised, never the task being resumed (summarising it lost the
+      // model its place, and it read everything again).
+      await this._compactIfDue(chat, signal, taskStart(chat));
       const last = chat.messages[chat.messages.length - 1];
       const summarisedAll = !!chat.compaction && chat.compaction.through >= chat.messages.length;
       // Results that say a step was stopped read like "the user said no": say plainly to run them again.

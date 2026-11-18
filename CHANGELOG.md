@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fix: Resume and Continue could summarise the task in progress.** Pressing Resume or Continue (after the step limit, a Stop or an error) in a chat past **Compact at** summarised everything, the task being resumed included, so the model lost its place and read things again. Now only earlier turns are summarised, as before any other step.
 - **Attach text files.** A paperclip beside Send attaches text files to your next message (Word, Excel and PowerPoint as their text). A file up to about 40,000 characters is sent whole; a longer one goes by its path, and the model reads only the parts it needs, without asking (you attached it). A signed script goes without its signature block.
 - **Long pastes become chips.** Text you paste that's over 40 lines (or 4,000 characters) goes above the box as a chip, not into it, and shows in the chat as a chip too, so a hundred lines of log don't fill the scroll. ✕ takes it off before sending; a click shows it. Edit on a message brings its attachments back with its words.
 
