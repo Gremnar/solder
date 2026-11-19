@@ -362,3 +362,135 @@ test("embedding stops when today's budget is used up, and carries on once there'
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- shared embeddings --
+
+/** Two PCs' worth: the same docs in two places, an index each, and one shared embeddings folder. */
+function sharedSetup() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-shared-"));
+  const make = (/** @type {string} */ name) => {
+    const folder = path.join(base, name, "docs");
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, "accounts.md"), "# Credential recovery\nHow a user account gets its passphrase restored after a lockout.");
+    fs.writeFileSync(path.join(folder, "printers.md"), "# Printers\nRestart the spooler when a print job hangs.");
+    fs.writeFileSync(path.join(folder, "backups.md"), "# Backups\nThe nightly robocopy job copies the HR share.");
+    return { folder, index: new docs.DocsIndex(path.join(base, name, "index", "docs.sqlite")) };
+  };
+  const shared = path.join(base, "share", "embeddings");
+  return { base, shared, one: make("pc-one"), two: make("pc-two") };
+}
+/** Every file under a folder, as paths relative to it. @param {string} folder @returns {string[]} */
+function filesUnder(folder) {
+  if (!fs.existsSync(folder)) return [];
+  return fs.readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile())
+    .map((entry) => path.relative(folder, path.join(entry.parentPath ?? /** @type {any} */ (entry).path, entry.name))).sort();
+}
+
+test("shared embeddings: what one PC embedded, another takes from the folder without asking the gateway; a changed file is embedded again", async () => {
+  const { base, shared, one, two } = sharedSetup();
+  let calls = 0;
+  const embedWith = (/** @type {any} */ cache) => ({ model: "embed-a", cache, fn: (/** @type {string[]} */ texts) => { calls++; return fakeEmbed(texts); } });
+  try {
+    await one.index.refresh([one.folder], { ms: 20_000, embed: embedWith(new docs.EmbedCache(shared)) });
+    assert.deepEqual(one.index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
+    assert.equal(calls, 1, "the first PC embeds them");
+    const files = filesUnder(shared);
+    assert.equal(files.length, 3, "one file per indexed file, put there in the same run");
+    assert.ok(files.every((file) => /^embed-a-[0-9a-f]{8}[\\/][0-9a-f]{2}[\\/][0-9a-f]{64}\.vec$/.test(file)), files.join());
+    assert.equal(one.index.embedding.given, 3);
+    for (const file of files) {
+      const text = fs.readFileSync(path.join(shared, file)).toString("latin1");
+      assert.doesNotMatch(text, /passphrase|spooler|robocopy|accounts\.md/i, "numbers only: no text, no file names");
+    }
+
+    // The second PC: the same files somewhere else. Nothing is sent to the gateway, nothing counts against the budget.
+    let spent = 0;
+    let asked = 0;
+    await two.index.refresh([two.folder], { ms: 20_000, embed: { ...embedWith(new docs.EmbedCache(shared)), spend: (/** @type {number} */ n) => { spent += n; },
+      confirm: async () => { asked++; return true; } } });
+    assert.deepEqual(two.index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
+    assert.deepEqual([calls, spent, asked, two.index.embedding.reused, two.index.embedding.tokens], [1, 0, 0, 3, 0]);
+    const query = (await fakeEmbed(["password reset"])).vectors[0];
+    const hits = await two.index.search("password reset", 10, { vector: query, model: "embed-a" });
+    assert.equal(hits[0]?.path.endsWith("accounts.md"), true, "and they find by meaning as the first PC's do");
+
+    // A file that changed is a different file: embedded here, and shared in its turn; the others aren't sent again.
+    fs.writeFileSync(path.join(two.folder, "printers.md"), "# Printers\nRestart the spooler when a print job hangs, then print a test page.");
+    await two.index.refresh([two.folder], { ms: 20_000, embed: embedWith(new docs.EmbedCache(shared)) });
+    assert.equal(calls, 2);
+    assert.equal(filesUnder(shared).length, 4);
+    // Another model's vectors are kept apart.
+    await two.index.refresh([two.folder], { ms: 20_000, embed: { ...embedWith(new docs.EmbedCache(shared)), model: "embed-b" } });
+    assert.equal(calls, 3, "embed-b has nothing in the folder yet");
+    assert.equal(filesUnder(shared).filter((file) => file.startsWith("embed-b-")).length, 3);
+  } finally {
+    one.index.close();
+    two.index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("shared embeddings: a PC that embedded before the folder was set gives what it has; no folder, or one that can't be used, changes nothing", async () => {
+  const { base, shared, one, two } = sharedSetup();
+  let calls = 0;
+  const embed = { model: "embed-a", fn: (/** @type {string[]} */ texts) => { calls++; return fakeEmbed(texts); } };
+  try {
+    await one.index.refresh([one.folder], { ms: 20_000, embed });
+    assert.equal(filesUnder(shared).length, 0);
+    await one.index.refresh([one.folder], { ms: 20_000, embed: { ...embed, cache: new docs.EmbedCache(shared) } });
+    assert.deepEqual([calls, filesUnder(shared).length, one.index.embedding.given], [1, 3, 3], "given without embedding anything again");
+    await one.index.refresh([one.folder], { ms: 20_000, embed: { ...embed, cache: new docs.EmbedCache(shared) } });
+    assert.equal(one.index.embedding.given, 3, "and not given twice");
+
+    // A folder that can't be made (its parent is a file): embedding goes on through the gateway, and the problem is kept.
+    const blocked = path.join(base, "a-file");
+    fs.writeFileSync(blocked, "x");
+    const cache = new docs.EmbedCache(path.join(blocked, "embeddings"));
+    await two.index.refresh([two.folder], { ms: 20_000, embed: { ...embed, cache } });
+    assert.deepEqual(two.index.vectorCount("embed-a"), { passages: 3, embedded: 3 });
+    assert.equal(calls, 2);
+    assert.ok(cache.off && two.index.embedding.sharedProblem, "left alone after a few failures, and said");
+  } finally {
+    one.index.close();
+    two.index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("shared embeddings: a file in the folder is used only if all of it is right", async () => {
+  const { base, shared, one, two } = sharedSetup();
+  try {
+    await one.index.refresh([one.folder], { ms: 20_000, embed: { model: "embed-a", cache: new docs.EmbedCache(shared), fn: fakeEmbed } });
+    const files = filesUnder(shared).map((file) => path.join(shared, file));
+    const good = fs.readFileSync(files[0]);
+    assert.equal(docs.unpackShared(good, 1)?.length, 1);
+    assert.equal(docs.unpackShared(good, 2), null, "another number of passages");
+    assert.equal(docs.unpackShared(good, 1, 99), null, "another length of vector than this PC's");
+    assert.equal(docs.unpackShared(good.subarray(0, good.length - 1), 1), null, "cut short");
+    assert.equal(docs.unpackShared(Buffer.concat([good, Buffer.alloc(4)]), 1), null, "too long");
+    const flipped = Buffer.from(good);
+    flipped[20] ^= 0xff;
+    assert.equal(docs.unpackShared(flipped, 1), null, "a changed byte fails the checksum");
+    assert.equal(docs.unpackShared(Buffer.from("not a vectors file at all, just some text that is long enough to pass the size check"), 1), null);
+    // Not-a-number inside a file whose checksum is right (made on purpose): refused all the same.
+    const nan = Buffer.alloc(4);
+    nan.writeFloatLE(NaN);
+    assert.equal(docs.unpackShared(/** @type {Buffer} */ (docs.packShared([Buffer.concat([nan, Buffer.alloc(8)])])), 1), null);
+    assert.equal(docs.unpackShared(/** @type {Buffer} */ (docs.packShared([Buffer.alloc(12)])), 1), null, "all zeros");
+    assert.equal(docs.packShared([Buffer.alloc(8), Buffer.alloc(12)]), null, "vectors of different lengths aren't written");
+    assert.equal(docs.packShared([]), null);
+
+    // Every shared file damaged: the second PC embeds through the gateway as if the folder were empty.
+    for (const file of files) fs.writeFileSync(file, Buffer.concat([fs.readFileSync(file).subarray(0, 30), Buffer.from("garbage")]));
+    let calls = 0;
+    await two.index.refresh([two.folder], { ms: 20_000, embed: { model: "embed-a", cache: new docs.EmbedCache(shared), fn: (/** @type {string[]} */ texts) => { calls++; return fakeEmbed(texts); } } });
+    assert.deepEqual([calls, two.index.embedding.reused, two.index.vectorCount("embed-a").embedded], [1, 0, 3]);
+    assert.throws(() => new docs.EmbedCache(shared).fileOf("embed-a", "../../outside"), /not a passages hash/);
+    assert.match(docs.EmbedCache.modelFolder("../..\\evil/model:1"), /^[A-Za-z0-9._-]+-[0-9a-f]{8}$/);
+    assert.doesNotMatch(docs.EmbedCache.modelFolder(".."), /^\./);
+  } finally {
+    one.index.close();
+    two.index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

@@ -83,6 +83,28 @@ async function main() {
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- the shared embeddings folder: a full path, saved; your organization's is used and locked
+    {
+      const shared = path.join(T, "shared-embeddings");
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embeddingsCache", value: "  " + shared + " " });
+      check("the shared embeddings folder saves, and the docs index is given it", raw().get("embeddingsCache") === shared && again.tools.embedCache()?.folder.toLowerCase() === path.resolve(shared).toLowerCase(),
+        [raw().get("embeddingsCache"), again.tools.embedCache()?.folder]);
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embeddingsCache", value: "some/relative/folder" });
+      check("... a folder that isn't a full path is refused, with why", raw().get("embeddingsCache") === shared && /full path/.test(again.settingsScreen.view.notice), again.settingsScreen.view.notice);
+      const theirs = path.join(T, "org-embeddings");
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["embeddingscache", theirs]]), "");
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embeddingsCache", value: path.join(T, "mine-instead") });
+      check("your organization's shared folder: used, shown locked, and not changed by you", again.tools.embedCache()?.folder.toLowerCase() === path.resolve(theirs).toLowerCase()
+        && again.settingsScreen.view.locked.embeddingsCache === true && raw().get("embeddingsCache") === shared, [again.tools.embedCache()?.folder, again.settingsScreen.view.locked.embeddingsCache, raw().get("embeddingsCache")]);
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["embeddailybudget", 50000]]), "");
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embeddingsCache", value: "" });
+      check("emptied, there's no shared folder", !raw().get("embeddingsCache") && again.tools.embedCache() === null, raw().get("embeddingsCache"));
+      await raw().update("embeddingsCache", undefined, vscode.ConfigurationTarget.Global);
+    }
+
     // ---- Settings → Rules: the instruction file is one you make; the button makes it (once) and opens it
     {
       const ws = vscode.workspace.workspaceFolders[0].uri.fsPath;

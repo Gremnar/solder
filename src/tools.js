@@ -13,7 +13,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, EmbedBudget, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
+const { DocsIndex, EmbedBudget, EmbedCache, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
 
 const MAX_READ_LINES = 2000;
@@ -713,7 +713,8 @@ class WorkspaceTools {
       try {
         const budget = this.embedBudget();
         meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error, waiting: index.embedding.waiting ?? null,
-          paused: !!index.embedding.paused, free: this.embedFree(), today: budget.used(), budget: budget.allowed(this.embedBudgetSetting()), raised: budget.raisedToday() !== undefined };
+          paused: !!index.embedding.paused, free: this.embedFree(), shared: this.embedCache()?.folder || "", reused: index.embedding.reused, given: index.embedding.given,
+          sharedProblem: index.embedding.sharedProblem, today: budget.used(), budget: budget.allowed(this.embedBudgetSetting()), raised: budget.raisedToday() !== undefined };
       } catch { meaning = null; }
     }
     return { available: true, folders, indexed, active: !!index.active, meaning };
@@ -731,6 +732,18 @@ class WorkspaceTools {
   embedBudget() {
     this._budget ??= new EmbedBudget(path.join(this.context.globalStorageUri.fsPath, "docs", "embed-budget.json"));
     return this._budget;
+  }
+
+  /**
+   * The shared embeddings folder (the embeddingsCache setting, or your organization's), or null when there's none: a
+   * full path, a network share as a rule. Vectors only are read from it and written to it.
+   */
+  embedCache() {
+    const given = String(solderSettings().get("embeddingsCache", "") || "").trim().replace(/^~(?=$|[\\/])/, os.homedir());
+    if (!given || !path.isAbsolute(given)) return null;
+    const folder = path.resolve(given);
+    if (this._embedCache?.folder !== folder) this._embedCache = new EmbedCache(folder);
+    return this._embedCache;
   }
 
   /** The daily embedding budget's setting (your organization's, if it sets one), in tokens. */
@@ -765,7 +778,7 @@ class WorkspaceTools {
       (progress) => {
         // The status bar counts the passages as they get their vectors; the log has a line every 320 or so.
         let logged = 0;
-        const embed = model && this.embedder ? { model,
+        const embed = model && this.embedder ? { model, cache: this.embedCache(),
           fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal),
           confirm: (/** @type {number} */ passages, /** @type {number} */ tokens) => this.confirmEmbedding(model, passages, tokens),
           // Held to today's embedding budget (a gateway on this PC is free, and isn't).
@@ -786,6 +799,8 @@ class WorkspaceTools {
       // What it cost, for the log (Copy diagnostics): the gateway's own token count.
       const counts = index.vectorCount(model);
       this.onDocsLog?.(`docs embeddings: ${index.embedding.runTokens.toLocaleString("en-US")} tokens this run · ${counts.embedded.toLocaleString("en-US")} of ${counts.passages.toLocaleString("en-US")} passages` +
+        (index.embedding.reused || index.embedding.given ? ` · shared folder: ${index.embedding.reused.toLocaleString("en-US")} passages taken, ${index.embedding.given.toLocaleString("en-US")} given` : "") +
+        (index.embedding.sharedProblem ? ` · shared folder not used: ${index.embedding.sharedProblem}` : "") +
         (index.embedding.error ? ` · stopped: ${index.embedding.error}` : ""));
     }
   }

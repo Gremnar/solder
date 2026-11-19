@@ -109,6 +109,7 @@ Point Solder at folders of reference documentation that only exist on your PC: i
   - anything beyond 20,000 files in one folder. `.git` and `node_modules` are skipped.
 - **Privacy:** the index is built and kept on your PC, and refreshed in the background. Only the passages the model reads are sent to your endpoint.
 - **Search by meaning (optional):** in **Settings → Docs / RAG**, choose **Keywords + meaning** and your gateway's embeddings model (**Test** checks it). Searches then also find passages that say the same thing in other words, merged with the keyword results. It sends every passage of your docs folders to the gateway once, to be turned into numbers, then only changed files, plus each search's words. The log (**⋯ → Copy diagnostics**) shows the tokens each run used.
+- **Sharing embeddings (optional):** embedding the same docs on every PC costs the same tokens every time. Set **Shared embeddings folder** (in **Settings → Docs / RAG**, under the embeddings model) to a folder your team shares, such as a network share. What one PC has embedded is put there, and the others take it from there: no tokens, nothing against the daily budget, and no waiting for it. A file's embeddings are used only where the file's text is exactly the same, with the same embeddings model; a file that changed is embedded again by whoever has it first. The folder holds numbers only, no text and no file names, but they're derived from your docs, so share it only with people who may read them. If the folder can't be reached, Solder embeds through the gateway as before. Admins can set it for everyone with the `EmbeddingsCache` policy.
 - **A daily budget for it:** embedding counts against the same daily allowance as the models, so it's held to a budget of its own, 250,000 tokens a day by default (the gateway's day, from midnight UTC). Past it, embedding waits for the next day, and keyword search, and meaning over what's already embedded, go on. Change it under **Daily budget**, or **raise it for today** once it's reached. A gateway on your own PC isn't counted. Organizations can set it with the `EmbedDailyBudget` policy.
 
 <img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
@@ -196,6 +197,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 | **Max rounds** | the most steps with tool calls for one message |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
+| **Shared embeddings folder** | a folder where PCs share docs embeddings, so the same docs aren't embedded by everyone (see [Your docs](#your-docs)) |
 | **Skills off** | the skills you've switched off (the switches in **Settings → Skills**) |
 | **Skills folders** | your skills (see [Skills](#skills)); a new one is saved in the first |
 | **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Two kinds of model](#two-kinds-of-model-optional)) |

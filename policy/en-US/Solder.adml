@@ -74,6 +74,8 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <string id="EmbedDailyBudget_Help">The most tokens docs search by meaning may send to the embeddings model in a day (the gateway's day, from midnight UTC); it counts against the same daily allowance as the models. Past it, embedding waits for the next day, and keyword search goes on. 0: no embedding. Users can't change it, or raise it for the day. Not configured: 250,000, and each user can change it.</string>
       <string id="EmbeddingModel">Embeddings model</string>
       <string id="EmbeddingModel_Help">The gateway's embeddings model id, for search by meaning.</string>
+      <string id="EmbeddingsCache">Shared embeddings folder</string>
+      <string id="EmbeddingsCache_Help">A folder where PCs share docs embeddings, a network share as a rule (\\fileserver\it\solder-embeddings). What one PC has embedded for search by meaning, the others take from this folder: no tokens are used and nothing counts against the daily embedding budget. Users need to read and write there. It holds numbers only (no text and no file names), one small file per indexed file, but the numbers are derived from the docs: give access only to people who may read those docs.</string>
 
       <string id="Rules">Rules (replace the user's)</string>
       <string id="Rules_Help">The rules the model follows, one per line, in place of the user's own. Users can't change them. To add organization rules while keeping the user's, use "Organization rules" instead.</string>
@@ -111,6 +113,7 @@ Not configured: feedback goes to Solder's support address.</string>
       <presentation id="SkillsFolders"><multiTextBox refId="SkillsFolders">Folders, one per line:</multiTextBox></presentation>
       <presentation id="DocsSearch"><dropdownList refId="DocsSearch" noSort="true" defaultItem="0">Search by:</dropdownList></presentation>
       <presentation id="EmbeddingModel"><textBox refId="EmbeddingModel"><label>Model id:</label></textBox></presentation>
+      <presentation id="EmbeddingsCache"><textBox refId="EmbeddingsCache"><label>Folder:</label></textBox></presentation>
       <presentation id="Rules"><multiTextBox refId="Rules">Rules, one per line:</multiTextBox></presentation>
       <presentation id="OrgRules"><multiTextBox refId="OrgRules">Rules, one per line:</multiTextBox></presentation>
       <presentation id="InstructionFiles"><multiTextBox refId="InstructionFiles">File names, one per line:</multiTextBox></presentation>

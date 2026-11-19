@@ -127,6 +127,19 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
   - **Its own screen.** The Projects screen (in the chat's place, as Settings is) lists projects with their chats, and a project's page shows its rules and skills in full. They're read there and edited in the editor, which is better at it; the page only renames the project and makes or deletes files.
 - **Theme:** VS Code's own CSS variables (`--vscode-*`), so it matches every theme. No CDN, no web fonts.
 
+## Shared embeddings
+
+Decided 2026-11-18.
+
+Embedding the same docs on every PC spends the same tokens each time, against a daily budget. A shared folder (`embeddingsCache`, or the `EmbeddingsCache` policy) lets one PC's work serve the rest.
+
+- **One file per indexed file,** named by a hash of the embeddings model and the exact text of the file's passages, in order. The same file on another PC, wherever it's kept, gives the same name; a changed file gives another. So there's no index to keep in step, and nothing to lock.
+- **Written whole, then renamed.** A reader never sees half a file, and two PCs writing the same file write the same bytes. No database on the share: SQLite over a network share isn't safe with several writers.
+- **Numbers only.** No text, no paths, no file names. The vectors are still derived from the docs, so the folder is for people who may read them, and the docs say so.
+- **Read with suspicion.** A file is used only if its header, counts, size and checksum agree, every number is finite, and the vectors are the length this PC's are. What's read only ever ranks the reader's own passages: a bad file can spoil a search's order, not put text in front of the model.
+- **Never needed.** Every read and write is asynchronous and timed (a share that's away can hang a synchronous call for a long time). After three failures in a row the folder is left alone for the run, and embedding goes through the gateway as before.
+- **Both ways, every run.** Before the gateway is asked (and before the cost prompt), files with missing vectors take the folder's. Files that are fully embedded here and not known to be there are put there, so a PC that embedded before the folder was set fills it.
+
 ## Settings
 
 | Setting | Default | Notes |

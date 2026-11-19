@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Docs embeddings can be shared between PCs.** Set **Shared embeddings folder** (Settings → Docs / RAG, or the new `EmbeddingsCache` policy) to a folder your team shares. What one PC has embedded for search by meaning is put there and the others take it: no tokens, and nothing against the daily embedding budget. It applies where a file's text and the embeddings model are exactly the same; the folder holds numbers only (no text, no file names). A PC that had already embedded its docs puts them there too. If the folder can't be reached, embedding goes through the gateway as before.
 - **Skills can be switched off, everywhere or in one project.** Each of your skills has a switch in **Settings → Skills**: off, the model isn't told about it. A project's page lists your skills with switches for that project alone, so a skill can be off in one project, or on only there; the project's own skills have switches too. Those switches are yours and aren't shared with the project's folder. Your organization's skills are always on.
 
 ## 0.2.19 (2026-11-18)

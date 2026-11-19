@@ -78,6 +78,7 @@ class SettingsScreen {
       docsSearch: String(config.get("docsSearch", "keyword")) === "hybrid" ? "hybrid" : "keyword",
       embeddingModel: String(config.get("embeddingModel", "")),
       embedBudget: Number(config.get("embedDailyBudget", 250_000)),
+      embeddingsCache: String(config.get("embeddingsCache", "") || ""),
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
       modelFilter: String(config.get("modelFilter", "")),
@@ -89,7 +90,7 @@ class SettingsScreen {
       storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
-        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["modelFilter", "modelFilter"],
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["embeddingsCache", "embeddingsCache"], ["modelFilter", "modelFilter"],
         ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"],
         ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
@@ -164,6 +165,11 @@ class SettingsScreen {
           await save("maxRounds", n, field);
         } else if (field === "docsSearch" && ["keyword", "hybrid"].includes(value)) await save("docsSearch", value, field);
         else if (field === "embeddingModel") await save("embeddingModel", String(value || "").trim(), field);
+        else if (field === "embeddingsCache") {
+          const folder = String(value || "").trim();
+          if (folder && !path.isAbsolute(folder.replace(/^~(?=$|[\\/])/, "C:\\"))) { this.notice("The shared embeddings folder needs a full path, such as \\\\server\\share\\solder-embeddings.", "bad"); return; }
+          await save("embeddingsCache", folder, field);
+        }
         else if (field === "embedBudget") {
           const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
           if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens, from 0 to 100,000,000.", "bad"); return; }

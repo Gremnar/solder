@@ -385,6 +385,8 @@
       if (el) { el.textContent = status.text; el.className = "status-pill" + (status.busy ? " busy" : ""); }
       const today = $("embed-today");
       if (today) { const html = embedTodayHtml(s); if (today.innerHTML !== html) today.innerHTML = html; }
+      const shared = $("embed-shared");
+      if (shared) { const html = embedSharedHtml(s); if (shared.innerHTML !== html) shared.innerHTML = html; }
       const notice = $("settings-notice");
       if (notice) { notice.textContent = s.notice || ""; notice.className = "settings-notice " + (s.noticeKind || ""); }
       const check = /** @type {HTMLButtonElement | null} */ (transcript.querySelector('[data-sact="check"]'));
@@ -436,6 +438,9 @@
             `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
             label("Daily budget", "embedBudget", saved("embedBudget")) + `<div class="row-field"><input class="field" id="sf-embedBudget" data-field="embedBudget" inputmode="numeric" spellcheck="false" value="${escape(String(s.embedBudget))}"><span class="grey">tokens a day</span></div>` +
             `<div class="hint" id="embed-today">${embedTodayHtml(s)}</div>` +
+            label("Shared embeddings folder (optional)", "embeddingsCache", saved("embeddingsCache")) + `<input class="field" id="sf-embeddingsCache" data-field="embeddingsCache" spellcheck="false" placeholder="A folder your team shares, such as a network share" value="${escape(s.embeddingsCache || "")}">` +
+            `<div class="hint">What one PC has embedded, the others take from this folder: no tokens, and nothing against the daily budget. It holds numbers only (no text, no file names), but they come from your docs, so share it only with people who may read them.</div>` +
+            `<div class="hint" id="embed-shared">${embedSharedHtml(s)}</div>` +
             `<div class="hint">Meaning search finds passages that say the same thing in other words. It sends every passage of your docs folders to the gateway once to be turned into numbers, then only changed files, and each search's words. The log (Copy diagnostics) shows the tokens each run used.</div>`
           : `<div class="hint">Keywords: the index stays on this PC, and only the passages the model reads are sent.</div>`)),
       skills: section("", skillsHtml(s)),
@@ -658,6 +663,15 @@
     const reached = Number(m.today) >= Number(m.budget);
     return `Embedded today: ${compact(Number(m.today) || 0)} of ${compact(Number(m.budget) || 0)} tokens${m.raised ? " (raised for today)" : ""}.` +
       (reached || m.paused ? (s.locked?.embedBudget ? " It waits for tomorrow (midnight UTC)." : ` It waits for tomorrow (midnight UTC), or <button class="link" data-sact="raiseEmbedBudget">raise it for today</button>.`) : "");
+  }
+
+  /** What the shared embeddings folder has done since VS Code started, or why it isn't used. @param {any} s */
+  function embedSharedHtml(s) {
+    const m = s.docsStatus?.meaning;
+    if (!m || !m.shared) return "";
+    if (m.sharedProblem) return `<span class="warn">The shared folder isn't being used: ${escape(m.sharedProblem)}</span>`;
+    const count = (/** @type {number} */ n) => Number(n).toLocaleString("en-US") + (Number(n) === 1 ? " passage" : " passages");
+    return m.reused || m.given ? `Since VS Code started: ${count(m.reused || 0)} taken from the shared folder, ${count(m.given || 0)} put there.` : "";
   }
 
   function docsStatusText(d) {

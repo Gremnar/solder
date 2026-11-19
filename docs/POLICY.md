@@ -39,6 +39,7 @@ Solder reads two registry keys, both writable only by administrators:
 | `AllowUserSkills` | REG_DWORD | With `SkillsFolders` set: `1` lets users add skills folders of their own beside the organization's (where a skill they ask Solder to save goes); `0` or absent, only the organization's, and users can't save new skills. |
 | `EmbedDailyBudget` | REG_DWORD | The most tokens search by meaning may send to the embeddings model in a day (from midnight UTC). Past it, embedding waits for the next day; keyword search goes on. `0`: no embedding. Users can't change it or raise it for the day. Absent: 250,000, and users can change it. |
 | `EmbeddingModel` | REG_SZ | The gateway's embeddings model, for search by meaning. |
+| `EmbeddingsCache` | REG_SZ | A folder where PCs share docs embeddings, such as `\\fileserver\it\solder-embeddings`. What one PC has embedded, the others take from it: no tokens, nothing against the daily budget. Users need read and write access. It holds numbers only (no text, no file names), but they're derived from the docs: give access only to people who may read those docs. |
 | `Rules` | REG_MULTI_SZ | Rules that replace the user's own, one per line. |
 | `OrgRules` | REG_MULTI_SZ | Rules added after the user's own, so they read as the more recent instruction. Users see them in settings but can't change them. |
 | `InstructionFiles` | REG_MULTI_SZ | Workspace files the model follows, one per line, such as `AGENTS.md`. |

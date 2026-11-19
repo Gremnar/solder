@@ -17,6 +17,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
+const crypto = require("node:crypto");
 
 const SECTION_CHARS = 1_400;
 const MAX_FOLDER_FILES = 20_000;
@@ -34,6 +35,8 @@ const MARKDOWN = new Set([".md", ".markdown", ".mdx", ".mdown"]);
 const UNLISTED_KEPT_MS = 14 * 24 * 60 * 60 * 1000;
 /** An embedding run of this many passages or more asks first, with its estimated cost. */
 const CONFIRM_PASSAGES = 300;
+/** The shared embeddings folder is asked again for what it didn't have, and gone over again with nothing changed, this often. */
+const SHARED_AGAIN_MS = 10 * 60 * 1000;
 /** Passages sent to the embeddings model at once. */
 const EMBED_BATCH = 32;
 /** How many each search takes from the keyword ranking and from the meaning ranking before they're merged. */
@@ -394,7 +397,11 @@ class DocsIndex {
     /** @type {Map<string, number>} when each folder was last looked at (walked, in full or as far as allowed) */
     this.walked = new Map();
     /** What embedding has done: this run, and in all (tokens are the gateway's count). */
-    this.embedding = { done: 0, tokens: 0, runTokens: 0, error: "", paused: false };
+    this.embedding = { done: 0, tokens: 0, runTokens: 0, error: "", paused: false, reused: 0, given: 0, sharedProblem: "" };
+    /** The shared embeddings folder: the last pass that got through everything, and what it didn't have (asked again later). */
+    this.sharedPass = /** @type {{mark: string, at: number} | null} */ (null);
+    /** @type {Map<string, number>} */
+    this.sharedMisses = new Map();
     /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
     this.loaded = null;
     this.version = 0;
@@ -428,7 +435,8 @@ class DocsIndex {
           heading, body, tokenize = 'porter unicode61');
         CREATE TABLE IF NOT EXISTS vectors(sid INTEGER PRIMARY KEY, key TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL);
         CREATE INDEX IF NOT EXISTS vectors_key ON vectors(key);
-        CREATE TABLE IF NOT EXISTS roots(root TEXT PRIMARY KEY, seen INTEGER NOT NULL);`);
+        CREATE TABLE IF NOT EXISTS roots(root TEXT PRIMARY KEY, seen INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS shared(key TEXT NOT NULL, model TEXT NOT NULL, folder TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(key, model, folder));`);
       return db;
     };
     try {
@@ -478,13 +486,119 @@ class DocsIndex {
   }
 
   /**
-   * Vectors for the passages that have none (or another model's). Stops at `stop`, or at the gateway's first
-   * refusal (kept in this.embedding.error); the keyword index works either way.
+   * Vectors for the passages that have none (or another model's): from the shared embeddings folder where it has
+   * them (no tokens), then from the gateway; and what this PC has embedded is put in the shared folder for the rest.
    * @param {{model: string, fn: (texts: string[], signal?: AbortSignal) => Promise<{vectors: number[][], tokens: number}>,
+   *          confirm?: (passages: number, tokens: number) => Promise<boolean>, cache?: EmbedCache | null,
    *          onBatch?: (done: number, tokens: number) => void, left?: () => number, spend?: (tokens: number) => void}} embed
    *   left: today's embedding budget still to spend (none: no budget); spend: counts what a batch used @param {number} stop @param {AbortSignal} [signal]
    */
   async _embed(embed, stop, signal) {
+    const cache = embed.cache || null;
+    this.embedding.sharedProblem = "";
+    if (cache) {
+      cache.again();
+      await this._share(cache, embed.model, stop, signal);
+    }
+    const before = this.embedding.done;
+    try {
+      await this._embedMissing(embed, stop, signal);
+    } finally {
+      // What this run embedded goes to the shared folder now, not at the next start.
+      if (cache && this.embedding.done > before && !signal?.aborted) await this._share(cache, embed.model, Math.max(stop, Date.now() + 20_000), signal);
+      if (cache) this.embedding.sharedProblem = cache.off ? cache.problem || "it can't be used" : "";
+    }
+  }
+
+  /**
+   * The shared embeddings folder, both ways, a file at a time: a file with passages that have no vector takes the
+   * folder's, if it has them for exactly these passages; a file whose passages all have one is put there, unless it's
+   * there. Nothing here throws or takes long over one file: the folder is a convenience, never needed.
+   * @param {EmbedCache} cache @param {string} model @param {number} stop @param {AbortSignal} [signal]
+   */
+  async _share(cache, model, stop, signal) {
+    try {
+      const db = this._open();
+      const listed = this._inListed("key");
+      // Nothing changed since a pass that got through everything (and not long ago): nothing to do.
+      const shape = db.prepare("SELECT count(*) AS n, coalesce(max(rowid), 0) AS top FROM sections").get();
+      const mark = [cache.folder, model, this.version, shape.n, shape.top, listed.values.join("|")].join("\n");
+      if (this.sharedPass && this.sharedPass.mark === mark && Date.now() - this.sharedPass.at < SHARED_AGAIN_MS) return;
+      // One pass over the passages, in pages: each file's ids, and the hash of its passages' text.
+      /** @type {Map<string, {hash: PassagesHash, sids: number[]}>} */
+      const files = new Map();
+      const page = db.prepare(`SELECT rowid AS sid, key, path, heading, body FROM sections WHERE rowid > ? AND ${listed.sql} ORDER BY rowid LIMIT 500`);
+      for (let after = 0; ;) {
+        if (Date.now() > stop || signal?.aborted) return;
+        const rows = page.all(after, ...listed.values);
+        if (!rows.length) break;
+        for (const row of rows) {
+          const key = String(row.key);
+          let file = files.get(key);
+          if (!file) files.set(key, file = { hash: new PassagesHash(model), sids: [] });
+          file.hash.add(passageText(row));
+          file.sids.push(Number(row.sid));
+        }
+        after = Number(rows[rows.length - 1].sid);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      const have = new Map(db.prepare("SELECT key, count(*) AS n FROM vectors WHERE model = ? GROUP BY key").all(model).map((row) => [String(row.key), Number(row.n)]));
+      const known = new Map(db.prepare("SELECT key, hash FROM shared WHERE model = ? AND folder = ?").all(model, cache.folder).map((row) => [String(row.key), String(row.hash)]));
+      const some = db.prepare("SELECT length(vec) AS bytes FROM vectors WHERE model = ? LIMIT 1").get(model);
+      let dims = some ? Number(some.bytes) / 4 : 0;
+      const vectorOf = db.prepare("SELECT vec FROM vectors WHERE sid = ? AND model = ?");
+      const add = db.prepare("INSERT OR REPLACE INTO vectors (sid, key, model, vec) VALUES (?, ?, ?, ?)");
+      const note = db.prepare("INSERT OR REPLACE INTO shared (key, model, folder, hash) VALUES (?, ?, ?, ?)");
+      let finished = true;
+      for (const [key, file] of files) {
+        if (Date.now() > stop || signal?.aborted || cache.off) { finished = false; break; }
+        const hash = file.hash.hex();
+        if ((have.get(key) || 0) >= file.sids.length) {
+          // Every passage has its vector: the folder gets them, unless it has them (known from before, or there now).
+          if (known.get(key) === hash) continue;
+          if (!await cache.has(model, hash)) {
+            const vectors = file.sids.map((sid) => vectorOf.get(sid, model)?.vec).filter(Boolean).map((vec) => Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength));
+            if (vectors.length !== file.sids.length || !await cache.write(model, hash, vectors)) { finished = finished && !cache.off; continue; }
+            this.embedding.given += file.sids.length;
+          }
+          note.run(key, model, cache.folder, hash);
+          continue;
+        }
+        // Some passages have none: asked for once in a while, not at every pass.
+        if (Date.now() - (this.sharedMisses.get(hash) ?? 0) < SHARED_AGAIN_MS) continue;
+        const vectors = await cache.read(model, hash, file.sids.length, dims);
+        if (!vectors) { if (!cache.off) this.sharedMisses.set(hash, Date.now()); continue; }
+        db.exec("BEGIN");
+        try {
+          file.sids.forEach((sid, index) => add.run(sid, key, model, vectors[index]));
+          note.run(key, model, cache.folder, hash);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+        dims ||= vectors[0].byteLength / 4;
+        this.version++;
+        this.embedding.reused += file.sids.length;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (this.sharedMisses.size > 50_000) this.sharedMisses.clear();
+      if (finished) {
+        const now = db.prepare("SELECT count(*) AS n, coalesce(max(rowid), 0) AS top FROM sections").get();
+        this.sharedPass = { mark: [cache.folder, model, this.version, now.n, now.top, listed.values.join("|")].join("\n"), at: Date.now() };
+      }
+    } catch (error) {
+      cache.problem = error instanceof Error ? error.message : String(error);
+      cache.off = true;
+    }
+  }
+
+  /**
+   * Vectors from the gateway for the passages that still have none. Stops at `stop`, or at the gateway's first
+   * refusal (kept in this.embedding.error); the keyword index works either way.
+   * @param {any} embed as _embed's @param {number} stop @param {AbortSignal} [signal]
+   */
+  async _embedMissing(embed, stop, signal) {
     const db = this._open();
     this.embedding.runTokens = 0;
     this.embedding.error = "";
@@ -671,7 +785,8 @@ class DocsIndex {
     const gone = db.prepare(`SELECT key FROM files WHERE ${where}`).all(value).map((row) => String(row.key));
     const remove = db.prepare("DELETE FROM sections WHERE key = ?");
     const unvector = db.prepare("DELETE FROM vectors WHERE key = ?");
-    for (const key of gone) { remove.run(key); if (unvector.run(key).changes) this.version++; }
+    const unshare = db.prepare("DELETE FROM shared WHERE key = ?");
+    for (const key of gone) { remove.run(key); unshare.run(key); if (unvector.run(key).changes) this.version++; }
     db.prepare(`DELETE FROM files WHERE ${where}`).run(value);
   }
 
@@ -811,6 +926,198 @@ async function listFiles(root, late) {
   return { files, complete: true, truncated };
 }
 
+// ---------------------------------------------------------------- shared embeddings --
+
+const CACHE_MAGIC = Buffer.from("SLDRVEC1", "latin1");
+const CACHE_HEADER = CACHE_MAGIC.length + 8;
+const CACHE_DIGEST = 32;
+/** A file's vectors are a few MB at most; anything bigger in the folder isn't ours. */
+const MAX_CACHE_BYTES = 256 * 1024 * 1024;
+const MAX_DIMS = 16_384;
+/** One read or write of the shared folder may take this long (a share that's gone can hang far longer). */
+const CACHE_OP_MS = 10_000;
+/** After this many failures in a row the folder is left alone until the next run. */
+const CACHE_FAILURES = 3;
+
+/**
+ * What names a file's vectors in the shared folder: the embeddings model and the exact text of every passage, in
+ * order (each is what was sent to be embedded: the file's name, the heading, the text). The same file indexed on
+ * another PC gives the same name, wherever it's kept; a file that changed gives another.
+ */
+class PassagesHash {
+  /** @param {string} model */
+  constructor(model) {
+    this.hash = crypto.createHash("sha256").update(`solder-embeddings-1\n${model}\n`, "utf8");
+  }
+
+  /** @param {string} text a passage, as sent to be embedded */
+  add(text) {
+    this.hash.update(`${Buffer.byteLength(text, "utf8")}\n`, "utf8").update(text, "utf8");
+    return this;
+  }
+
+  hex() { return this.hash.digest("hex"); }
+}
+
+/** @template T @param {Promise<T>} work @param {number} ms @returns {Promise<T>} */
+function within(work, ms) {
+  let timer;
+  return Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("it didn't answer in time")), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
+/**
+ * A folder of embeddings shared between PCs (a network share, say), so the same docs aren't embedded again by
+ * everyone: one small file per indexed file, holding its passages' vectors and nothing else (no text, no paths).
+ *
+ * - Named by PassagesHash, in <folder>/<model>/<first two characters>/<hash>.vec.
+ * - Written whole to a temporary name and renamed, so a reader never sees half a file, and two PCs writing the same
+ *   one do no harm (it's the same content).
+ * - Read with care: the size, the counts and a checksum must all agree, and every number must be finite. What's
+ *   read is only ever numbers used to rank the reader's own passages.
+ * - Every call is asynchronous and timed: a share that's away can't hold the extension up. After a few failures in a
+ *   row it's left alone (this.off) until the next run.
+ */
+class EmbedCache {
+  /** @param {string} folder */
+  constructor(folder) {
+    this.folder = path.resolve(folder);
+    this.failures = 0;
+    this.off = false;
+    this.problem = "";
+  }
+
+  /** The folder a model's vectors are in: its name made safe, with a short hash so two names can't meet. @param {string} model */
+  static modelFolder(model) {
+    return (String(model).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^\.+/, "").slice(0, 60) || "model") + "-" + crypto.createHash("sha256").update(String(model), "utf8").digest("hex").slice(0, 8);
+  }
+
+  /** @param {string} model @param {string} hash */
+  fileOf(model, hash) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("not a passages hash");
+    return path.join(this.folder, EmbedCache.modelFolder(model), hash.slice(0, 2), hash + ".vec");
+  }
+
+  /** A new run: the folder is tried again. */
+  again() {
+    this.failures = 0;
+    this.off = false;
+    this.problem = "";
+  }
+
+  /** @param {unknown} error */
+  _failed(error) {
+    this.problem = error instanceof Error ? error.message : String(error);
+    if (++this.failures >= CACHE_FAILURES) this.off = true;
+  }
+
+  /** Whether the folder has this file's vectors. @param {string} model @param {string} hash */
+  async has(model, hash) {
+    if (this.off) return false;
+    try {
+      await within(fs.promises.access(this.fileOf(model, hash)), CACHE_OP_MS);
+      this.failures = 0;
+      return true;
+    } catch (error) {
+      if (/** @type {any} */ (error)?.code !== "ENOENT") this._failed(error);
+      return false;
+    }
+  }
+
+  /**
+   * A file's vectors from the folder, or null when it has none that can be used.
+   * @param {string} model @param {string} hash @param {number} count the file's passages: the vectors must be that many
+   * @param {number} [dims] the length the vectors must have (this model's others on this PC), when known
+   * @returns {Promise<Buffer[] | null>} each as the index stores it: normalised 32-bit floats
+   */
+  async read(model, hash, count, dims = 0) {
+    if (this.off || count < 1) return null;
+    let data;
+    try {
+      const file = this.fileOf(model, hash);
+      data = await within((async () => {
+        const size = (await fs.promises.stat(file)).size;
+        if (size > MAX_CACHE_BYTES) return null;
+        return fs.promises.readFile(file);
+      })(), CACHE_OP_MS);
+      this.failures = 0;
+    } catch (error) {
+      if (/** @type {any} */ (error)?.code !== "ENOENT") this._failed(error);
+      return null;
+    }
+    return data ? unpackShared(data, count, dims) : null;
+  }
+
+  /**
+   * Put a file's vectors in the folder (once: one that's there is left). Never throws.
+   * @param {string} model @param {string} hash @param {Buffer[]} vectors as the index stores them @returns {Promise<boolean>} whether it's there now
+   */
+  async write(model, hash, vectors) {
+    if (this.off) return false;
+    const data = packShared(vectors);
+    if (!data) return false;
+    let temp = "";
+    try {
+      const file = this.fileOf(model, hash);
+      temp = `${file}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+      await within((async () => {
+        await fs.promises.mkdir(path.dirname(file), { recursive: true });
+        await fs.promises.writeFile(temp, data, { flag: "wx" });
+        await fs.promises.rename(temp, file);
+      })(), CACHE_OP_MS);
+      this.failures = 0;
+      return true;
+    } catch (error) {
+      if (temp) fs.promises.unlink(temp).catch(() => {});
+      // Another PC put the same file there meanwhile (the rename found it open, say): it's there, which is all that's wanted.
+      if (temp && await within(fs.promises.access(this.fileOf(model, hash)), CACHE_OP_MS).then(() => true, () => false)) return true;
+      this._failed(error);
+      return false;
+    }
+  }
+}
+
+/** A shared file's bytes from vectors (all one length), or null when they aren't that. @param {Buffer[]} vectors */
+function packShared(vectors) {
+  const bytes = vectors[0]?.byteLength ?? 0;
+  if (!vectors.length || !bytes || bytes % 4 || bytes / 4 > MAX_DIMS || vectors.some((vec) => vec.byteLength !== bytes)) return null;
+  const head = Buffer.alloc(CACHE_HEADER);
+  CACHE_MAGIC.copy(head);
+  head.writeUInt32LE(vectors.length, CACHE_MAGIC.length);
+  head.writeUInt32LE(bytes / 4, CACHE_MAGIC.length + 4);
+  const body = Buffer.concat([head, ...vectors]);
+  return Buffer.concat([body, crypto.createHash("sha256").update(body).digest()]);
+}
+
+/**
+ * The vectors in a shared file's bytes, or null unless all of it is as it should be: the header, the counts, the size,
+ * the checksum, and finite numbers throughout. Each comes back normalised again (they're stored that way; a file
+ * someone made by hand might not be). @param {Buffer} data @param {number} count @param {number} [dims]
+ */
+function unpackShared(data, count, dims = 0) {
+  if (data.length < CACHE_HEADER + CACHE_DIGEST || !data.subarray(0, CACHE_MAGIC.length).equals(CACHE_MAGIC)) return null;
+  const n = data.readUInt32LE(CACHE_MAGIC.length);
+  const d = data.readUInt32LE(CACHE_MAGIC.length + 4);
+  if (n !== count || d < 1 || d > MAX_DIMS || (dims && d !== dims) || data.length !== CACHE_HEADER + n * d * 4 + CACHE_DIGEST) return null;
+  const body = data.subarray(0, data.length - CACHE_DIGEST);
+  if (!crypto.createHash("sha256").update(body).digest().equals(data.subarray(data.length - CACHE_DIGEST))) return null;
+  /** @type {Buffer[]} */
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const vector = new Array(d);
+    let size = 0;
+    for (let j = 0; j < d; j++) {
+      const value = data.readFloatLE(CACHE_HEADER + (i * d + j) * 4);
+      if (!Number.isFinite(value)) return null;
+      vector[j] = value;
+      size += value * value;
+    }
+    if (!(size > 0)) return null; // all zeros: not a direction
+    out.push(packed(vector));
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- the daily embedding budget --
 
 /** The gateway's day: it starts at midnight UTC. @param {Date} [now] */
@@ -879,4 +1186,4 @@ class EmbedBudget {
 }
 
 module.exports = { DocsIndex, available, documentText, isOffice, decodeText, SIGNED, signatureBlocks, withoutSignatures, unzip, officeText, sections, queryTerms,
-  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay };
+  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay, EmbedCache, PassagesHash, packShared, unpackShared };

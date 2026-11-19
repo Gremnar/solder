@@ -180,7 +180,7 @@ class SolderPanel {
         if (event.affectsConfiguration("solder")) { this._client = null; this.refreshModels(); }
         if (event.affectsConfiguration("solder.readOnly")) this.post();
         if (event.affectsConfiguration("solder.docsFolders") || event.affectsConfiguration("solder.docsSearch")
-          || event.affectsConfiguration("solder.embeddingModel")) this.tools.refreshDocs();
+          || event.affectsConfiguration("solder.embeddingModel") || event.affectsConfiguration("solder.embeddingsCache")) this.tools.refreshDocs();
       }),
     );
     // The organisation's policy, read again every so often (Group Policy refreshes about every 90 minutes).

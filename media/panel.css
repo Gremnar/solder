@@ -797,3 +797,5 @@ body.vscode-high-contrast .switch { outline: 1px solid var(--vscode-contrastBord
 .projects .yskill + .yskill { border-top: 1px solid var(--hairline); }
 .projects .yskill-text { flex: 1; min-width: 0; }
 .projects .yskill .hint { margin: 1px 0 0; }
+.settings .hint .warn { color: var(--warn); }
+.settings .hint:empty { display: none; }

@@ -103,6 +103,10 @@
       <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="EmbeddingModel" valueName="EmbeddingModel" maxLength="256" required="true" /></elements>
     </policy>
+    <policy name="EmbeddingsCache" class="Both" displayName="$(string.EmbeddingsCache)" explainText="$(string.EmbeddingsCache_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbeddingsCache)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><text id="EmbeddingsCache" valueName="EmbeddingsCache" maxLength="1024" required="true" /></elements>
+    </policy>
     <policy name="Rules" class="Both" displayName="$(string.Rules)" explainText="$(string.Rules_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.Rules)">
       <parentCategory ref="Rules" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><multiText id="Rules" valueName="Rules" maxLength="8192" required="true" /></elements>
