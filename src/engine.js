@@ -496,6 +496,8 @@ class Engine {
       message.content += left.text;
       message.meta.summary += left.summary;
     }
+    // A file read again in this task: its older copy is cut (the newer one holds the same lines).
+    if (added.some((m) => m.meta?.name === "read_file" && !m.meta.failed) && supersedeReads(chat)) await this._save(chat);
     // Notes ride on the last result: the step limit near, and anything you typed meanwhile.
     const last = added[added.length - 1];
     if (last) {
@@ -900,8 +902,9 @@ function repeatReads(chat) {
       const before = seen.get(key) || [];
       // A covering read still whole in the chat makes this one avoidable, whatever older ones were cut.
       const covers = (/** @type {{from: number, to: number}} */ read) => read.from <= from && read.to >= to;
-      const first = before.find((read) => covers(read) && !read.message.meta?.stub) ?? before.find(covers);
-      if (first?.message.meta?.stub) out.afterCut++;
+      const wasWhole = (/** @type {{message: Stored}} */ read) => !read.message.meta?.stub || !!read.message.meta?.superseded;
+      const first = before.find((read) => covers(read) && wasWhole(read)) ?? before.find(covers);
+      if (first && !wasWhole(first)) out.afterCut++;
       else if (first) { out.again++; out.againTokens += Math.round(estimate(message.content) * ratio); }
       seen.set(key, [...before, { from, to, message }]);
     } else if (call.name === "edit_file" || call.name === "write_file" || call.name === "remove_item") seen.delete(pathKey(call.args.path));
@@ -1052,7 +1055,51 @@ function standInArgument(args) {
 /** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
 function resultText(message) {
   if (!message.meta?.stub) return message.content;
-  return TEXTS.stub(message.meta.summary) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
+  // Cut because a later read covers it: the stand-in points at that copy, and doesn't say to read again.
+  return (message.meta.superseded ? TEXTS.superseded(message.meta.summary) : TEXTS.stub(message.meta.summary)) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
+}
+
+/** The lines a read_file result brought back: its summary says when it was part of the file, else all of it. @param {Stored} message */
+function linesRead(message) {
+  const part = /lines ([\d,]+)–([\d,]+) of/.exec(String(message.meta?.summary ?? ""));
+  return { from: part ? Number(part[1].replace(/,/g, "")) : 1, to: part ? Number(part[2].replace(/,/g, "")) : Infinity };
+}
+
+/**
+ * When the task reads lines of a file it has read before, the older copy is cut to a line: the newer one, right
+ * after it in the chat, has the same lines (or, after an edit, the right ones). Every result is sent again with each
+ * step, so two copies of a file cost double for the rest of the task, and the older may be out of date. Unlike other
+ * cuts, this one can't send the model back to read again: what it reads is still there, once.
+ * Only within the task in progress; only a read the newer one covers whole; never a result that carries something to
+ * keep (a skill, a folder's AGENTS.md), nor on the strength of a read that was itself cut short.
+ * @param {Chat} chat @returns {number} how many older copies were cut
+ */
+function supersedeReads(chat) {
+  /** @type {Map<string, {name: string, args: any}>} */
+  const calls = new Map();
+  /** @type {Map<string, {from: number, to: number, message: Stored}[]>} */
+  const seen = new Map();
+  let cut = 0;
+  for (const message of chat.messages.slice(Math.max(chat.compaction ? chat.compaction.through : 0, taskStart(chat)))) {
+    for (const call of message.tool_calls || []) calls.set(call.id, { name: call.function?.name, args: argumentsOf(call) });
+    if (message.role !== "tool" || message.meta?.failed) continue;
+    const call = calls.get(String(message.tool_call_id));
+    if (!call || call.name !== "read_file") continue;
+    const key = pathKey(call.args.path);
+    if (!key) continue;
+    const now = linesRead(message);
+    const before = seen.get(key) || [];
+    // A read that came back capped (its middle left out) doesn't hold all the lines it names.
+    const whole = !message.meta?.stub && message.content.length < MAX_RESULT_CHARS;
+    if (whole) {
+      for (const old of before) {
+        if (old.message.meta?.stub || old.message.meta?.keep || old.message.content.length <= STUB_MIN_CHARS) continue;
+        if (old.from >= now.from && old.to <= now.to) { old.message.meta.stub = true; old.message.meta.superseded = true; cut++; }
+      }
+    }
+    seen.set(key, [...before, { ...now, message }]);
+  }
+  return cut;
 }
 
 /**
@@ -1257,5 +1304,5 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { Engine, outbound, trim, removeTurn, laterMessages, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, tokenReport,
+module.exports = { Engine, outbound, trim, removeTurn, laterMessages, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, supersedeReads, tokenReport,
   KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

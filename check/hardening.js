@@ -118,6 +118,54 @@ async function main() {
     panel.useChat(a);
     check("... until the message it went with is gone (deleted, or edited away)", asks());
 
+    // ---- what's attached goes whole only up to a budget; the rest by its path; each chip says what it costs
+    {
+      const state = () => { posted.length = 0; panel.post(); return posted.filter((m) => m.type === "state").at(-1); };
+      const lines = (mark, count) => Array.from({ length: count }, (_, i) => `${mark} ${i}: ${"x".repeat(40)}`).join("\n");
+      const first = lines("first", 600); // about 30,000 characters each
+      const second = lines("second", 600);
+      const e = Engine.newChat();
+      panel.chat = e;
+      panel.useChat(e);
+      panel.attachPaste(first);
+      panel.attachPaste(second);
+      const file = path.join(T, "outside-hardening", "notes.txt");
+      fs.writeFileSync(file, lines("note", 100));
+      await panel.attachFiles([vscode.Uri.file(file)]);
+      let chips = state().attachments;
+      check("each chip says what it costs: about how many tokens sent whole, or that it goes by its path",
+        chips.length === 3 && chips[0].byPath === false && Math.abs(chips[0].tokens - first.length / 4) < 2 && chips[1].byPath === true && chips[1].tokens === 0
+        && chips[2].byPath === false && chips[2].tokens > 1000, chips.map((c) => [c.label, c.tokens, c.byPath]));
+      asked.length = 0;
+      await panel.send({ text: "what do these say?" });
+      const context = asked[0]?.extra.context || "";
+      const saved = /It's saved as (.+?\.txt)\. Read the parts you need/.exec(context)?.[1] || "";
+      check("sent: what fits goes whole, in the order attached; the paste that doesn't is saved and goes by its path",
+        context.includes("first 0: ") && context.includes("note 0: ") && !context.includes("second 0: ") && /\(Pasted text, 600 lines: too long to send whole\./.test(context)
+        && !!saved && fs.existsSync(saved) && fs.readFileSync(saved, "utf8") === second, [context.length, saved]);
+      check("... about a budget's worth of text went, not all of it", context.length < 40_000 + 2_000 && context.length > 30_000, context.length);
+      check("... the saved paste is in Solder's own storage, and the task reads it without asking", saved.toLowerCase().startsWith(path.join(T, "gs-hardening", "pastes").toLowerCase())
+        && panel.tools.needsApproval("read_file", { path: saved }) === null, saved);
+      check("... and it stays with the message as a paste read by its path, with its chip as before", asked[0].extra.attachments[1].kind === "path" && asked[0].extra.attachments[1].pasted === true
+        && asked[0].extra.attachments[1].text === undefined && asked[0].extra.chips.includes("Pasted · 600 lines"), [asked[0].extra.attachments.map((x) => x.kind), asked[0].extra.chips]);
+      // Two files that don't both fit: the second goes by its own path (it's a file already).
+      const one = path.join(T, "outside-hardening", "one.log");
+      const two = path.join(T, "outside-hardening", "two.log");
+      fs.writeFileSync(one, lines("one", 600));
+      fs.writeFileSync(two, lines("two", 600));
+      const f = Engine.newChat();
+      panel.chat = f;
+      panel.useChat(f);
+      await panel.attachFiles([vscode.Uri.file(one), vscode.Uri.file(two)]);
+      asked.length = 0;
+      await panel.send({ text: "compare them" });
+      const both = asked[0]?.extra.context || "";
+      check("two files that don't both fit: the first whole, the second by its path, read without asking once sent", both.includes("one 0: ") && !both.includes("two 0: ")
+        && /\(Attached file .*two\.log, 600 lines: too long to send whole\./.test(both) && panel.tools.needsApproval("read_file", { path: two }) === null, both.slice(-200));
+      panel.chat = a;
+      panel.useChat(a);
+    }
+
     // ---- a chat works in its own folder whichever window opens it
     check("a folder saved relative to another window's first folder is that folder, not one of the same name here",
       panel.folderOf({ folder: "src", home: path.join(T, "other-home") }).toLowerCase() === path.join(T, "other-home", "src").toLowerCase()

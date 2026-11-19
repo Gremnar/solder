@@ -799,3 +799,5 @@ body.vscode-high-contrast .switch { outline: 1px solid var(--vscode-contrastBord
 .projects .yskill .hint { margin: 1px 0 0; }
 .settings .hint .warn { color: var(--warn); }
 .settings .hint:empty { display: none; }
+
+.chip.attached .cost { opacity: 0.7; font-variant-numeric: tabular-nums; }

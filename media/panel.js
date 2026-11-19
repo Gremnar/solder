@@ -1169,8 +1169,13 @@
     else if (editor.file) chips.push(`<button class="chip${chipsOn.file ? " on" : ""}" data-chip="file" aria-pressed="${chipsOn.file}" title="Tell Solder which file is open">${escape(base(editor.file))}</button>`);
     // What goes with your next message: text files you attached, and long text you pasted (kept out of the box).
     for (const a of state.attachments || []) {
-      chips.push(`<button class="chip on attached" data-open-attachment="${escape(a.id)}" title="${escape(a.peek || "")}&#10;&#10;Goes with your next message. Click to look at it.">` +
-        `${a.paste ? ICONS.clipboard : ICONS.clip}${escape(a.label)}</button>` +
+      // What it will cost: sent whole, about that many tokens with this message and again with every step of the
+      // task; by its path, only the lines the model reads.
+      const cost = a.byPath ? "by path" : a.tokens ? `~${compact(a.tokens)} tokens` : "";
+      const why = a.byPath ? "Too long to send whole with the rest: Solder reads the lines it needs from it, so it costs only what's read."
+        : a.tokens ? `Sent whole: about ${Number(a.tokens).toLocaleString("en-US")} tokens with your message, and again with each step of the task.` : "";
+      chips.push(`<button class="chip on attached" data-open-attachment="${escape(a.id)}" title="${escape(a.peek || "")}&#10;&#10;${escape(why)}&#10;Goes with your next message. Click to look at it.">` +
+        `${a.paste ? ICONS.clipboard : ICONS.clip}${escape(a.label)}${cost ? `<span class="cost"> · ${escape(cost)}</span>` : ""}</button>` +
         `<button class="chip clear" data-remove-attachment="${escape(a.id)}" title="Don't send it" aria-label="Remove ${escape(a.label)}">✕</button>`);
     }
     if (chips.join("") !== shownChips) {

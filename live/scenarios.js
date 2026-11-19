@@ -660,4 +660,40 @@ SCENARIOS.push({
     : !/4,?321/.test(answer) ? "the line number is missing or wrong: " + answer.slice(0, 200) : "",
 });
 
+SCENARIOS.push({
+  name: "pasted-path",
+  about: "a 5,000-line paste too long to send whole, saved and given by its path: the model reads or searches for what it needs",
+  setup: (w) => w("pastes/9c41d2aa07e3.txt", Array.from({ length: 5000 }, (_, i) => i === 3187
+    ? "2026-11-18 14:41:09 FATAL scheduler stopped: disk quota exceeded writing checkpoint 5521"
+    : `2026-11-18 13:${String(i % 60).padStart(2, "0")}:00 INFO job ${i} finished`).join("\n") + "\n"),
+  task: (/** @type {any} */ prompt) => "I pasted a log. Something stopped in it: what was it, and on which line?\n\n" + prompt.CONTEXT.pastedPath("pastes/9c41d2aa07e3.txt", 5000),
+  check: ({ answer }) => !/quota/i.test(answer) || !/5521/.test(answer) ? "what stopped wasn't found: " + answer.slice(0, 200)
+    : !/3,?188/.test(answer) ? "the line number is missing or wrong: " + answer.slice(0, 200) : "",
+});
+
+/** A settings file long enough that a read of it is worth cutting (well over 2,000 characters). */
+const SETTINGS_FILE = ["// Settings for the sync service.", "const settings = {",
+  "  timeoutSeconds: 30,",
+  ...Array.from({ length: 90 }, (_, i) => `  option${String(i + 1).padStart(2, "0")}: ${(i * 37) % 100}, // tuned for the ${["batch", "nightly", "live"][i % 3]} path`),
+  "  retryLimit: 7,", "  region: \"north\",", "};", "module.exports = settings;", ""].join("\n");
+
+SCENARIOS.push({
+  name: "reread",
+  about: "a file read, edited, then read again in one task: the older copy is cut to a line pointing at the newer, and the model answers from the newer without reading in circles",
+  setup: (w) => w("src/settings.js", SETTINGS_FILE),
+  task: "In src/settings.js, change timeoutSeconds from 30 to 45. Then read the whole file again to check your edit landed, and tell me what retryLimit is set to and which line it's on.",
+  check: ({ answer, chat, ws, load }) => {
+    let settings;
+    try { settings = load("src/settings.js"); } catch (e) { return "the file doesn't run: " + /** @type {any} */ (e).message; }
+    if (settings.timeoutSeconds !== 45) return "timeoutSeconds is " + settings.timeoutSeconds;
+    if (settings.retryLimit !== 7 || settings.option01 !== 0) return "something else in the file changed";
+    const reads = ws.calls.filter((/** @type {any} */ c) => c.name === "read_file").length;
+    if (reads > 4) return `${reads} reads of one file: it went round in circles`;
+    const cut = chat.messages.filter((/** @type {any} */ m) => m.meta?.superseded).length;
+    if (reads >= 2 && !cut && chat.messages.some((/** @type {any} */ m) => m.role === "tool" && m.meta?.name === "read_file" && !m.meta.failed && m.content.length > 2000 && m !== [...chat.messages].reverse().find((/** @type {any} */ x) => x.meta?.name === "read_file")))
+      return "it read the file again, but the older copy wasn't cut";
+    return !/\b7\b/.test(answer) ? "retryLimit's value is missing: " + answer.slice(0, 200) : !/\b94\b/.test(answer) ? "its line (94) is missing or wrong: " + answer.slice(0, 200) : "";
+  },
+});
+
 module.exports = { SCENARIOS };

@@ -779,20 +779,23 @@ test("where the tokens went: every request's prompt tokens shared out by kind, s
 
   const now = breakdown(chat, "SYSTEM", [{ type: "function" }]);
   assert.equal(now.system, 6);
-  assert.equal(now.results, 4 * 4000 + "Edited.".length + 2); // and the blank line before what's kept
+  // e read all of a again, so the two earlier copies of it (a whole, b its lines 3–9) were cut: b.js and e are whole.
+  assert.equal(now.results, 2 * 4000 + "Edited.".length + 2); // and the blank line before what's kept
+  assert.deepEqual(["a", "b", "c", "e"].map((id) => !!chat.messages.find((m) => m.tool_call_id === id).meta.superseded), [true, true, false, false]);
   assert.equal(now.kept, 200);
   assert.equal(now.signatures, JSON.stringify(signature).length);
 
   // b re-read lines of a that were still whole in the chat; e read a again after an edit (fair); c was new.
-  assert.deepEqual(repeatReads(chat), { reads: 4, again: 1, againTokens: 750, afterCut: 0 }); // 4,000 characters, at this chat's token ratio (0.75)
-  chat.messages.find((m) => m.tool_call_id === "a").meta.stub = true;
+  assert.deepEqual(repeatReads(chat), { reads: 4, again: 1, againTokens: 941, afterCut: 0 }); // 4,000 characters, at this chat's token ratio (0.94)
+  // (a copy cut because it was read again was whole when that happened: it still counts as a repeat.)
+  delete chat.messages.find((m) => m.tool_call_id === "a").meta.superseded; // cut for space instead, before b read it again
   assert.deepEqual(repeatReads(chat), { reads: 4, again: 0, againTokens: 0, afterCut: 1 });
 
   const report = tokenReport(chat, "SYSTEM", [{ type: "function" }]).join("\n");
   assert.match(report, /5 requests · 9,800 in · 110 out \(25 of it thinking\) · 44 on summaries and titles/);
   assert.match(report, /tool results\s+[\d,]+\s+\d+%/);
   assert.match(report, /The next request as it stands, about [\d,]+ tokens:/);
-  assert.match(report, /Results in the chat: 4 whole, 1 cut to stand-ins/);
+  assert.match(report, /Results in the chat: 3 whole, 2 cut to stand-ins/);
   assert.match(report, /Reads: 4 · none repeated while the first was still in the chat · 1 again after the first read was cut\./);
   assert.doesNotMatch(report, /src|a\.js|xxxx/, "numbers only: no paths, no text");
   // An older chat: nothing recorded by kind.
@@ -913,4 +916,51 @@ test("read-only mode turned on while a reply's calls run stops the changes still
   await e2.ask(second, "write outside");
   assert.deepEqual(asking.ran, [], "Allow doesn't run it once read-only mode is on");
   assert.equal(second.messages.find((m) => m.tool_call_id === "1")?.content, TEXTS.readOnly);
+});
+
+test("a file read again in a task: the older copy is cut to a line that points at the newer one, and nothing else is", async () => {
+  const { supersedeReads } = require("../src/engine.js");
+  const body = (/** @type {string} */ mark) => mark.repeat(3000);
+  const reads = [];
+  const host = fakeHost({ tools: {
+    read_file: (args) => {
+      reads.push(args);
+      if (args.path === "skill.md") return { output: body("s"), summary: "Read the skill", keep: "KEPT" };
+      if (args.path === "small.js") return { output: "tiny", summary: "Read small.js · 1 line" };
+      return { output: body(String(reads.length)), summary: args.start_line ? `Read ${args.path} · lines ${args.start_line}–${args.end_line} of 400` : `Read ${args.path} · 400 lines` };
+    },
+    edit_file: () => ({ output: "Edited.", summary: "Edited a.js" }),
+  } });
+  const client = fakeClient([
+    { calls: [call("1", "read_file", { path: "a.js", start_line: 10, end_line: 50 }), call("2", "read_file", { path: "b.js" }), call("3", "read_file", { path: "skill.md" }), call("4", "read_file", { path: "small.js" })] },
+    { calls: [call("5", "read_file", { path: "a.js", start_line: 40, end_line: 90 })] }, // overlaps the first, doesn't cover it
+    { calls: [call("6", "edit_file", { path: "a.js", old_text: "x", new_text: "y" })] },
+    { calls: [call("7", "read_file", { path: "a.js" }), call("8", "read_file", { path: "skill.md" }), call("9", "read_file", { path: "small.js" })] }, // all of a again
+    { content: "Done." },
+  ]);
+  const chat = Engine.newChat();
+  await engine(client, host).ask(chat, "work on a");
+  const of = (/** @type {string} */ id) => chat.messages.find((m) => m.tool_call_id === id);
+  assert.deepEqual(["1", "2", "3", "4", "5", "7", "8", "9"].map((id) => !!of(id).meta.superseded), [true, false, false, false, true, false, false, false],
+    "both partial reads of a.js went once all of it was read again; b.js, the skill (it carries what's kept) and the tiny file stay");
+  // What the model was sent at each step: an overlap that doesn't cover leaves the older read alone.
+  const sent = (/** @type {number} */ step, /** @type {string} */ id) => client.sent[step].find((m) => m.tool_call_id === id)?.content;
+  assert.equal(sent(2, "1"), body("1"), "after the second read (lines 40–90), the first (10–50) is still whole");
+  assert.equal(sent(4, "1"), TEXTS.superseded("Read a.js · lines 10–50 of 400"));
+  assert.equal(sent(4, "5"), TEXTS.superseded("Read a.js · lines 40–90 of 400"));
+  assert.equal(sent(4, "7"), body("6"), "the newer copy (the sixth read) is whole");
+  assert.doesNotMatch(TEXTS.superseded("x"), /read it again/i, "it doesn't send the model back to read");
+  assert.equal(supersedeReads(chat), 0, "nothing more to cut the second time round");
+
+  // Another task: a read there doesn't reach back into the task before it.
+  const later = fakeClient([{ calls: [call("10", "read_file", { path: "b.js" })] }, { content: "Done." }]);
+  await engine(later, host).ask(chat, "now look at b");
+  assert.equal(!!of("2").meta.superseded, false, "an earlier task's read is left to the usual trimming");
+
+  // A newer read that came back capped (its middle left out) doesn't hold every line it names: the older stays.
+  const capped = Engine.newChat();
+  let n = 0;
+  const big = fakeHost({ tools: { read_file: () => ({ output: (++n === 1 ? "a" : "b").repeat(n === 1 ? 3000 : 50_000), summary: "Read c.js · 9,000 lines" }) } });
+  await engine(fakeClient([{ calls: [call("1", "read_file", { path: "c.js" })] }, { calls: [call("2", "read_file", { path: "./c.js" })] }, { content: "Done." }]), big).ask(capped, "read c twice");
+  assert.equal(!!capped.messages.find((m) => m.tool_call_id === "1").meta.superseded, false);
 });

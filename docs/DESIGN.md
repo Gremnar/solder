@@ -127,6 +127,14 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
   - **Its own screen.** The Projects screen (in the chat's place, as Settings is) lists projects with their chats, and a project's page shows its rules and skills in full. They're read there and edited in the editor, which is better at it; the page only renames the project and makes or deletes files.
 - **Theme:** VS Code's own CSS variables (`--vscode-*`), so it matches every theme. No CDN, no web fonts.
 
+## What's resent every step
+
+Decided 2026-11-18, after six reviewers were asked for the one change that would save the most. Cost is chat size times round trips, so text that rides along on every step is the expensive kind.
+
+- **Attachments have an inline budget** (`MAX_INLINE_CHARS`, 40,000 characters a message, in the order attached). Past it they go by path: a file from where it is, a paste from a copy saved in global storage (`pastes\<hash of the text>.txt`, kept 90 days). The model reads ranges with `read_file`, without asking, once the message is sent. A user message is never trimmed, so whole text was resent for the life of the task: one allowed paste was the whole compaction limit.
+- **Chips show the cost before Send:** an estimate at four characters a token, or "by path". No request is made for it.
+- **A read covered by a later read is cut** (`supersedeReads`, in the task in progress only). The newer copy is right after it and holds the same lines, or the right ones after an edit. This is the one cut that can't cause the re-read loop the A/B run found: nothing the model can still want is gone. Its stand-in says to use the later copy, not to read again. A result that carries something kept (a skill, a folder's instruction file) is never cut this way, nor is one whose would-be replacement came back capped.
+
 ## Shared embeddings
 
 Decided 2026-11-18.

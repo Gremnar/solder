@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **What you attach costs less.** Attached text goes whole with your message only up to about 40,000 characters in all. Past that, the rest goes by its path and the model reads the lines it needs: a file from where it is, a paste from a copy Solder saves in its own storage. Whole text is sent again with every step of a task, so a 400,000-character log used to cost about 100,000 tokens a step.
+- **Each chip says what it will cost** before you send: about how many tokens when it goes whole, or "by path".
+- **A file read twice in one task is kept once.** When the model reads lines of a file it has already read in the same task (often to check an edit), the older copy is cut to a line pointing at the newer one. Both used to be sent again with every later step. In a live test of read, edit, read again, the task used about 15% fewer tokens.
+
 Fixes from a review of 0.3.0 by six reviewers.
 
 - **Fix: sending from another chat could move a running task's files.** With a task working in one chat, pressing Send in another was refused, but first switched Solder to that other chat's folder and skills, so the task's next file could land in the wrong folder. A running task now keeps its folder, its skills and what it may read until it's done.

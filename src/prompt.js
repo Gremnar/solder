@@ -227,6 +227,9 @@ Send the call again with the real text written out in full.",
     `…(${chars.toLocaleString("en-US")} characters of this output are left out here; narrow the call down to see them)…`,
   stub: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}) and you saw the full output then; \
 it's left out here to save space. Read it again, narrowed down, if you still need it.`,
+  /** An earlier read_file result whose lines a later read in the same task brought back: the later copy is the one to use. */
+  superseded: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}). You have since read these lines again, \
+further down in this chat: use that later copy. This one is left out to save space.`,
   compaction: "Before we continue, please write a summary of our conversation so far that could stand in for the \
 full history. Keep my goals and preferences, key facts, decisions and conclusions, open questions, and any code, \
 file names, numbers or exact values that may matter later. Note which files were changed and how. Be concise but \
@@ -435,6 +438,9 @@ const CONTEXT = {
   /** A file too long to send whole: where it is, for the model to read what it needs (reading it needs no approval). */
   attachedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
     `(Attached file ${file}, ${lines.toLocaleString("en-US")} lines: too long to send whole. Read the parts you need with read_file, which takes a range of lines.)`,
+  /** Pasted text too long to send whole with everything else attached: saved, and read from there (no approval needed). */
+  pastedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
+    `(Pasted text, ${lines.toLocaleString("en-US")} lines: too long to send whole. It's saved as ${file}. Read the parts you need with read_file, which takes a range of lines.)`,
   /** Sent as your message when you attach something and type nothing. */
   attachedOnly: "(See what I've attached.)",
   undid: (/** @type {string} */ file, /** @type {string} */ step) => `(I undid your change to ${file}: ${step}.)`,

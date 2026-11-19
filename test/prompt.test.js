@@ -9,14 +9,14 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "fef4942ce3d5bbda";
+const PINNED = "f3906526e4bb4b3d";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
   notRunBatch: [[8, 5]], resumeLimit: [[30]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
   missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
-  wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], resultCut: [[12345]],
+  wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], superseded: [["SUMMARY"]], resultCut: [[12345]],
 };
 const RESULT_SAMPLES = {
   signatureLeftOut: [[412, 520]], signatureInDiff: [[150]], error: [["E"]], noTool: [["nope"]], missing: [["a.js"]], isFolder: [["src"]], readFolder: [["src"]], tooLarge: [["a.bin", 21]],
@@ -61,7 +61,7 @@ function everything() {
     readOnlyTools: toolDefinitions(true),
     starters: STARTERS,
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js"),
-      CONTEXT.pasted(132, "LOG", "```"), CONTEXT.pasted(1, "LOG", "```"), CONTEXT.attached("app.log", 320, "LOG", "````"), CONTEXT.attachedPath("logs/big.log", 5000), CONTEXT.attachedOnly],
+      CONTEXT.pasted(132, "LOG", "```"), CONTEXT.pasted(1, "LOG", "```"), CONTEXT.attached("app.log", 320, "LOG", "````"), CONTEXT.attachedPath("logs/big.log", 5000), CONTEXT.pastedPath("C:\\store\\pastes\\abc.txt", 5000), CONTEXT.attachedOnly],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
     skill: [SKILL.fromChat, SKILL.about("WHAT"), SKILL.interview],
     texts: filled(TEXTS, SAMPLES, "TEXTS"),

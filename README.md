@@ -53,7 +53,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - **The open file, or your selection:** click a chip to include it, or click it again to leave it out.
 - **While it works,** each step shows as a line with how long it took. Click a line to see its output. If you type something meanwhile, the message is **queued** and goes with the next step. Its ✕ takes it back.
 - **From the editor:** select some code, right-click, and choose **Solder → Explain this**, **Fix this** (it sends the problems VS Code shows in the selection too) or **Add to chat** (the selection goes with your next message).
-- **Attach text files, and long pastes.** The paperclip beside **Send** attaches text files (logs, scripts, config; Word, Excel and PowerPoint as their text). Each shows as a chip above the box and goes with your next message; ✕ takes it off, and a click shows what's in it. A file up to about 40,000 characters is sent whole; a longer one goes by its path, and Solder reads just the parts it needs. Text you paste that's over 40 lines becomes a chip the same way, so a long log stays out of the box and out of the chat's scroll.
+- **Attach text files, and long pastes.** The paperclip beside **Send** attaches text files (logs, scripts, config; Word, Excel and PowerPoint as their text). Each shows as a chip above the box and goes with your next message; ✕ takes it off, and a click shows what's in it. A file up to about 40,000 characters is sent whole; a longer one goes by its path, and Solder reads just the parts it needs. All that's attached to one message goes whole only up to about 40,000 characters together: past that, the rest goes by path too (a paste is saved in Solder's own storage first). Each chip shows what it will cost, as about how many tokens or **by path**: text sent whole is sent again with every step of the task. Text you paste that's over 40 lines becomes a chip the same way, so a long log stays out of the box and out of the chat's scroll.
 - **Paste in terminal.** A command in an answer, in a PowerShell, bash or cmd code block, has **Paste in terminal** beside **Copy**: it goes into VS Code's terminal for you to check and run with **Enter**. Solder never runs it for you.
 - **Every edit can be reviewed and undone.** **Review** opens VS Code's diff of that step. **Undo** puts the file back as it was, and Solder is told with your next message. Once a turn is done, its steps fold into one row: click it to see them. When a turn changed two or more things, **Undo all** on that row puts every one back, after asking; a file you've changed since is left alone. VS Code's own **Ctrl+Z** works too.
 - **It asks first** before:
@@ -186,6 +186,8 @@ Some gateways offer two kinds of model: **Tool models**, which take a system pro
 Each step sends the whole chat again, so long chats cost more per step. Solder keeps that down:
 - it cuts old tool output down to short stand-ins;
 - it leaves out earlier turns' big file writes;
+- when a file is read again in the same task, it keeps the newer copy and cuts the older to a line;
+- what you attach goes whole only up to about 40,000 characters a message, and by its path past that;
 - it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default;
 - when a Tool model has an Assist twin (see [Two kinds of model](#two-kinds-of-model-optional)), the twin writes those summaries and the chats' titles, so they don't use your allowance and still work once it's used up.
 

@@ -8,6 +8,7 @@ const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
 const { laneOf, assistTwin, bestModel } = require("./lanes.js");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { Engine, labelOf, parseArguments, tokenReport, removeTurn, laterMessages } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
@@ -27,8 +28,16 @@ const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so i
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACH_CHARS = 40_000;
 const MAX_ATTACH_BYTES = 20_000_000;
-/** A paste has no file to read it from, so it goes whole: up to this. */
+/** The longest paste taken at all. */
 const MAX_PASTE_CHARS = 400_000;
+/**
+ * What's attached goes whole with the message up to this much text in all. Past it, the rest goes by its path (a
+ * paste is saved first), for the model to read the lines it needs: whole text is sent again with every step of the
+ * task, so 400,000 characters of log would cost about 100,000 tokens a step.
+ */
+const MAX_INLINE_CHARS = 40_000;
+/** Saved pastes are kept this long (a chat older than that has long been summarised). */
+const PASTES_KEPT_MS = 90 * 24 * 60 * 60 * 1000;
 
 let attachmentCount = 0;
 function attachmentId() {
@@ -190,7 +199,7 @@ class SolderPanel {
     const prune = setTimeout(() => { try { this.tools.pruneBackups(); } catch { /* best effort */ } }, 30_000);
     context.subscriptions.push({ dispose: () => clearTimeout(prune) });
     // The docs index catches up in the background, a little after start (it's only read when searched).
-    const timer = setTimeout(() => this.tools.refreshDocs(), 15_000);
+    const timer = setTimeout(() => { this.tools.refreshDocs(); this.prunePastes(); }, 15_000);
     context.subscriptions.push({ dispose: () => clearTimeout(timer) });
     this.updateStatusBar();
   }
@@ -709,11 +718,66 @@ class SolderPanel {
     await vscode.window.showTextDocument(document, { preview: true });
   }
 
-  /** What's attached, as it goes to the model after your message, with each one's chip. */
+  /**
+   * Which of the attachments go whole with the message, in the order they were attached: as many as fit in
+   * MAX_INLINE_CHARS together. The rest go by path. @param {any[]} [list] @returns {Set<any>} those that go whole
+   */
+  inlineAttachments(list = this.attachments) {
+    const whole = new Set();
+    let used = 0;
+    for (const a of list) {
+      if (a.kind === "path" || typeof a.text !== "string") continue;
+      if (used + a.text.length > MAX_INLINE_CHARS) continue;
+      used += a.text.length;
+      whole.add(a);
+    }
+    return whole;
+  }
+
+  /** Where pastes too long to send whole are saved, to be read from: Solder's own storage. */
+  pastesFolder() {
+    return path.join(this.context.globalStorageUri.fsPath, "pastes");
+  }
+
+  /**
+   * An attachment that doesn't fit whole becomes one sent by its path: a file is where it is; a paste is saved first
+   * (named by its text, so the same paste is one file). False when it couldn't be saved: then it goes whole after all.
+   * @param {any} a
+   */
+  sendByPath(a) {
+    if (a.kind === "file" && a.full) { a.kind = "path"; delete a.text; return true; }
+    try {
+      const folder = this.pastesFolder();
+      fs.mkdirSync(folder, { recursive: true });
+      const file = path.join(folder, crypto.createHash("sha256").update(a.text, "utf8").digest("hex").slice(0, 24) + ".txt");
+      if (!fs.existsSync(file)) fs.writeFileSync(file, a.text, "utf8");
+      Object.assign(a, { kind: "path", full: file, pasted: true });
+      delete a.text;
+      return true;
+    } catch { return false; }
+  }
+
+  /** Saved pastes no chat can still need (old ones) are removed, once a session. */
+  prunePastes() {
+    try {
+      const folder = this.pastesFolder();
+      for (const name of fs.readdirSync(folder)) {
+        const file = path.join(folder, name);
+        if (Date.now() - fs.statSync(file).mtimeMs > PASTES_KEPT_MS) fs.rmSync(file, { force: true });
+      }
+    } catch { /* none yet */ }
+  }
+
+  /**
+   * What's attached, as it goes to the model after your message, with each one's chip. Called as the message is sent:
+   * what doesn't fit whole is turned into something read by its path here.
+   */
   attachmentParts() {
+    const whole = this.inlineAttachments();
     return this.attachments.map((a) => {
       const chip = attachmentLabel(a);
-      if (a.kind === "path") return { block: CONTEXT.attachedPath(this.tools.shown(a.full), a.lines), chip };
+      if (a.kind !== "path" && !whole.has(a)) this.sendByPath(a);
+      if (a.kind === "path") return { block: a.pasted ? CONTEXT.pastedPath(a.full, a.lines) : CONTEXT.attachedPath(this.tools.shown(a.full), a.lines), chip };
       const fence = fenceFor(a.text);
       return { block: a.kind === "paste" ? CONTEXT.pasted(a.lines, a.text, fence) : CONTEXT.attached(a.name, a.lines, a.text, fence), chip };
     });
@@ -1575,8 +1639,11 @@ class SolderPanel {
       steers: this.awayBusy() ? [] : this.engine.steers.map((s) => s.text),
       workspace: !!this.tools.root(),
       readOnly: readOnly(), readOnlyLocked: policy.locked("readOnly"),
-      attachments: this.attachments.map((a) => ({ id: a.id, label: attachmentLabel(a), paste: a.kind === "paste",
-        peek: a.text === undefined ? a.full : String(a.text).split("\n").slice(0, 6).join("\n").slice(0, 400) })),
+      // Each chip says what it will cost: about how many tokens when it goes whole (sent again with every step of
+      // the task), or that it goes by its path, for the model to read the lines it needs.
+      attachments: ((whole) => this.attachments.map((a) => ({ id: a.id, label: attachmentLabel(a), paste: a.kind === "paste" || !!a.pasted,
+        peek: a.text === undefined ? a.full : String(a.text).split("\n").slice(0, 6).join("\n").slice(0, 400),
+        tokens: whole.has(a) ? Math.max(1, Math.round(a.text.length / 4)) : 0, byPath: !whole.has(a) })))(this.inlineAttachments()),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
       settings: this.setup.view ? null : this.settingsScreen.view,
