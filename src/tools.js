@@ -13,7 +13,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, EmbedBudget, EmbedCache, meaningTuning, queryText, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
+const { DocsIndex, EmbedBudget, EmbedCache, meaningFloor, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
 
 const MAX_READ_LINES = 2000;
@@ -880,9 +880,9 @@ class WorkspaceTools {
     if (counts && counts.embedded < counts.passages && !index.active) setTimeout(() => this.refreshDocs(), 0);
     if (counts && counts.embedded) {
       try {
-        // The question as this model wants a search put, and how near a passage must be to count (per model).
-        const { vectors, tokens } = await this.embedder(model, [queryText(model, query)], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
-        meaning = { vector: vectors[0], model, floor: meaningTuning(model, solderSettings().get("meaningFloor", 0)).floor };
+        const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
+        // How near a passage must be to count: Solder's own floor, or yours.
+        meaning = { vector: vectors[0], model, floor: meaningFloor(solderSettings().get("meaningFloor", 0)) };
         if (!this.embedFree()) this.embedBudget().spend(tokens); // counted, but a search is never held back by the budget
         this.onDocsLog?.(`docs search by meaning · ${tokens} tokens`);
       } catch (error) {

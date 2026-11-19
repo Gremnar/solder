@@ -43,37 +43,23 @@ const EMBED_BATCH = 32;
 const CANDIDATES = 50;
 /**
  * How near in meaning a passage must be to a question to count (unit vectors' dot product). Without a floor, a
- * question about nothing in the docs still brings back its nearest passages, which are noise. Each embeddings model
- * scores on its own scale, so the floor is per model, by the model's family as its name gives it; these come from
- * measuring real questions against real docs (related passages against unrelated ones):
- * - Gemini embedding models: related scored 0.61 and up but for one outlier, the best unrelated 0.545 at most, so
- *   0.58. Questions go as they are.
- * - EmbeddingGemma: bare, related and unrelated couldn't be told apart; it's trained to be told a text is a search.
- *   With its prefix on the question (passages stay as they are, so nothing is embedded again), 0.6.
- * - Any other model: 0.6, the cautious one, until it's measured. The log shows each search's best similarity, to
- *   tune by, and the meaningFloor setting overrides the floor.
+ * question about nothing in the docs still brings back its nearest passages, which are noise. Measured with real
+ * questions against real docs: related passages scored 0.61 and up but for one outlier, the best unrelated 0.545 at
+ * most, so 0.58 keeps the related and lets none of the unrelated through. Embeddings models score on their own
+ * scales, so another model may want another floor: the log shows each search's best similarity, to tune by, and the
+ * meaningFloor setting overrides this.
  */
-const MEANING_FLOOR = 0.6;
-const MEANING_BY_FAMILY = [
-  { family: /embeddinggemma/i, floor: 0.6, prefix: "task: search result | query: " },
-  { family: /gemini/i, floor: 0.58, prefix: "" },
-];
+const MEANING_FLOOR = 0.58;
 
 /**
- * The floor and the question's prefix for an embeddings model. @param {string} model
- * @param {unknown} [setting] the meaningFloor setting: a number above 0 and up to 1 is used as the floor, anything else isn't
- * @returns {{floor: number, prefix: string}}
+ * The floor in use. @param {unknown} [setting] the meaningFloor setting: a number above 0 and up to 1 is the floor,
+ * anything else (0, the default) leaves MEANING_FLOOR @returns {number}
  */
-function meaningTuning(model, setting) {
-  const known = MEANING_BY_FAMILY.find((entry) => entry.family.test(String(model || "")));
+function meaningFloor(setting) {
   const own = Number(setting);
-  return { floor: Number.isFinite(own) && own > 0 && own <= 1 ? own : known ? known.floor : MEANING_FLOOR, prefix: known ? known.prefix : "" };
+  return Number.isFinite(own) && own > 0 && own <= 1 ? own : MEANING_FLOOR;
 }
 
-/** A question as it's sent to be embedded: with the model's search prefix, where it has one. @param {string} model @param {string} query */
-function queryText(model, query) {
-  return meaningTuning(model).prefix + String(query);
-}
 /** Reciprocal rank fusion's constant: a passage high in either ranking does well; one high in both, best. */
 const FUSION_K = 60;
 const SKIP_FOLDERS = new Set([".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
@@ -859,7 +845,7 @@ class DocsIndex {
         rows = words ? db.prepare(sql).all(words, ...listed.values, take) : [];
       }
       // Passages near enough in meaning to count; with none, it's the keyword ranking alone (cut to what was asked for).
-      if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES, meaning.floor ?? meaningTuning(meaning.model).floor), limit);
+      if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES, meaning.floor ?? MEANING_FLOOR), limit);
       /** @type {Map<number, number>} */
       const counts = new Map(rows.map((row) => [Number(row.rowid), 0]));
       const terms = queryTerms(query);
@@ -1227,4 +1213,4 @@ class EmbedBudget {
 }
 
 module.exports = { DocsIndex, available, documentText, isOffice, decodeText, SIGNED, signatureBlocks, withoutSignatures, unzip, officeText, sections, queryTerms,
-  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay, EmbedCache, PassagesHash, packShared, unpackShared, meaningTuning, queryText };
+  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay, EmbedCache, PassagesHash, packShared, unpackShared, meaningFloor, MEANING_FLOOR };

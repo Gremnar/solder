@@ -523,17 +523,11 @@ test("search by meaning has a floor: a question about nothing in the docs brings
   }
 });
 
-test("the floor and the question's prefix go by the embeddings model's family; the setting overrides the floor", () => {
-  const { meaningTuning, queryText } = docs;
-  assert.deepEqual(meaningTuning("embed-a"), { floor: 0.6, prefix: "" }, "a model that hasn't been measured: the cautious floor, the question as it is");
-  assert.deepEqual(meaningTuning("some-Gemini-embedding"), { floor: 0.58, prefix: "" });
-  assert.deepEqual(meaningTuning("EmbeddingGemma-300m"), { floor: 0.6, prefix: "task: search result | query: " });
-  assert.equal(queryText("embeddinggemma", "how do I reset it?"), "task: search result | query: how do I reset it?");
-  assert.equal(queryText("embed-a", "how do I reset it?"), "how do I reset it?");
-  assert.equal(queryText("some-gemini-embedding", "q"), "q");
-  // The setting: a number above 0 and up to 1 is the floor; 0 (the default) and anything odd leave the model's own.
-  assert.equal(meaningTuning("some-gemini-embedding", 0.7).floor, 0.7);
-  assert.equal(meaningTuning("embeddinggemma", 0.45).prefix, "task: search result | query: ", "the prefix is the model's whatever the floor");
-  for (const odd of [0, -1, 1.5, "high", null, undefined, NaN]) assert.equal(meaningTuning("some-gemini-embedding", odd).floor, 0.58, String(odd));
-  assert.equal(meaningTuning("", undefined).floor, 0.6);
+test("the floor is one number for every embeddings model, and the setting overrides it", () => {
+  const { meaningFloor, MEANING_FLOOR } = docs;
+  assert.equal(MEANING_FLOOR, 0.58);
+  // The setting: a number above 0 and up to 1 is the floor; 0 (the default) and anything odd leave Solder's own.
+  assert.equal(meaningFloor(0.7), 0.7);
+  assert.equal(meaningFloor(1), 1);
+  for (const odd of [0, -1, 1.5, "high", null, undefined, NaN]) assert.equal(meaningFloor(odd), 0.58, String(odd));
 });
