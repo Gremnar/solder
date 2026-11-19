@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 (2026-11-19)
 
 - **Fix: Settings, the guided setup and Projects wouldn't open while a reply was streaming.** They waited for the words to finish appearing. They now open at once, work while the reply goes on, and the reply is there when you go back.
 - **Assist models are held back less.** Their tokens aren't billed, so the limits that are there to save tokens no longer apply to them:
