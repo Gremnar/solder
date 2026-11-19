@@ -782,3 +782,18 @@ body.in-setup #btn-new-more { visibility: hidden; }
 .menu .pfold-body .empty { font-size: 0.9em; }
 /* Settings: the version, at the top of every tab */
 .settings-version { margin: -4px 0 4px; text-align: right; font-size: 0.8em; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* an on/off switch (skills, in Settings and on a project's page) */
+.switch { flex: none; position: relative; width: 28px; height: 16px; margin: 0 4px; border-radius: 8px; background: color-mix(in srgb, var(--fg) 22%, transparent); transition: background var(--t) var(--ease); }
+.switch > span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px var(--shadow); transition: transform var(--t) var(--ease); }
+.switch[aria-checked="true"] { background: var(--accent); }
+.switch[aria-checked="true"] > span { transform: translateX(12px); background: var(--accent-fg); }
+.switch[disabled] { opacity: 0.5; cursor: default; }
+body.vscode-high-contrast .switch { outline: 1px solid var(--vscode-contrastBorder); }
+@media (prefers-reduced-motion: reduce) { .switch, .switch > span { transition: none; } }
+.settings .skill.off .skill-name, .settings .skill.off .hint, .projects .pskill.off .pskill-name, .projects .pskill.off .pskill-when, .projects .yskill.off .pskill-name, .projects .yskill.off .hint { opacity: 0.55; }
+.projects .pskill > summary .switch { align-self: center; }
+.projects .yskills { list-style: none; margin: 0 0 8px; padding: 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.projects .yskill { display: flex; align-items: center; gap: 8px; padding: 7px 12px; }
+.projects .yskill + .yskill { border-top: 1px solid var(--hairline); }
+.projects .yskill-text { flex: 1; min-width: 0; }
+.projects .yskill .hint { margin: 1px 0 0; }

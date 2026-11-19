@@ -7,7 +7,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly } = require("./config.js");
 const { GatewayClient } = require("./gateway.js");
-const { MAX_SKILLS, offered: isOffered } = require("./skills.js");
+const { MAX_SKILLS, offered: isOffered, offNames, switchedOn } = require("./skills.js");
 const { laneOf } = require("./lanes.js");
 const path = require("node:path");
 
@@ -107,9 +107,15 @@ class SettingsScreen {
    */
   skills() {
     const org = this.hooks.orgSkillsFolders().map((folder) => folder.toLowerCase());
+    const off = offNames(solderSettings().get("skillsOff", []));
     let offered = 0;
-    return this.hooks.skills().map((skill) => ({ name: skill.name, when: skill.when, problem: skill.problem, cut: skill.cut,
-      org: org.includes(path.dirname(skill.path).toLowerCase()), offered: isOffered(skill) && ++offered <= MAX_SKILLS }));
+    return this.hooks.skills().map((skill) => {
+      const isOrg = org.includes(path.dirname(skill.path).toLowerCase());
+      // Your switch for it: off, and the model isn't told about it (in a project it can be switched on again). The
+      // organization's are always on.
+      const on = isOrg || switchedOn(skill.name, off);
+      return { name: skill.name, when: skill.when, problem: skill.problem, cut: skill.cut, org: isOrg, on, offered: on && isOffered(skill) && ++offered <= MAX_SKILLS };
+    });
   }
 
   /** @param {string} text @param {"ok" | "bad" | ""} [kind] */
@@ -282,6 +288,18 @@ class SettingsScreen {
         const made = await this.hooks.createSkill(String(message.name || ""), String(message.when || ""));
         if ("problem" in made) { this.notice(made.problem, "bad"); return; }
         Object.assign(this.view, await this.values(), { skillForm: false, saved: "skills", notice: "Made: write its instructions in the editor.", noticeKind: "ok" });
+        this.changed();
+        return;
+      }
+      case "skillSwitch": {
+        // On or off everywhere: the setting holds the names that are off.
+        const skill = this.skills().find((item) => item.name === String(message.name || ""));
+        if (!skill || skill.org) return;
+        const key = skill.name.toLowerCase();
+        const off = offNames(config.get("skillsOff", [])).filter((name) => name !== key);
+        if (skill.on) off.push(key);
+        await config.update("skillsOff", off.length ? off : undefined, vscode.ConfigurationTarget.Global);
+        Object.assign(this.view, { skills: this.skills(), notice: "", noticeKind: "" });
         this.changed();
         return;
       }

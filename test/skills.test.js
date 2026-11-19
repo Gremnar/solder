@@ -142,3 +142,17 @@ test("read_file hands over a skill whole and kept, needs no approval, and doesn'
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("skills switched off: the names in the setting, without case; a project's own switch for a skill wins there", () => {
+  const { offNames, switchedOn } = require("../src/skills.js");
+  assert.deepEqual(offNames([" PS_Scripts ", "ps_scripts", 7, null, "", "notes"]), ["ps_scripts", "notes"]);
+  assert.deepEqual(offNames("ps_scripts"), [], "not a list: nothing is off");
+  const off = offNames(["PS_Scripts"]);
+  assert.equal(switchedOn("ps_scripts", off), false);
+  assert.equal(switchedOn("Ps_Scripts", off), false);
+  assert.equal(switchedOn("notes", off), true);
+  assert.equal(switchedOn("ps_scripts", off, { ps_scripts: true }), true, "on in this project only");
+  assert.equal(switchedOn("notes", off, { notes: false }), false, "off in this project");
+  assert.equal(switchedOn("constructor", off, {}), true, "a name that's on every object isn't a switch");
+  assert.equal(switchedOn("notes", off, /** @type {any} */ ({ notes: "no" })), true, "only true or false counts");
+});

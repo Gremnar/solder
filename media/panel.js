@@ -533,6 +533,14 @@
     showSettingsTab(SETTINGS_TABS[to][0], true);
   });
 
+  /**
+   * An on/off switch (a button with role="switch"). @param {string} attrs its data attributes and id, already escaped
+   * @param {boolean} on @param {string} label what it switches, for screen readers and the tooltip @param {boolean} [locked]
+   */
+  function switchHtml(attrs, on, label, locked = false) {
+    return `<button class="switch" role="switch" aria-checked="${!!on}" ${attrs} title="${escape(label)}" aria-label="${escape(label)}"${locked ? " disabled" : ""}><span aria-hidden="true"></span></button>`;
+  }
+
   /** A titled group of settings (no title: the tab's name says it). @param {string} title @param {string} body */
   function section(title, body) {
     return `<section class="settings-section">${title ? `<h3>${escape(title)}</h3>` : ""}${body}</section>`;
@@ -586,15 +594,15 @@
     const mine = (s.skillsFolders || []).map((/** @type {string} */ f, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(f)}">${folderIcon}` +
       `<span>${escape(f)}</span><button data-sact="removeSkills" data-index="${i}" title="Stop using this folder (its files stay)" aria-label="Stop using ${escape(f)}">✕</button></div></div>`).join("");
     const skills = s.skills || [];
-    const list = skills.map((/** @type {any} */ k) => {
+    const list = skills.map((/** @type {any} */ k, /** @type {number} */ i) => {
       const note = k.problem ? `<div class="hint warn">${escape(k.problem)}</div>`
         : `<div class="hint">${escape(k.when)}${k.cut ? " (Only its first 20,000 characters are used.)" : ""}</div>`;
-      return `<li class="skill"><div class="skill-head"><button class="link skill-name" data-sact="openSkill" data-name="${escape(k.name)}" title="Open ${escape(k.name)}.md to edit it">${escape(k.name)}</button>` +
-        (k.org ? `<span class="org">From your organization</span>` : "") + (k.offered ? "" : `<span class="org">Not offered to the model</span>`) +
-        (k.org ? "" : `<span class="grow"></span><button class="skill-delete" data-sact="deleteSkill" data-name="${escape(k.name)}" title="Delete this skill" aria-label="Delete the skill ${escape(k.name)}">✕</button>`) +
+      return `<li class="skill${k.on === false ? " off" : ""}"><div class="skill-head"><button class="link skill-name" data-sact="openSkill" data-name="${escape(k.name)}" title="Open ${escape(k.name)}.md to edit it">${escape(k.name)}</button>` +
+        (k.org ? `<span class="org">From your organization</span>` : "") + (k.on === false ? `<span class="org">Off</span>` : k.offered ? "" : `<span class="org">Not offered to the model</span>`) +
+        (k.org ? "" : `<span class="grow"></span>` + switchHtml(`data-sact="skillSwitch" data-name="${escape(k.name)}" data-index="${i}"`, k.on !== false, k.on !== false ? `${k.name} is on: the model is told about it. Click to switch it off.` : `${k.name} is off: the model isn't told about it. Click to switch it on.`) + `<button class="skill-delete" data-sact="deleteSkill" data-name="${escape(k.name)}" title="Delete this skill" aria-label="Delete the skill ${escape(k.name)}">✕</button>`) +
         `</div>${note}</li>`;
     }).join("");
-    const over = skills.filter((/** @type {any} */ k) => !k.offered && !k.problem).length;
+    const over = skills.filter((/** @type {any} */ k) => !k.offered && !k.problem && k.on !== false).length;
     const folders = org + (s.skillsLocked ? "" : mine);
     // The skills first (what you came for), then how to add one, then where they're kept.
     return (list ? `<ul class="skills">${list}</ul>` : `<div class="hint">No skills yet.</div>`) +
@@ -1414,14 +1422,20 @@
           (rule.cut ? `<div class="hint warn">Only its first 40,000 characters are used.</div>` : "") + `</div>`).join("")
       : `<div class="hint">This project has no ${escape(page.ruleName)} yet. It's a plain text file in the project's folder saying what the model should always know here ` +
         `(what the project is, the languages and versions, what not to touch).</div><div class="actions-row"><button class="link-button" data-prules="${at}">Create ${escape(page.ruleName)}</button></div>`;
-    const skills = page.skills.map((/** @type {any} */ skill) => {
+    const skills = page.skills.map((/** @type {any} */ skill, /** @type {number} */ i) => {
       const key = page.path + "|" + skill.name;
-      return `<details class="pskill" data-pskill="${escape(skill.name)}"${skillsOpen.has(key) ? " open" : ""}><summary><span class="pskill-name">${escape(skill.name)}</span>` +
-        `<span class="pskill-when${skill.problem ? " warn" : ""}">${escape(skill.problem || skill.when)}</span>${P_CHEV}</summary>` +
+      return `<details class="pskill${skill.on ? "" : " off"}" data-pskill="${escape(skill.name)}"${skillsOpen.has(key) ? " open" : ""}><summary><span class="pskill-name">${escape(skill.name)}</span>` +
+        `<span class="pskill-when${skill.problem ? " warn" : ""}">${escape(skill.problem || skill.when)}</span>` +
+        (page.skillsLocked ? "" : switchHtml(`id="psw-${i}" data-pskill-switch="${escape(skill.name)}" data-on="${!skill.on}"`, skill.on, switchLabel(skill))) + `${P_CHEV}</summary>` +
         `<div class="answer pfile-text">${skill.text ? markdown(skill.text) : `<p class="grey">No instructions yet.</p>`}</div>` +
         (skill.cut ? `<div class="hint warn">Only its first 20,000 characters are used.</div>` : "") +
         `<div class="actions-row"><button class="link" data-pskill-open="${escape(skill.name)}">Edit</button> <button class="link" data-pskill-delete="${escape(skill.name)}">Delete</button></div></details>`;
     }).join("");
+    // Your own skills (and your organization's): on or off in this project alone.
+    const yours = (page.yours || []).map((/** @type {any} */ skill, /** @type {number} */ i) => `<li class="yskill${skill.on ? "" : " off"}"><div class="yskill-text"><span class="pskill-name">${escape(skill.name)}</span>` +
+      (skill.org ? `<span class="org">From your organization</span>` : skill.on !== skill.everywhere ? `<span class="org">${skill.on ? "On in this project only" : "Off in this project"}</span>` : skill.on ? "" : `<span class="org">Off everywhere</span>`) +
+      `<div class="hint${skill.problem ? " warn" : ""}">${escape(skill.problem || skill.when)}</div></div>` +
+      switchHtml(`id="ysw-${i}" data-pskill-switch="${escape(skill.name)}" data-on="${!skill.on}"`, skill.on, skill.org ? `${skill.name} is your organization's: it's always on.` : switchLabel(skill), skill.org) + `</li>`).join("");
     const skillForm = page.skillsLocked ? `<div class="hint">Your organization sets the skills, so a project's own aren't used.</div>`
       : p.skillForm
         ? `<div class="skill-form"><label class="field-label" for="pf-skillName"><span>Name</span></label>` +
@@ -1437,10 +1451,16 @@
         `<div class="actions-row"><button class="link-button primary" data-pchat="${at}">New chat in this project</button></div>`) +
       section("Rules", rules) +
       section("Skills", (skills ? `<div class="pskills">${skills}</div>` : `<div class="hint">No skills of its own yet. A project's skill is instructions for a kind of task here; the model reads it only when a task needs it.</div>`) + skillForm) +
+      (yours ? section("Your skills in this project", `<ul class="yskills">${yours}</ul><div class="hint">A switch here is for this project's chats alone, whatever the skill is everywhere else (Settings → Skills). These switches are yours: they aren't in the project's folder, so they aren't shared with it.</div>`) : "") +
       section("Chats", projectChats(page.chats, page.path)) +
       section("Sharing", `<div class="hint">Everything above is in the project's own folder: its rules file, and the <code>.solder</code> folder with its name and skills. ` +
         `Copy or zip the folder (or just those two) and someone else can use the project as it is. Chats aren't in the folder: they stay on this PC.</div>` +
         `<div class="actions-row"><button class="link-button" data-premove="${at}">Remove from my projects</button></div>`) + `</div>`;
+  }
+
+  /** What a skill's switch on a project's page says. @param {any} skill */
+  function switchLabel(skill) {
+    return skill.on ? `${skill.name} is on in this project. Click to switch it off here.` : `${skill.name} is off in this project. Click to switch it on here.`;
   }
 
   function renderProjects() {
@@ -1480,12 +1500,14 @@
   transcript.addEventListener("click", (event) => {
     if (!state?.projects) return;
     const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest(
-      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete]"));
+      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete],[data-pskill-switch]"));
     if (!el) return;
     const d = el.dataset;
     const page = state.projects.page?.path || "";
     const fold = (/** @type {Set<string>} */ set, /** @type {string} */ key) => { if (set.has(key)) set.delete(key); else set.add(key); shownProjects = ""; renderProjects(); };
-    if (d.padd !== undefined) vscode.postMessage({ type: "projectAdd" });
+    // A switch in a skill's heading: it switches, and the heading doesn't open or close.
+    if (d.pskillSwitch !== undefined) { event.preventDefault(); if (!el.hasAttribute("disabled")) vscode.postMessage({ type: "projectSkillSwitch", path: page, name: d.pskillSwitch, on: d.on === "true" }); }
+    else if (d.padd !== undefined) vscode.postMessage({ type: "projectAdd" });
     else if (d.puse !== undefined) vscode.postMessage({ type: "projectAdd", path: d.puse });
     else if (d.ptoggle !== undefined) fold(projectsShut, d.ptoggle);
     else if (d.pmore !== undefined) fold(projectsAll, d.pmore);

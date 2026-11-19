@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Skills can be switched off, everywhere or in one project.** Each of your skills has a switch in **Settings → Skills**: off, the model isn't told about it. A project's page lists your skills with switches for that project alone, so a skill can be off in one project, or on only there; the project's own skills have switches too. Those switches are yours and aren't shared with the project's folder. Your organization's skills are always on.
+
 ## 0.2.19 (2026-11-18)
 
 - **Projects.** A project is a folder you work in, with its own rules, skills and chats.

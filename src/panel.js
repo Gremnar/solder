@@ -17,7 +17,7 @@ const { WorkspaceTools, plainNames, ownFile } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
-const { MAX_SKILLS, offered } = require("./skills.js");
+const { MAX_SKILLS, offered, offNames, switchedOn } = require("./skills.js");
 const { ProjectList, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
 const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
@@ -145,7 +145,7 @@ class SolderPanel {
     this.foundCache = null;
     /** @type {any[]} what goes with your next message: pasted text and text files, as chips above the box */
     this.attachments = [];
-    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.tools.skills().filter(offered).length,
+    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.skillsOffered().length,
       // Your skills folder, ready (and in the setting) once setup is done, so New skill and /skill need no folder picking.
       skillsHome: async () => {
         if (policy.locked("skillsFolders") || this.skillsFolder()) return;
@@ -246,7 +246,7 @@ class SolderPanel {
     return { workspace: this.tools.root(), folders: this.tools.roots(), instructions,
       // The organisation's rules go after the user's, so they read as the more recent instruction.
       rules: [String(solderSettings().get("rules", "") || "").trim(), policy.orgRules].filter(Boolean).join("\n\n"), docs: this.tools.docsFolders(),
-      skills: this.tools.skills().filter(offered).slice(0, MAX_SKILLS).map(({ name, path: file, when }) => ({ name, path: file, when })),
+      skills: this.skillsOffered(project ? project.path : "").map(({ name, path: file, when }) => ({ name, path: file, when })),
       skillsFolder: this.skillsFolder(), readOnly: readOnly() };
   }
 
@@ -370,6 +370,41 @@ class SolderPanel {
     return name;
   }
 
+  /**
+   * Skills with their switches. A skill can be switched off everywhere (the skillsOff setting), and on or off in one
+   * project whatever it is elsewhere (your switches for that project, kept with your list of projects). The
+   * organization's skills are always on.
+   * @param {string} [project] the folder of the project the chat is in ("" for none)
+   * @param {import("./skills.js").Skill[]} [list] the skills (the ones the tools would offer now, otherwise)
+   */
+  skillSwitches(project = "", list = this.tools.skills()) {
+    const org = this.tools.skillsFolders(policy.orgSkills()).map((folder) => folder.toLowerCase());
+    const off = offNames(solderSettings().get("skillsOff", []));
+    const own = project && this.projects.has(project) ? this.projects.switches(project) : {};
+    return list.map((skill) => {
+      const isOrg = org.includes(path.dirname(skill.path).toLowerCase());
+      const everywhere = isOrg || switchedOn(skill.name, off);
+      return { skill, org: isOrg, everywhere, on: isOrg || switchedOn(skill.name, off, own) };
+    });
+  }
+
+  /** The skills the model is told about: those that say when to use them and are switched on, up to MAX_SKILLS. @param {string} [project] */
+  skillsOffered(project = "") {
+    return this.skillSwitches(project).filter((item) => item.on && offered(item.skill)).slice(0, MAX_SKILLS).map((item) => item.skill);
+  }
+
+  /**
+   * A skill's switch on a project's page: on or off in that project. A switch that says what the skill is everywhere
+   * anyway is taken away, so the project follows your own switch again. @param {string} folder @param {string} name @param {boolean} on
+   */
+  switchProjectSkill(folder, name, on) {
+    if (!this.projects.has(folder)) return;
+    const found = this.skillSwitches("", [...this.tools.skills(false), ...(readProject(folder)?.skills || [])]).find((item) => item.skill.name.toLowerCase() === name.trim().toLowerCase());
+    if (!found || found.org) return;
+    this.projects.setSwitch(folder, found.skill.name, on === found.everywhere ? null : on);
+    this.post();
+  }
+
   /** Open the Projects screen (the list, or one project's page). @param {string} [page] a project's folder */
   openProjects(page = "") {
     this.settingsScreen.close();
@@ -412,10 +447,14 @@ class SolderPanel {
     let page = null;
     if (view.page) {
       const project = readProject(view.page, names);
+      const yours = project ? this.skillSwitches(project.path, this.tools.skills(false)) : [];
       if (project) {
         page = { path: project.path, name: project.name, here: !!this.tools.rootOf(project.path), ruleName: names[0] || "AGENTS.md",
           rules: project.rules, skillsLocked: policy.locked("skillsFolders"),
-          skills: project.skills.map((skill) => ({ name: skill.name, when: skill.when, text: skill.text, cut: skill.cut, problem: skill.problem })),
+          skills: this.skillSwitches(project.path, project.skills).map(({ skill, on, everywhere }) => ({ name: skill.name, when: skill.when, text: skill.text, cut: skill.cut, on, everywhere,
+            problem: skill.problem || (yours.some((item) => item.skill.name.toLowerCase() === skill.name.toLowerCase()) ? "You have a skill of your own with this name, and that one is used." : "") })),
+          // Your own skills and your organization's: each can be on or off in this project alone.
+          yours: yours.map(({ skill, on, everywhere, org }) => ({ name: skill.name, when: skill.when, problem: skill.problem, on, everywhere, org })),
           chats: (mine.find((item) => projectKey(item.path) === projectKey(project.path))?.chats || []) };
       } else view.page = "";
     }
@@ -946,6 +985,7 @@ class SolderPanel {
       case "projectRules": return this.openProjectRules(String(message.path || ""));
       case "projectSkillForm": if (this.projectsView) { Object.assign(this.projectsView, { skillForm: !!message.open, notice: "", noticeKind: "" }); this.post(); } return;
       case "projectSkillNew": return this.createProjectSkill(String(message.path || ""), String(message.name ?? ""), String(message.when ?? ""));
+      case "projectSkillSwitch": return this.switchProjectSkill(String(message.path || ""), String(message.name || ""), !!message.on);
       case "projectSkillOpen": return this.projectSkill(String(message.path || ""), String(message.name || ""), "open");
       case "projectSkillDelete": return this.projectSkill(String(message.path || ""), String(message.name || ""), "delete");
       case "projectReveal": if (this.projects.has(String(message.path || ""))) await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(String(message.path))); return;
@@ -1333,7 +1373,7 @@ class SolderPanel {
         (this.modelsProblem ? ` · models problem: ${this.modelsProblem === "setup" ? "not set up" : this.modelsProblem}` : ""),
       `Model: ${this.chat.model || config.get("model", "") || "(none)"} · effort: ${this.chat.effort || config.get("effort", "default")} · compact at: ${config.get("compactAtTokens", 100000)} · max rounds: ${config.get("maxRounds", 30)}`,
       `Docs: ${docs.folders} folder(s), ${docs.indexed} files indexed${docs.active ? ", indexing" : ""}${docs.available ? "" : ", no SQLite"} · backups: ${(backups / 1024 ** 2).toFixed(1)} MB`,
-      `Skills: ${this.tools.skillsFolders().length} folder(s), ${skills.length} found, ${Math.min(MAX_SKILLS, skills.filter(offered).length)} offered` +
+      `Skills: ${this.tools.skillsFolders().length} folder(s), ${skills.length} found, ${this.skillsOffered(this.projectOf(this.chat)?.path || "").length} offered, ${offNames(config.get("skillsOff", [])).length} switched off` +
         (skills.some((skill) => skill.problem) ? `, ${skills.filter((skill) => skill.problem).length} with a problem` : ""),
       `This chat: ${this.chat.messages.length} messages, ${this.chat.usage.tokens} tokens, token ratio ${(this.chat.tokenRatio || 1).toFixed(2)}${this.chat.compaction ? ", compacted" : ""}`,
       "",

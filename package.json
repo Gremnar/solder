@@ -104,6 +104,9 @@
         "solder.skillsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10.5,
           "items": { "type": "string" },
           "markdownDescription": "Folders of your skills: instructions for particular kinds of task, one `.md` file each, named after the skill (`python_scripts.md`), starting with a line `When to use: …`. The model is told each skill's name and when to use it, and reads a skill whole before a task it covers. A new skill is saved in the first folder. Only files directly in a folder count; at most 50 skills are offered." },
+        "solder.skillsOff": { "type": "array", "default": [], "scope": "machine", "order": 10.6,
+          "items": { "type": "string" },
+          "markdownDescription": "Skills you've switched off, by name: the model isn't told about them. Switch a skill on or off in **Settings → Skills**; a project's page has its own switches, for that project's chats alone." },
         "solder.docsFolders": { "type": "array", "default": [], "scope": "machine", "order": 10,
           "items": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": {
             "path": { "type": "string", "description": "The folder." },

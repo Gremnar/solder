@@ -146,6 +146,52 @@ async function main() {
     panel.useChat(outsider);
     check("... and its chats then get its rules and skills", panel.promptContext(outsider).skills.some((k) => k.name === "their_way") && panel.promptContext(outsider).instructions.some((i) => i.text.includes("Their rules")));
 
+    // ---- skills on and off: everywhere (Settings), and in one project (its page)
+    const config = () => vscode.workspace.getConfiguration("solder");
+    const ownSkills = path.join(T, "own-skills-" + Date.now());
+    fs.mkdirSync(ownSkills, { recursive: true });
+    fs.writeFileSync(path.join(ownSkills, "own_way.md"), ["When to use: Doing it my way.", "", "My way.", ""].join("\n"));
+    const foldersBefore = config().get("skillsFolders");
+    undo.push(() => { fs.rmSync(ownSkills, { recursive: true, force: true }); });
+    try {
+      await config().update("skillsFolders", [ownSkills], vscode.ConfigurationTarget.Global);
+      await config().update("skillsOff", undefined, vscode.ConfigurationTarget.Global);
+      const offered = (/** @type {any} */ c) => { panel.useChat(c); return panel.promptContext(c).skills.map((/** @type {any} */ k) => k.name).sort().join(); };
+      const projectFile = fs.readFileSync(path.join(mine, ".solder", "project.json"), "utf8");
+      check("to start with, every skill is on: yours in every chat, the project's in its own", offered(plain) === "own_way" && offered(chat) === "own_way,restore_steps", [offered(plain), offered(chat)]);
+      await panel.onMessage({ type: "settings", tab: "skills" });
+      await panel.onMessage({ type: "settingsScreen", action: "skillSwitch", name: "own_way" });
+      check("a skill switched off in Settings isn't named to the model anywhere, and the setting holds its name", offered(plain) === "" && offered(chat) === "restore_steps"
+        && JSON.stringify(config().get("skillsOff")) === '["own_way"]' && panel.settingsScreen.view.skills.find((k) => k.name === "own_way")?.on === false,
+        [offered(plain), offered(chat), config().get("skillsOff"), panel.settingsScreen.view.skills]);
+      check("... it's still a skill when read by its path (off only means not offered)", panel.tools.needsApproval("read_file", { path: path.join(ownSkills, "own_way.md") }) === null);
+      await panel.onMessage({ type: "settingsScreen", action: "close" });
+      await panel.onMessage({ type: "projectSkillSwitch", path: mine, name: "own_way", on: true });
+      await panel.onMessage({ type: "projects", path: mine });
+      s = state();
+      check("switched on in one project, it's offered in that project's chats only; the page says so", offered(plain) === "" && offered(chat) === "own_way,restore_steps"
+        && s.projects.page.yours.some((k) => k.name === "own_way" && k.on === true && k.everywhere === false), [offered(plain), offered(chat), s.projects.page.yours]);
+      await panel.onMessage({ type: "projectSkillSwitch", path: mine, name: "restore_steps", on: false });
+      s = state();
+      check("a project's own skill can be switched off there too", offered(chat) === "own_way" && s.projects.page.skills.some((k) => k.name === "restore_steps" && k.on === false), [offered(chat), s.projects.page.skills]);
+      check("... the switches are kept with your list of projects, not in the project's folder", fs.readFileSync(path.join(mine, ".solder", "project.json"), "utf8") === projectFile
+        && JSON.stringify(panel.projects.switches(mine)) === '{"own_way":true,"restore_steps":false}', panel.projects.switches(mine));
+      await panel.onMessage({ type: "projectSkillSwitch", path: mine, name: "restore_steps", on: true });
+      check("... and a switch put back to what the skill is everywhere is taken away", JSON.stringify(panel.projects.switches(mine)) === '{"own_way":true}' && offered(chat) === "own_way,restore_steps", panel.projects.switches(mine));
+      await panel.onMessage({ type: "projectSkillSwitch", path: theirs + "-not-mine", name: "own_way", on: false });
+      await panel.onMessage({ type: "projectSkillSwitch", path: mine, name: "no_such_skill", on: false });
+      check("a switch for a folder that isn't your project, or a skill that isn't there, does nothing", JSON.stringify(panel.projects.switches(mine)) === '{"own_way":true}');
+      await panel.onMessage({ type: "settings", tab: "skills" });
+      await panel.onMessage({ type: "settingsScreen", action: "skillSwitch", name: "own_way" });
+      check("switched on again in Settings, it's back everywhere and the setting is empty", offered(plain) === "own_way" && !(config().get("skillsOff") || []).length, [offered(plain), config().get("skillsOff")]);
+      await panel.onMessage({ type: "settingsScreen", action: "close" });
+      await panel.onMessage({ type: "projects" });
+    } finally {
+      await config().update("skillsFolders", foldersBefore && foldersBefore.length ? foldersBefore : undefined, vscode.ConfigurationTarget.Global);
+      await config().update("skillsOff", undefined, vscode.ConfigurationTarget.Global);
+    }
+    panel.useChat(outsider);
+
     // ---- light edits: the name; and removing it from your list
     await panel.onMessage({ type: "projectRename", path: mine, name: "SQL decloning" });
     s = state();

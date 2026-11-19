@@ -167,4 +167,25 @@ function offered(skill) {
   return !!skill.text && !!skill.when;
 }
 
-module.exports = { offered, parse, readSkill, listSkills, isSkill, nameOf, MAX_SKILLS, MAX_WHEN_CHARS, MAX_SKILL_CHARS, MAX_FILE_BYTES };
+/**
+ * The skill names in a list (the setting of skills you switched off): text only, trimmed, lower case, each once.
+ * Names are compared without case, as the listing does. @param {unknown} value @returns {string[]}
+ */
+function offNames(value) {
+  const names = (Array.isArray(value) ? value : []).filter((item) => typeof item === "string").map((item) => item.trim().toLowerCase()).filter(Boolean);
+  return [...new Set(names)].slice(0, 1000);
+}
+
+/**
+ * Whether a skill is switched on: your own switch for it (off holds the names you turned off everywhere), unless the
+ * project the chat is in has a switch of its own for it. A skill that's off isn't named to the model; it's still a
+ * skill when read by its path.
+ * @param {string} name @param {string[]} off from offNames @param {Record<string, boolean>} [own] the project's switches, by lower-case name
+ */
+function switchedOn(name, off, own) {
+  const key = String(name).trim().toLowerCase();
+  const mine = own && Object.prototype.hasOwnProperty.call(own, key) ? own[key] : undefined;
+  return typeof mine === "boolean" ? mine : !off.includes(key);
+}
+
+module.exports = { offered, offNames, switchedOn, parse, readSkill, listSkills, isSkill, nameOf, MAX_SKILLS, MAX_WHEN_CHARS, MAX_SKILL_CHARS, MAX_FILE_BYTES };

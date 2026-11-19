@@ -129,6 +129,7 @@ A skill is your instructions for a kind of task: how you write PowerShell script
 
   A file that starts with a front-matter block instead (`---`, then `description: ...`, then `---`), as Claude's and Codex's `SKILL.md` files do, works too: its description says when to use it.
 - **Making one:** in **Settings → Skills**, **New skill…** opens a short form there: its name, and when the model should use it. **Create** makes it and opens it in the editor for you to write the instructions (**Solder: New skill** in the command palette opens the same form). Click a skill to edit it, or ✕ to delete it. Changes count from your next message.
+- **Switching one off:** each of your skills has a switch in **Settings → Skills**. Off, the model isn't told about the skill; the file stays where it is. A project's page has its own switches, to have a skill on or off in that project alone (see [Projects](#projects)). Your organization's skills are always on.
 - **Not sure how to write it?** Choose **I have an idea for a skill, but I don't know how to write it** in **Settings → Skills**. Solder asks you a few questions at a time, shows you a draft, and saves it once you say it's right.
 - **Where they're kept:** in `Solder\skills` in your AppData folder (`%APPDATA%`), which the guided setup makes. To use a folder you already have, choose **Use a folder of skills…** in Settings, or right-click it in the Explorer and choose **Use as Solder skills**. New skills go in the first folder.
 - **Saving one from a chat:** after a task you'll do again, type **/skill**. Solder writes up how the task was done as a skill, and asks before it saves the file. `/skill` followed by what it's for (`/skill how we name branches: feature/<ticket>-<slug>`) writes one from that instead. You can also just ask in your own words.
@@ -149,6 +150,7 @@ A project is a folder you work in, with its own rules, skills and chats. Everyth
 - **Its page:** the arrow beside a project (or the project chip above the box) opens its page, where you can read all of it:
   - **Rules:** the project's `AGENTS.md`, shown in full. **Edit** opens it in the editor; **Create AGENTS.md** makes one if it has none.
   - **Skills:** the project's own skills, in `.solder\skills`. Click one to read it; **Edit**, **Delete** and **New skill…** work as in Settings. Only this project's chats are offered them, beside your own skills.
+  - **Your skills in this project:** your own skills, each with a switch for this project alone: switch off one that doesn't fit here, or switch on one you keep off everywhere else. The project's own skills have switches too. These switches are yours, kept on your PC, so they aren't shared with the folder.
   - **Name:** change it there. The folder isn't renamed.
 - **Sharing one:** copy or zip the folder (or just `AGENTS.md` and `.solder`). Whoever gets it opens the folder in VS Code, and the Projects screen offers it with **Use it…**. Chats aren't in the folder: they stay on your PC.
 - **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode.
@@ -194,6 +196,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 | **Max rounds** | the most steps with tool calls for one message |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
+| **Skills off** | the skills you've switched off (the switches in **Settings → Skills**) |
 | **Skills folders** | your skills (see [Skills](#skills)); a new one is saved in the first |
 | **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Two kinds of model](#two-kinds-of-model-optional)) |
 | **Storage limit GB** | the most disk space Undo's backups may use, 5 GB by default; past it, the oldest go first |
