@@ -312,6 +312,19 @@
     $("chat-title-text").textContent = state.setup ? "Set up Solder" : state.settings ? "Settings" : projects ? (projects.page ? projects.page.name : "Projects") : state.chat.title;
     // An open dropdown follows the chats (a pin or rename from its right-click menu), keeping its focus.
     if (!$("chat-menu").classList.contains("hidden")) keepFocus($("chat-menu"), renderChatMenu);
+    // The project this chat is in, before its title (Work › Fix the build), so it shows without opening anything. Not on
+    // the other screens, whose title is their own.
+    const crumb = $("chat-project");
+    const inProject = !state.setup && !state.settings && !projects && state.project ? state.project : null;
+    crumb.classList.toggle("hidden", !inProject);
+    $("chat-project-sep").classList.toggle("hidden", !inProject);
+    if (inProject) {
+      const html = `${P_FOLDER}<span>${escape(inProject.name)}</span>`;
+      if (crumb.innerHTML !== html) crumb.innerHTML = html;
+      crumb.dataset.ppage = inProject.path;
+      crumb.title = `This chat is in the project ${inProject.name}. Click to open the project.`;
+      crumb.setAttribute("aria-label", `Project: ${inProject.name}. Open the project.`);
+    }
     document.body.classList.toggle("in-setup", !!state.setup || !!state.settings || !!projects);
     document.body.classList.toggle("in-settings", !state.setup && (!!state.settings || !!projects));
     document.body.classList.toggle("in-projects", !!projects);
@@ -1545,6 +1558,12 @@
     else if (d.pskillCreate !== undefined) createProjectSkill();
     else if (d.pskillOpen !== undefined) vscode.postMessage({ type: "projectSkillOpen", path: page, name: d.pskillOpen });
     else if (d.pskillDelete !== undefined) vscode.postMessage({ type: "projectSkillDelete", path: page, name: d.pskillDelete });
+  });
+  // The project's name before the chat's title opens the project's page.
+  $("chat-project").addEventListener("click", (event) => {
+    event.stopPropagation();
+    const at = /** @type {HTMLElement} */ (event.currentTarget).dataset.ppage;
+    if (at) { closeMenus(); vscode.postMessage({ type: "projects", path: at }); }
   });
   // The project chip under the box opens the project's page.
   $("chips").addEventListener("click", (event) => {

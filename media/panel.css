@@ -801,3 +801,10 @@ body.vscode-high-contrast .switch { outline: 1px solid var(--vscode-contrastBord
 .settings .hint:empty { display: none; }
 
 .chip.attached .cost { opacity: 0.7; font-variant-numeric: tabular-nums; }
+/* the project a chat is in, before its title: Work › Fix the build */
+.crumb { flex: 0 1 auto; min-width: 0; max-width: 40%; display: flex; align-items: center; gap: 5px; padding: 4px 6px; border-radius: var(--r-sm); font-weight: 600; }
+.crumb:hover { background: var(--hover); }
+.crumb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb-sep { flex: none; color: var(--muted); margin: 0 -2px; }
+.crumb.hidden, .crumb-sep.hidden { display: none; }
+.crumb + .crumb-sep + .title { padding-left: 5px; }

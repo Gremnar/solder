@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A chat's project shows in the bar.** In a project's chat, the project's name comes before the chat's title at the top of the panel (`Work › Fix the build`), so you can see which project you're in, or that you're in none, without opening anything. Clicking the name opens the project.
+
 ## 0.3.1 (2026-11-18)
 
 - **Search by meaning no longer returns noise.** A passage now has to be near enough in meaning to count. Before, a question about nothing in your docs still brought back its nearest passages, whatever they were. The floor is a similarity of 0.58, measured with real questions on real docs. A search with nothing near enough falls back to keywords alone. Embeddings models score on their own scales, so the log (Copy diagnostics) shows each search's best similarity, and the new **Meaning floor** setting changes the floor for yours.
