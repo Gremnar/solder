@@ -30,6 +30,8 @@ Expect a reply within a few days. A fix ships in the next release, credited to y
 - **Your data:** chats, Undo's backups and the docs index stay on your PC, in VS Code's storage for Solder.
 - **What reaches the endpoint:** your messages, and what the tools return: file contents Solder reads, search results and docs passages. Treat it as you would any service you send code to.
 - **Docs search by meaning (off by default):** when it's turned on, every passage of the docs folders is sent to the same endpoint's embeddings model, once, and then each changed file. The vectors that come back are kept in the local index.
+- **A shared embeddings folder (off unless set):** a folder where PCs share those embeddings, so docs are embedded once. It holds vectors only, no text and no file names, but vectors are derived from the docs: give access only to people who may read them. Solder uses a file from it only if its size, counts and checksum agree and every number is finite, and what it reads only ranks your own passages; a bad file can spoil a search's order, never put text in front of the model.
+- **Projects:** a project's rules, skills and skill switches are files in its folder, written by whoever made it, and the model follows them. Solder asks before using a folder that's already set up as a project, and uses nothing from it until you agree. A project's files can't change a setting, what needs approval, or read-only mode, and your organization's skills stay on whatever a project says.
 
 ## Prompt injection
 

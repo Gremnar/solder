@@ -23,9 +23,9 @@ Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-co
 | `src/store.js` | Chats as JSON files in the workspace's storage |
 | `src/projects.js` | Projects: a folder with `.solder\project.json` (its name) and `.solder\skills`, its rules being the instruction files at its root; and the list of project folders you use (no `vscode`, tested under node) |
 | `src/skills.js` | Skills: one `.md` file each in the skills folders, with a "When to use:" line (or front matter's description); read whole by read_file (no `vscode`, tested under node) |
-| `src/docs.js` | The docs index: node:sqlite FTS5 over the user's docs folders, plain text and Office files (no `vscode`, tested under node) |
+| `src/docs.js` | The docs index: node:sqlite FTS5 over the user's docs folders, plain text and Office files; embeddings for search by meaning, the daily embedding budget, and the shared embeddings folder (no `vscode`, tested under node) |
 | `src/setup.js` | The guided setup in the side bar: endpoint, key (checked by listing models), model, docs folders, rules |
-| `src/settings.js` | Settings inside the side bar (⋯ → Settings): the same user settings, the key, and the docs index's live status |
+| `src/settings.js` | Settings inside the side bar (the sliders button in the bar): the same user settings, the key, and the docs index's live status |
 | `media/` | The panel's HTML, CSS and JS: plain DOM, strict CSP, VS Code theme variables, Alloy-style word fade-in |
 | `build/vsix.js` | Packages `solder-<version>.vsix` with no tools (a hand-written zip) |
 

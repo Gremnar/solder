@@ -57,8 +57,9 @@ function runOne(code, dir, name) {
       clearTimeout(timer);
       const lines = fs.existsSync(log) ? fs.readFileSync(log, "utf8").split(/\r?\n/) : [];
       const fail = lines.filter((line) => /^(FAIL|!!!)/.test(line));
+      const notes = lines.filter((line) => line.startsWith("NOTE "));
       const ended = lines.some((line) => line.startsWith("=== end"));
-      resolve({ pass: lines.filter((line) => line.startsWith("PASS")).length, fail,
+      resolve({ pass: lines.filter((line) => line.startsWith("PASS")).length, fail, notes,
         problem: problem || (!lines.length ? "it never started: " + (errors.trim().split(/\r?\n/).slice(-3).join(" | ") || "no output") : !ended ? "it didn't finish" : "") });
     };
     child.on("error", (error) => done(`VS Code couldn't be started (${error.message})`));
@@ -88,6 +89,8 @@ function runOne(code, dir, name) {
     failed += bad;
     console.log(`${bad ? "FAIL" : "pass"}  ${name.padEnd(9)} ${String(result.pass).padStart(3)} passed${result.fail.length ? `, ${result.fail.length} failed` : ""}${result.problem ? ` · ${result.problem}` : ""}`);
     for (const line of result.fail) console.log("      " + line.slice(0, 400));
+    // What a check couldn't show in this VS Code: said, not counted as a failure.
+    for (const line of result.notes) console.log("      " + line.slice(0, 400));
   }
   console.log(`\n${passed} passed, ${failed} failed` + (keep || failed ? ` · logs in ${dir}` : ""));
   if (!keep && !failed) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

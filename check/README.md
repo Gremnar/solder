@@ -28,4 +28,8 @@ Two things worth knowing when writing one:
 - **Stand in for prompts on Solder's API object.** Each extension gets its own `vscode` object;
   `createRequire(<repo>/src/panel.js)("vscode")` is Solder's, wherever the check's file lives.
 
+- **A `NOTE` line says what a check couldn't show here.** It's printed under the check and isn't a failure. `stale` writes
+  one when VS Code notices an outside change by itself (1.147 watches every open file, whatever `files.watcherExclude`
+  says), so the stale copy that a network drive gives can't be made on a local disk.
+
 These aren't part of the extension: `build/vsix.js` doesn't package this folder.

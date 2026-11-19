@@ -13,6 +13,7 @@
 - **Rules for everyone:** add your organization's rules to every user's chats, after their own.
 - **Shared docs:** give everyone the same reference folders, with or without folders of their own.
 - **Shared skills:** give everyone the same skills, your organization's way of doing a kind of task, from a share.
+- **Shared embeddings:** point everyone at one folder, and docs are embedded for search by meaning once, not once per PC.
 - **Feedback stays inside:** send **Send feedback** to your own address instead of Solder's support, so nothing about your code leaves by mistake.
 - **Ready-made templates:** ADMX and ADML files come with every release. API keys stay with each user, never in policy.
 
@@ -63,7 +64,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
 
   You can add a note for the model when you answer.
 - **Slash commands.** Type **/** in the box for the list; the arrow keys move, **Enter** or **Tab** picks one, **Esc** closes it:
-  - **/new** starts a new chat, and **/fork** carries on in a copy of this one (the original stays as it was);
+  - **/new** starts a new chat (in no project), and **/fork** carries on in a copy of this one (the original stays as it was);
   - **/compact** summarises the chat now to save tokens; add what matters most, as in `/compact the API names`;
   - **/rename**, **/model** and **/effort** change this chat's name, model or effort, as in `/effort high`;
   - **/review** reviews what's changed since the last commit;
@@ -72,15 +73,16 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
 - **Edit or delete a message.** Point at one of your messages for the pencil and the bin at its bottom-right. **Delete** takes that message and its reply out of the chat, after asking. **Edit** takes it and everything after it, and puts your words back in the box to fix and send again. Files Solder changed stay as they are: only the conversation forgets. A message that's been summarised can't be changed.
 - **Stop and Resume.** **Stop** (or **Esc**) ends the reply. After a stop, or a connection problem, **Resume** carries on from the last finished step, so nothing that's done is lost.
 - **Models and effort.** The model picker beside Send switches models for this chat. **Low / Medium / High** sets how hard the model thinks: High is slower and uses many more tokens.
-- **Settings** (the sliders button in the bar, or ⋯ → Settings) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs / RAG** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered and which kind each is, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. A dot on a tab means something there wants a look.
+- **Settings** (the sliders button in the bar, or **/settings**) open right in the panel, in five tabs: **Connection** (the gateway, your key, the default model and effort), **Docs / RAG** (your docs folders, and how far indexing has got), **Skills**, **Rules** (your rules and instruction files) and **Advanced** (cost, which models are offered and which kind each is, and Undo's storage). Each field saves as you leave it, and **Done** stays in the bar at the top. A dot on a tab means something there wants a look. Solder's version is at the top right of every tab.
 - **While Solder works,** you can open other chats from the title menu to read them. A banner says where it's working, or that it needs your approval or has finished, with a button back to it. New messages wait until it's done.
-- **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
+- **Chats** are saved per workspace. The title menu lists them: pinned ones first, then by age (today, the last 7 days, the last 30 days, older), with archived ones folded away at the end. With [projects](#projects), the list is grouped: the project you're in, your other projects (folded until you click one), then **Other chats**. **Right-click** a chat there (or press **Shift+F10**) to pin, rename, fork, archive or delete it. Solder names each chat after its first answer, and again after the third; a name you give it is kept.
+- **New chat.** **+** in the bar starts a chat in no project; the arrow beside it starts one in a project of yours, or makes a new project.
 
-<p><img src="media/screenshots/slash-commands.png" width="380" alt="Typing / in the box: the list of slash commands"> <img src="media/screenshots/chats-menu.png" width="380" alt="The chats list, grouped by age with pinned chats first, and the right-click menu on a chat"></p>
+<p><img src="media/screenshots/slash-commands.png" width="380" alt="Typing / in the box: the list of slash commands"> <img src="media/screenshots/chats-menu.png" width="380" alt="The chats list, grouped by project and then by age with pinned chats first, and the right-click menu on a chat"></p>
 
 ## What it can do
 
-Solder has eleven tools, and no shell. It never runs commands: when something needs building or testing, it says what to run, and you run it.
+Solder has ten tools, and no shell. It never runs commands: when something needs building or testing, it says what to run, and you run it.
 
 | Tool | What it does |
 |---|---|
@@ -112,7 +114,7 @@ Point Solder at folders of reference documentation that only exist on your PC: i
 - **Sharing embeddings (optional):** embedding the same docs on every PC costs the same tokens every time. Set **Shared embeddings folder** (in **Settings → Docs / RAG**, under the embeddings model) to a folder your team shares, such as a network share. What one PC has embedded is put there, and the others take it from there: no tokens, nothing against the daily budget, and no waiting for it. A file's embeddings are used only where the file's text is exactly the same, with the same embeddings model; a file that changed is embedded again by whoever has it first. The folder holds numbers only, no text and no file names, but they're derived from your docs, so share it only with people who may read them. If the folder can't be reached, Solder embeds through the gateway as before. Admins can set it for everyone with the `EmbeddingsCache` policy.
 - **A daily budget for it:** embedding counts against the same daily allowance as the models, so it's held to a budget of its own, 250,000 tokens a day by default (the gateway's day, from midnight UTC). Past it, embedding waits for the next day, and keyword search, and meaning over what's already embedded, go on. Change it under **Daily budget**, or **raise it for today** once it's reached. A gateway on your own PC isn't counted. Organizations can set it with the `EmbedDailyBudget` policy.
 
-<img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Your docs: the docs folders with notes, the index's status, and search by keywords and meaning">
+<img src="media/screenshots/docs-settings.png" width="380" alt="Settings, Docs / RAG: the docs folders with notes, the index's status, search by keywords and meaning, the daily budget and the shared embeddings folder">
 
 ## Skills
 
@@ -141,6 +143,8 @@ A skill is your instructions for a kind of task: how you write PowerShell script
 - **How the model uses them:** it sees one line per skill (its name, file and when to use it). Before a task one covers, it reads that skill, and the skill then stays in the chat for the rest of the task, even when older results are cut. Reading your skills folders never needs your approval; changing a skill does. A file with no "When to use" line isn't offered to the model (so a README in the same folder isn't mistaken for a skill), and Settings says so.
 - **For organizations:** the `SkillsFolders` policy gives everyone the same skills, from a share if you like; `AllowUserSkills` lets users add folders of their own beside them. See the [admin guide](docs/POLICY.md).
 
+<img src="media/screenshots/skills-settings.png" width="380" alt="Settings, Skills: each skill with when to use it and a switch, and the skills folders">
+
 ## Projects
 
 A project is a folder you work in, with its own rules, skills and chats. Everything that makes it a project is kept in the folder itself, so it can be shared by copying the folder.
@@ -157,6 +161,10 @@ A project is a folder you work in, with its own rules, skills and chats. Everyth
 - **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode; its skill switches only decide which skills its own chats are offered, and your organization's skills stay on.
 - **Removing one:** **Remove from my projects** on its page takes it off your list. The folder, its rules and its skills stay as they are, and its chats move to **Other chats**.
 - **For organizations:** when the `SkillsFolders` policy sets the skills and users can't add their own, a project's skills aren't used either.
+
+<p><img src="media/screenshots/projects.png" width="380" alt="The Projects screen: each project with its chats, and the chats in no project"> <img src="media/screenshots/project-page.png" width="380" alt="A project's page: its name and folder, its AGENTS.md shown in full, and its skills"></p>
+
+<p><img src="media/screenshots/new-chat-menu.png" width="380" alt="The arrow beside New chat: a chat in no project, a chat in one of your projects, or a new project"> <img src="media/screenshots/project-skills.png" width="380" alt="A project's page, further down: switches for the project's own skills and for your skills in this project"></p>
 
 ## Two kinds of model (optional)
 
@@ -212,11 +220,15 @@ The API key is set with **Solder: Set API key**, or in the guided setup. It's ne
 - **Network:** Solder contacts only the endpoint you set. There's no telemetry, no update check and no other network call, and the panel loads nothing from the internet. **⋯ → Send feedback…** opens your own email app, addressed to support (or to your organization's own address, when it sets one), with only the Solder and VS Code versions filled in.
 - **Your key:** kept in VS Code's secret storage.
 - **Your chats and the docs index:** stay on your PC, in VS Code's storage for Solder.
+- **A project's rules, skills and skill switches:** are in the project's own folder, so they go wherever you copy it. Its chats don't.
+- **The shared embeddings folder (off unless you set one):** holds numbers derived from your docs, with no text and no file names. Share it only with people who may read those docs.
 
 ## Troubleshooting
 
 - **"Can't reach the endpoint":** run **Solder: Check connection** from the command palette. It lists the models, then makes one tool round trip, and reports each step in the Solder output.
 - **"The allowance is used up":** your gateway's daily limit was reached. Everything so far is saved, so choose **Resume** once it resets.
+- **A project's chat doesn't follow its rules or skills:** the project must be on your list (the Projects screen shows it; **Use it…** takes on one that's found in the window), and a skill must be switched on, in **Settings → Skills** or on the project's page.
+- **The shared embeddings folder isn't used:** **Settings → Docs / RAG** says why under the field. It needs a full path you can read and write; when it can't be reached, Solder embeds through the gateway as before.
 - **The outline or symbols come back empty:** VS Code has no language support for that kind of file, or it's still starting. Solder falls back to text search.
 
 ## Contributing
