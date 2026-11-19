@@ -1393,6 +1393,64 @@
     vscode.postMessage({ type: "chatAction", action, id });
   });
 
+  // ---- the right-click menu on a file's name in an answer: copy, copy as path, open, show in the file explorer ----
+  // (VS Code's own menu there offers Cut and a Copy that copies nothing, as nothing is selected.)
+  const pathActions = $("path-actions");
+  /** The link it was opened on (focus goes back to it). @type {HTMLElement | null} */
+  let pathFor = null;
+  /** @param {HTMLElement} link @param {number} x @param {number} y */
+  function openPathActions(link, x, y) {
+    closeMenus();
+    pathFor = link;
+    const entry = (/** @type {string} */ action, /** @type {string} */ label) => `<button role="menuitem" tabindex="-1" data-path-action="${action}">${label}</button>`;
+    pathActions.innerHTML = [entry("copy", "Copy"), entry("copyPath", "Copy as path"), `<div class="sep" role="separator"></div>`,
+      entry("open", "Open in VS Code"), entry("reveal", "Show in Explorer")].join("");
+    pathActions.classList.remove("hidden");
+    const width = pathActions.offsetWidth;
+    const height = pathActions.offsetHeight;
+    pathActions.style.left = Math.max(4, Math.min(x, window.innerWidth - width - 4)) + "px";
+    pathActions.style.top = Math.max(4, Math.min(y, window.innerHeight - height - 4)) + "px";
+    /** @type {HTMLElement | null} */ (pathActions.querySelector("button"))?.focus();
+  }
+  function closePathActions(/** @type {boolean} */ refocus) {
+    if (pathActions.classList.contains("hidden")) return;
+    pathActions.classList.add("hidden");
+    if (refocus && pathFor && document.body.contains(pathFor)) pathFor.focus();
+  }
+  transcript.addEventListener("contextmenu", (event) => {
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("a.path-link"));
+    if (!link) return; // anywhere else: VS Code's own menu, for selected text
+    event.preventDefault();
+    openPathActions(link, event.clientX, event.clientY);
+  });
+  transcript.addEventListener("keydown", (event) => {
+    const link = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("a.path-link"));
+    if (!link || !(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const box = link.getBoundingClientRect();
+    openPathActions(link, box.left + 12, box.bottom);
+  });
+  transcript.addEventListener("scroll", () => closePathActions(false), { passive: true });
+  pathActions.addEventListener("keydown", (event) => {
+    const items = /** @type {HTMLElement[]} */ ([...pathActions.querySelectorAll("button")]);
+    const at = items.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closePathActions(true); return; }
+    if (event.key === "Tab") { event.preventDefault(); closePathActions(true); return; }
+    const to = event.key === "ArrowDown" ? (at + 1) % items.length : event.key === "ArrowUp" ? (at <= 0 ? items.length - 1 : at - 1)
+      : event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : -1;
+    if (to >= 0) { event.preventDefault(); items[to].focus(); }
+  });
+  pathActions.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const button = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-path-action]"));
+    if (!button || !pathFor) return;
+    const given = String(pathFor.dataset.path || "");
+    closePathActions(true);
+    // The name as it's shown is what Copy takes; the rest go by the path the link holds (a line number after it is left off).
+    vscode.postMessage({ type: "pathAction", action: button.dataset.pathAction, path: given, shown: (pathFor.textContent || "").trim() });
+  });
+
   // ------------------------------------------------------------------ projects --
   // The Projects screen, in the transcript's place as Settings is: your projects with their chats, and one project's
   // page, where its rules and skills can be read in full (they're edited in the editor, which is better at it).
@@ -1997,6 +2055,7 @@
   document.addEventListener("click", (event) => {
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
+    if (!target.closest("#path-actions")) closePathActions(false);
     const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;

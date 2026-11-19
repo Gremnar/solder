@@ -238,6 +238,33 @@ async function main() {
         [fs.existsSync(marker), String(result.output).slice(0, 200)]);
     }
 
+    // ---- the right-click menu on a file's name in an answer
+    {
+      panel.engine.busy = false;
+      panel.chat = a;
+      panel.useChat(a);
+      const clip = own.env.clipboard;
+      const had = await clip.readText();
+      const revealed = [];
+      const real = own.commands.executeCommand;
+      const back = stub(own.commands, "executeCommand", async (id, ...rest) => { if (id === "revealFileInOS") { revealed.push(rest[0]?.fsPath); return; } return real.call(own.commands, id, ...rest); });
+      try {
+        await panel.onMessage({ type: "pathAction", action: "copy", path: "sample.txt:12", shown: "sample.txt" });
+        check("Copy on a file's name copies the name as shown", await clip.readText() === "sample.txt", await clip.readText());
+        await panel.onMessage({ type: "pathAction", action: "copyPath", path: "sample.txt:12", shown: "sample.txt" });
+        check("Copy as path copies its full path, in the chat's folder, without the line number", (await clip.readText()).toLowerCase() === path.join(ws, "alpha", "sample.txt").toLowerCase(), await clip.readText());
+        await panel.onMessage({ type: "pathAction", action: "reveal", path: "sample.txt", shown: "sample.txt" });
+        await panel.onMessage({ type: "pathAction", action: "reveal", path: "no-such-file.txt", shown: "no-such-file.txt" });
+        check("Show in Explorer shows a file that's there, and only that", revealed.length === 1 && String(revealed[0]).toLowerCase() === path.join(ws, "alpha", "sample.txt").toLowerCase(), revealed);
+        await clip.writeText("untouched");
+        await panel.onMessage({ type: "pathAction", action: "something-else", path: "sample.txt", shown: "sample.txt" });
+        check("an action that isn't one of the four does nothing", await clip.readText() === "untouched" && revealed.length === 1);
+      } finally {
+        back?.();
+        await clip.writeText(had);
+      }
+    }
+
     // ---- Paste in terminal: nothing a shell reads as a key press
     const C = (code) => String.fromCharCode(code);
     check("control characters are taken out of what's pasted in the terminal (tab and new line stay)",

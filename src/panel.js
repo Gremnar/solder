@@ -1235,6 +1235,7 @@ class SolderPanel {
         return;
       }
       case "openFile": return this.openFile(message.path, message.line);
+      case "pathAction": return this.pathAction(String(message.action || ""), String(message.path || "").slice(0, 2000), String(message.shown || "").slice(0, 2000));
       case "folder": return this.chooseFolder();
       case "clearFolder": return this.setFolder("");
       case "setKey": await vscode.commands.executeCommand("solder.setApiKey"); return;
@@ -1645,6 +1646,23 @@ class SolderPanel {
     } catch {
       vscode.window.showWarningMessage(`Solder: couldn't open ${file}.`);
     }
+  }
+
+  /**
+   * The right-click menu on a file's name in an answer: copy the name as shown, copy its full path, open it, or show
+   * it in the file explorer. @param {string} action @param {string} given the path the link holds (a line may follow: a.js:12) @param {string} shown
+   */
+  async pathAction(action, given, shown) {
+    const [file, line] = given.split(/:(\d+)$/);
+    if (action === "copy") { await vscode.env.clipboard.writeText(shown || given); return; }
+    if (action === "open") return this.openFile(file, line ? Number(line) : undefined);
+    if (action !== "copyPath" && action !== "reveal") return;
+    if (!this.awayBusy()) this.useChat(this.chat); // the running task keeps its folder
+    let target;
+    try { target = this.tools.resolve(file); } catch { vscode.window.showWarningMessage(`Solder: ${file} isn't a path that can be used here.`); return; }
+    if (action === "copyPath") { await vscode.env.clipboard.writeText(target.full); return; }
+    if (!fs.existsSync(target.full)) { vscode.window.showWarningMessage(`Solder: couldn't find ${file}.`); return; }
+    await vscode.commands.executeCommand("revealFileInOS", target.uri);
   }
 
   // ------------------------------------------------------------------- posting --

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: right-clicking a file's name in an answer.** The menu was VS Code's own, with Cut, and a Copy that copied nothing. A file's name now has its own menu: **Copy** (the name as shown), **Copy as path** (its full path), **Open in VS Code** and **Show in Explorer**. It opens from the keyboard too (Shift+F10 or the menu key).
+
 ## 0.3.3 (2026-11-19)
 
 - **Paste in terminal asks before pasting several lines.** Some terminals, Windows PowerShell among them, run each line of a paste as it arrives, without waiting for Enter. A block of more than one line now asks once, saying how many lines and why, before anything goes to the terminal. A single line is pasted as before.
