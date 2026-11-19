@@ -302,6 +302,16 @@ class SolderPanel {
     const terminal = vscode.window.activeTerminal ?? vscode.window.terminals[0] ?? vscode.window.createTerminal({ name: "Solder" });
     terminal.show(false);
     if (!code.includes("\n")) { terminal.sendText(code, false); return; }
+    // Several lines: asked about once, first. A shell that takes a paste as one block waits for Enter, but some
+    // (Windows PowerShell among them) run each line as it arrives, and nothing here can tell which this terminal is.
+    // VS Code's own warning isn't relied on: it can be switched off, and where it's set to always show, ours would
+    // only be a second one.
+    if (vscode.workspace.getConfiguration("terminal.integrated").get("enableMultiLinePasteWarning") !== "always") {
+      const count = code.split("\n").filter((line) => line.trim()).length;
+      const pick = await vscode.window.showWarningMessage(`Paste ${count} lines into the terminal?`, { modal: true,
+        detail: "Some terminals run each line as it's pasted, without waiting for Enter (Windows PowerShell does). Paste only if you'd run all of it; otherwise copy it and take the lines one at a time." }, "Paste");
+      if (pick !== "Paste") return;
+    }
     const before = await Promise.resolve(vscode.env.clipboard.readText()).catch(() => "");
     await vscode.env.clipboard.writeText(code);
     try {

@@ -95,8 +95,21 @@ async function main() {
         await panel.onMessage({ type: "pasteInTerminal", text: "Get-ChildItem -Recurse\n\n" });
         check("one line is typed into the terminal without Enter, trailing newlines left off", JSON.stringify(typed) === JSON.stringify([["Get-ChildItem -Recurse", false]]), typed);
         await own.env.clipboard.writeText("what you had copied");
+        // Several lines are asked about once, first: some shells run each pasted line without waiting for Enter.
+        const warned = [];
+        let reply;
+        const ask = stub(own.window, "showWarningMessage", async (text, options, ...buttons) => { warned.push({ text: String(text), detail: options?.detail || "", buttons }); return reply; });
+        restore.push(ask);
+        await panel.onMessage({ type: "pasteInTerminal", text: "$a = 1\n\nWrite-Output $a\n" });
+        check("several lines: asked once before anything is pasted, saying how many and why; no means nothing is pasted",
+          warned.length === 1 && /Paste 2 lines into the terminal/.test(warned[0].text) && /without waiting for Enter/.test(warned[0].detail) && pastes.length === 0
+          && await own.env.clipboard.readText() === "what you had copied", [warned, pastes]);
+        reply = "Paste";
         await panel.onMessage({ type: "pasteInTerminal", text: "$a = 1\nWrite-Output $a\n" });
-        check("several lines go through VS Code's own terminal paste (its multi-line warning), still without Enter", JSON.stringify(pastes) === JSON.stringify(["$a = 1\nWrite-Output $a"]), pastes);
+        check("... yes pastes them through VS Code's own terminal paste, still without Enter", warned.length === 2 && JSON.stringify(pastes) === JSON.stringify(["$a = 1\nWrite-Output $a"]), pastes);
+        typed.length = 0;
+        await panel.onMessage({ type: "pasteInTerminal", text: "Get-Date" });
+        check("... and one line is never asked about", warned.length === 2 && typed.length === 1, [warned.length, typed]);
         await sleep(1200);
         check("... and your clipboard is put back", await own.env.clipboard.readText() === "what you had copied");
       } else log("SKIP Paste in terminal: this window already has a terminal");
