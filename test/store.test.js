@@ -64,3 +64,33 @@ test("saves of one chat made at once all land, the newest last", async () => {
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("a chat that loses all its turns loses its file: the old conversation isn't back after a reload", async () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "solder-store-"));
+  try {
+    const store = new ChatStore(folder);
+    const chat = { id: "abc123", title: "t", updated: 1, messages: [{ role: "user", content: "secret words" }, { role: "assistant", content: "reply" }], usage: { tokens: 0 } };
+    await store.save(chat);
+    assert.equal(new ChatStore(folder).load("abc123")?.messages.length, 2);
+    chat.messages = [];
+    await store.save(chat);
+    assert.equal(new ChatStore(folder).load("abc123"), null, "a fresh store finds nothing");
+    assert.equal(store.list().some((c) => c.id === "abc123"), false);
+    // Typed in again (an edited first message, sent): it's saved as ever.
+    chat.messages = [{ role: "user", content: "new words" }];
+    await store.save(chat);
+    assert.equal(new ChatStore(folder).load("abc123")?.messages[0].content, "new words");
+    // A save and an emptying one after the other land in that order.
+    const first = store.save(chat);
+    chat.messages = [];
+    await Promise.all([first, store.save(chat)]);
+    assert.equal(new ChatStore(folder).load("abc123"), null);
+  } finally { fs.rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("settings a folder's own .vscode files could set are user settings only", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+  const properties = manifest.contributes.configuration.properties;
+  const open = Object.entries(properties).filter(([, value]) => !["application", "machine"].includes(/** @type {any} */ (value).scope)).map(([name]) => name);
+  assert.deepEqual(open, [], "every Solder setting is the user's (application) or this PC's (machine): none can come from a workspace");
+});

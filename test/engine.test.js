@@ -863,3 +863,54 @@ test("Resume never summarises the task it resumes, however big: only the turns b
   assert.equal(two.compaction?.through, 2, "summarised up to the task's own message, not past it");
   assert.ok(second.sent[1].some((m) => m.role === "tool" && m.content === big), "the task's reads go on whole");
 });
+
+test("a message queued while a reply fails isn't sent by itself: it goes back to you, and the error stays to act on", async () => {
+  const events = [];
+  /** @type {any} */
+  let e;
+  const client = fakeClient([
+    () => ({ calls: [call("1", "read_file", { path: "a.js" })] }),
+    () => { e.steer("also look at b.js"); return Object.assign(new GatewayError("The allowance is used up.", { status: 429 }), { exhausted: true }); },
+  ]);
+  e = engine(client, fakeHost(), events);
+  const chat = Engine.newChat();
+  await e.ask(chat, "read a.js");
+  const unsent = events.find((event) => event.type === "steer-unsent");
+  assert.equal(events.some((event) => event.type === "error"), true);
+  assert.deepEqual([unsent?.text, unsent?.send], ["also look at b.js", false], "not sent at once into the same failure");
+  // A reply that just ends (no failure, no Stop) still sends it as the next message.
+  const calm = [];
+  /** @type {any} */
+  let e2;
+  e2 = engine(fakeClient([() => { e2.steer("and b.js"); return { content: "Done." }; }]), fakeHost(), calm);
+  await e2.ask(Engine.newChat(), "read a.js");
+  assert.equal(calm.find((event) => event.type === "steer-unsent")?.send, true);
+});
+
+test("read-only mode turned on while a reply's calls run stops the changes still to come, and one waiting for your Allow", async () => {
+  let readOnly = false;
+  const host = fakeHost({ tools: { read_file: () => { readOnly = true; return { output: "text", summary: "read" }; } } });
+  const client = fakeClient([
+    { calls: [call("1", "read_file", { path: "a.js" }), call("2", "write_file", { path: "b.js", content: "x" })] },
+    { content: "Couldn't." },
+  ]);
+  const e = new Engine({ client, host, retryDelays: [0, 0], now: () => new Date(2026, 10, 4, 14, 5),
+    settings: () => ({ model: "m", compactAt: 100_000, maxRounds: 30, readOnly }), onEvent() {} });
+  const chat = Engine.newChat();
+  await e.ask(chat, "read then write");
+  assert.deepEqual(host.ran.map(([name]) => name), ["read_file"], "the write that followed never ran");
+  assert.equal(chat.messages.find((m) => m.tool_call_id === "2")?.content, TEXTS.readOnly);
+
+  // Asked about first (outside the workspace), and read-only mode arrives before you click Allow.
+  let later = false;
+  const asking = fakeHost();
+  /** @type {any} */
+  let e2;
+  e2 = new Engine({ client: fakeClient([{ calls: [call("1", "write_file", { path: "C:\\out.txt", content: "x" })] }, { content: "Couldn't." }]), host: asking, retryDelays: [0, 0],
+    now: () => new Date(2026, 10, 4, 14, 5), settings: () => ({ model: "m", compactAt: 100_000, maxRounds: 30, readOnly: later }),
+    onEvent: (event) => { if (event.type === "approval") { later = true; setImmediate(() => e2.decide(event.id, { decision: "allow" })); } } });
+  const second = Engine.newChat();
+  await e2.ask(second, "write outside");
+  assert.deepEqual(asking.ran, [], "Allow doesn't run it once read-only mode is on");
+  assert.equal(second.messages.find((m) => m.tool_call_id === "1")?.content, TEXTS.readOnly);
+});

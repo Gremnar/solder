@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Fixes from a review of 0.3.0 by six reviewers.
+
+- **Fix: sending from another chat could move a running task's files.** With a task working in one chat, pressing Send in another was refused, but first switched Solder to that other chat's folder and skills, so the task's next file could land in the wrong folder. A running task now keeps its folder, its skills and what it may read until it's done.
+- **Fix: an attached file stayed readable without asking after its chip was removed.** A long file attached from outside the workspace is read without asking only once it's sent, only in that chat, and no longer once the message it went with is deleted. What's attached and unsent stays with its chat instead of following you into the next one.
+- **Fix: a folder's own `.vscode` settings could set Solder's.** Rules, the step limit, Compact at, the model, model names, effort and instruction files are now your own settings only, so a repository you open can't supply them. The step limit and Compact at are also held to their ranges wherever they're read. If you had set one of these in a workspace's settings, set it in your user settings instead.
+- **Fix: a project's skills folder could point somewhere else.** A project whose `.solder\skills` is a link or junction out of the project isn't used: it would have made that other place readable without asking.
+- **Fix: a project's chat opened in another window could work in the wrong folder.** A chat's folder is now the folder it was saved for, not one of the same name in whichever window opens it, and a project's chat with no folder of its own works in its project.
+- **Fix: deleting a chat's only turn, or editing its first message, left the old conversation on disk,** to come back after a reload.
+- **Fix: a new profile with only the gateway's address in its settings had changes turned on.** It now starts read-only like any new install; only a saved key or saved chats count as having used Solder before.
+- **Fix: the `changes` tool could run programs named in a repository's own git config** (filters, on a copied or cloned-in repository). Those are switched off for Solder's git; filters you set up yourself, such as Git LFS, still run.
+- **Fix: Paste in terminal passed control characters through,** which a shell can read as key presses, one of them running the line. They're taken out, so nothing runs until you press Enter.
+- **Fix: removing a docs folder, or turning search by meaning off, didn't stop the indexing run already going,** which kept sending that folder's passages to be embedded. The run now stops at once.
+- **Fix: read-only mode arriving while a reply's steps ran didn't stop a change queued behind them,** or one waiting for your Allow.
+- **Fix: a message queued while Solder worked was sent by itself when the reply failed,** clearing the error and its Resume button, and with the allowance used up failing again at once. It now goes back in the box.
+- **Fix: a reply streaming in could draw the chat over Settings, the guided setup or Projects,** losing what you'd typed there, and a late update could flip the panel back to the chat you'd just left.
+- **Fix: smaller things in the panel.** Escape in a project's new-skill form stopped the running task (Escape now stops a reply only from the chat itself); Shift+Tab in the slash-command list ran `/new`; a long run of `>` in an answer stopped the chat drawing; and a fence line inside a code block ended it early, so Copy took only part.
+
 ## 0.3.0 (2026-11-18)
 
 - **Docs embeddings can be shared between PCs.** Set **Shared embeddings folder** (Settings → Docs / RAG, or the new `EmbeddingsCache` policy) to a folder your team shares. What one PC has embedded for search by meaning is put there and the others take it: no tokens, and nothing against the daily embedding budget. It applies where a file's text and the embeddings model are exactly the same; the folder holds numbers only (no text, no file names). A PC that had already embedded its docs puts them there too. If the folder can't be reached, embedding goes through the gateway as before.

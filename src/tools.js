@@ -61,8 +61,8 @@ const GIT_MS = 20_000;
 /**
  * Every git call starts with these: no pager, no colour, no fsmonitor hook, no optional locks, and (for
  * diffs, see gitDiffArgs) no external diff drivers or textconv filters, so a repository's own config can't
- * make Solder run other programs. Status may still run the clean filters VS Code's own Source Control
- * view runs (Git LFS, say): nothing beyond what VS Code already does.
+ * make Solder run other programs. Status may still run the filters set up for you or the whole PC (Git LFS, say),
+ * as VS Code's own Source Control view does; a repository's own filters are switched off (see quietFilters).
  */
 const GIT_SAFE = ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotepath=false",
   "-c", "color.ui=false", "-c", "diff.external="];
@@ -344,10 +344,25 @@ class WorkspaceTools {
     return { output: RESULTS.skillRead(skill.name, skill.cut ? skills.MAX_SKILL_CHARS : 0), summary: `Read the skill ${skill.name}`, keep };
   }
 
+  /**
+   * Whether the project's skills folder is really inside the project: <project>\.solder\skills, links followed. A
+   * junction or link there that leads somewhere else would make that place readable without asking (a skills folder
+   * is), so it isn't used, as a rules file that's a link out isn't.
+   */
+  ownProjectSkills() {
+    if (!this.projectSkills) return false;
+    try {
+      const project = path.dirname(path.dirname(this.projectSkills));
+      const real = realPath(this.projectSkills);
+      const home = realPath(project);
+      return real.toLowerCase() !== home.toLowerCase() && within(real, home);
+    } catch { return false; }
+  }
+
   /** The skills folders from the settings (or the list given) that exist, as full paths. @param {unknown} [given] */
   skillsFolders(given) {
     // Your own and your organization's, then the project's (when the chat is in one): a given list is just itself.
-    const raw = given ?? [...(solderSettings().get("skillsFolders", []) || []), ...(this.projectSkills ? [this.projectSkills] : [])];
+    const raw = given ?? [...(solderSettings().get("skillsFolders", []) || []), ...(this.ownProjectSkills() ? [this.projectSkills] : [])];
     /** @type {string[]} */
     const out = [];
     for (const item of Array.isArray(raw) ? raw : []) {
@@ -568,9 +583,10 @@ class WorkspaceTools {
     // Literal, so a folder like app/[slug] isn't read as a pattern.
     const pathspec = ["--", spec && spec !== "." ? ":(literal)" + spec : "."];
     const where = target ? target.shown : (this.folder || "");
+    const quiet = await quietFilters(git, top, signal);
     const hasHead = await runGit(git, top, ["rev-parse", "--verify", "--quiet", "HEAD"], signal).then(() => true, () => false);
     const fail = (/** @type {any} */ error) => { throw new ToolError(RESULTS.gitFailed(error.message)); };
-    const entries = parseStatus(await runGit(git, top, ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...pathspec], signal).catch(fail));
+    const entries = parseStatus(await runGit(git, top, ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...pathspec], signal, quiet).catch(fail));
     const unsaved = vscode.workspace.textDocuments
       .filter((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, scope)).map((doc) => this.shown(doc.uri.fsPath));
     const tail = (unsaved.length ? "\n\n" + RESULTS.unsaved(unsaved) : "") + (hasHead ? "" : "\n\n" + RESULTS.noCommits);
@@ -581,18 +597,18 @@ class WorkspaceTools {
       /** @type {Map<string, string>} */
       const counts = new Map();
       if (hasHead) {
-        const numstat = await runGit(git, top, ["diff", "--numstat", "--no-ext-diff", "--no-textconv", "-z", "HEAD", ...pathspec], signal).catch(() => "");
+        const numstat = await runGit(git, top, ["diff", "--numstat", "--no-ext-diff", "--no-textconv", "-z", "HEAD", ...pathspec], signal, quiet).catch(() => "");
         for (const [file, count] of parseNumstat(numstat)) counts.set(file, count);
       }
       const lines = entries.slice(0, MAX_CHANGED).map((entry) =>
         `${this.shown(fullOf(entry.path))} · ${entry.label}${counts.has(entry.path) ? " · " + counts.get(entry.path) : ""}`);
-      const diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(() => "")) : "";
+      const diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal, quiet).catch(() => "")) : "";
       const inline = diff.trim() && diff.length <= INLINE_DIFF_CHARS ? "\n\n" + diff.trim() : "";
       return { output: RESULTS.changedFiles(entries.length, !!inline) + "\n" + lines.join("\n")
         + (entries.length > MAX_CHANGED ? "\n" + RESULTS.changedCapped(entries.length - MAX_CHANGED) : "") + inline + tail,
         summary: `Changes · ${entries.length} file${entries.length === 1 ? "" : "s"}` };
     }
-    let diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal).catch(fail)) : "";
+    let diff = hasHead ? withoutSignatureLines(await runGit(git, top, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "HEAD", ...pathspec], signal, quiet).catch(fail)) : "";
     if (diff.length > MAX_DIFF_CHARS) diff = diff.slice(0, MAX_DIFF_CHARS) + "\n" + TEXTS.resultCut(diff.length - MAX_DIFF_CHARS);
     const parts = [diff.trim(), fresh.length ? RESULTS.newFiles(fresh) : ""].filter(Boolean);
     return { output: (parts.join("\n\n") || RESULTS.noChanges(where)) + tail,
@@ -772,8 +788,21 @@ class WorkspaceTools {
     const index = this.docsIndex();
     if (!index) return;
     const folders = this.docsFolders().map((folder) => folder.path);
-    if (index.active) { index.active.finally(() => this.refreshDocs()); return; } // the folders changed meanwhile: again after
     const model = this.semantic();
+    // What this run is for. A run started for something else (a folder since removed, search by meaning since turned
+    // off, another model, gateway or shared folder) is stopped at once: it sends nothing more of what was withdrawn.
+    const mark = JSON.stringify([folders, model, this.embedCache()?.folder || "", String(solderSettings().get("endpoint", "") || "")]);
+    if (index.active) {
+      if (this._docsRun && this._docsRun.mark !== mark) this._docsRun.controller.abort();
+      // Again after it, once however often that's asked meanwhile.
+      if (!this._docsAgain) {
+        this._docsAgain = true;
+        index.active.catch(() => {}).finally(() => { this._docsAgain = false; this.refreshDocs(); });
+      }
+      return;
+    }
+    const controller = new AbortController();
+    this._docsRun = { mark, controller };
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: model ? "Solder: indexing docs, with meaning" : "Solder: indexing docs" },
       (progress) => {
         // The status bar counts the passages as they get their vectors; the log has a line every 320 or so.
@@ -792,8 +821,9 @@ class WorkspaceTools {
               this.onDocsLog?.(`docs embeddings: ${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages · ${index.embedding.runTokens.toLocaleString("en-US")} tokens so far this run`);
             }
           } } : undefined;
-        return index.refresh(folders, { ms: 30 * 60_000, embed });
+        return index.refresh(folders, { ms: 30 * 60_000, embed, signal: controller.signal });
       }).then(() => {}, () => {});
+    if (this._docsRun?.controller === controller) this._docsRun = null;
     const embed = model && this.embedder;
     if (embed) {
       // What it cost, for the log (Copy diagnostics): the gateway's own token count.
@@ -1543,9 +1573,35 @@ function deadline(promise, ms) {
  * the first line of stderr (or the spawn error, whose code is ENOENT when git isn't there).
  * @param {string} git @param {string} cwd @param {string[]} args @param {AbortSignal} [signal] @returns {Promise<string>}
  */
-function runGit(git, cwd, args, signal) {
+/**
+ * Switches that turn off the filter programs a repository's own config names (filter.<x>.clean, smudge and process:
+ * git runs them on its files during status and diff). Filters set up for you or the whole PC (Git LFS) stay: those
+ * are yours. A repository's own could be anyone's, in a folder that was copied or cloned in, and Solder runs nothing.
+ * @param {string} git @param {string} top the repository @param {AbortSignal} [signal] @returns {Promise<string[]>}
+ */
+async function quietFilters(git, top, signal) {
+  let listed = "";
+  // Exit 1 means there are none.
+  try { listed = await runGit(git, top, ["config", "--local", "--includes", "-z", "--get-regexp", "^filter\\..*\\.(clean|smudge|process|required)$"], signal); } catch { return []; }
+  /** @type {string[]} */
+  const off = [];
+  const drivers = new Set();
+  for (const entry of listed.split("\0")) {
+    const key = entry.split("\n")[0].trim();
+    const driver = /^filter\.(.+)\.(?:clean|smudge|process|required)$/i.exec(key)?.[1];
+    if (driver) drivers.add(driver);
+  }
+  for (const driver of drivers) {
+    for (const kind of ["clean", "smudge", "process"]) off.push("-c", `filter.${driver}.${kind}=`);
+    off.push("-c", `filter.${driver}.required=false`);
+  }
+  return off;
+}
+
+/** @param {string} git @param {string} cwd @param {string[]} args @param {AbortSignal} [signal] @param {string[]} [extra] more -c switches, before the command */
+function runGit(git, cwd, args, signal, extra = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(git, [...GIT_SAFE, ...args], { cwd, windowsHide: true, shell: false, signal,
+    const child = spawn(git, [...GIT_SAFE, ...extra, ...args], { cwd, windowsHide: true, shell: false, signal,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", GIT_EXTERNAL_DIFF: "" } });
     let out = "";
     let errors = "";

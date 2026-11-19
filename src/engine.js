@@ -250,12 +250,14 @@ class Engine {
     this.emit({ type: "busy", chat: chat.id, busy: true });
     this.answerTokens = 0;
     let stopped = false;
+    let failed = false;
     try {
       this._settle(chat, TEXTS.notRunStopped); // a reply that died mid-batch last time
       await start(controller.signal);
       if (loop) await this._loop(chat, controller.signal);
     } catch (error) {
       stopped = error instanceof Cancelled || controller.signal.aborted;
+      failed = !stopped;
       this._settle(chat, stopped ? TEXTS.notRunStopped : TEXTS.notRunFailed);
       await this._save(chat).catch(() => {});
       if (stopped) {
@@ -271,8 +273,11 @@ class Engine {
       this.controller = null;
       this.approvals.clear();
       if (this.steers.length) {
-        // Not delivered (the reply ended without another step): sent as the next message, unless you stopped it.
-        this.emit({ type: "steer-unsent", chat: chat.id, ...this._queued(), text: this._queued().text, send: !stopped });
+        // Not delivered (the reply ended without another step): sent as the next message. Not after a Stop, and not
+        // after a failure: then it goes back in the box, the error stays up with its Resume, and you choose. (Sent at
+        // once it would be a new task, the interrupted one's reads would lose their place, and with the allowance
+        // used up it would only fail again.)
+        this.emit({ type: "steer-unsent", chat: chat.id, ...this._queued(), text: this._queued().text, send: !stopped && !failed });
         this.steers = [];
       }
       this.emit({ type: "busy", chat: chat.id, busy: false });
@@ -432,7 +437,6 @@ class Engine {
     /** @type {Stored[]} */
     const added = [];
     let batchChars = 0;
-    const readOnly = !!this.settings().readOnly;
     const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
     // Several edits to one file in a reply: its problems are checked once, after the last of them.
     const group = calls[0]?.id || "";
@@ -454,8 +458,9 @@ class Engine {
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {
         // A note Solder once put in old calls, sent back as the text of a change: never run (it went into a file once).
         result = { output: TEXTS.standInArgument, summary: "Not run: " + label, failed: true };
-      } else if (readOnly && Object.hasOwn(TOOLS, name) && !READ_ONLY.has(name)) {
-        // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered.
+      } else if (this._readOnlyNow(name)) {
+        // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered. Looked at now, for
+        // each call: your organization can turn it on while an earlier call of this reply is still running.
         result = { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
@@ -512,6 +517,11 @@ class Engine {
     }
   }
 
+  /** Whether this tool changes files and read-only mode is on, as the settings are this moment. @param {string} name */
+  _readOnlyNow(name) {
+    return Object.hasOwn(TOOLS, name) && !READ_ONLY.has(name) && !!this.settings().readOnly;
+  }
+
   /** One call: asked about first when it must be, then run. @returns {Promise<ToolResult>} */
   async _runOne(/** @type {Chat} */ chat, /** @type {string} */ id, /** @type {string} */ name, /** @type {any} */ args,
     /** @type {string} */ label, /** @type {AbortSignal} */ signal, /** @type {{group: string, more: boolean} | undefined} */ edit) {
@@ -526,6 +536,8 @@ class Engine {
       // Stop answers open cards with "decline": that's a stop, not the user saying no.
       if (signal.aborted) return { output: TEXTS.notRunStopped, summary: "Not run: " + label, failed: true };
       note = (answer.note || "").trim();
+      // Read-only mode came on while this waited for your answer: Allow doesn't run it.
+      if (answer.decision === "allow" && this._readOnlyNow(name)) return { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       if (answer.decision !== "allow") {
         return { output: TEXTS.declined + (note ? "\n\n" + TEXTS.userNote(note) : ""),
           summary: "Declined: " + label + (note ? " · with your note" : ""), failed: true };

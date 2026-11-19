@@ -6,7 +6,7 @@ reads it.
 
 ```
 node check/run.js              every check
-node check/run.js skills       one of them (policy, edits, group1, problems, symbols, skills, readonly, messages, setup, stale, projects)
+node check/run.js skills       one of them (policy, edits, group1, problems, symbols, skills, readonly, messages, setup, stale, projects, hardening)
 node check/run.js --keep       keep the logs and the throwaway folders
 ```
 

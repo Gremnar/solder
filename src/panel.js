@@ -143,8 +143,8 @@ class SolderPanel {
     this.projectNames = new Map();
     /** @type {{at: number, items: {path: string, name: string}[]} | null} */
     this.foundCache = null;
-    /** @type {any[]} what goes with your next message: pasted text and text files, as chips above the box */
-    this.attachments = [];
+    /** @type {Map<string, any[]>} by chat: a chat's unsent attachments are its own, and go nowhere else */
+    this.drafts = new Map();
     this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.skillsOffered().length,
       // Your skills folder, ready (and in the setting) once setup is done, so New skill and /skill need no folder picking.
       skillsHome: async () => {
@@ -281,7 +281,9 @@ class SolderPanel {
    * @param {string} text
    */
   async pasteInTerminal(text) {
-    const code = text.replace(/\s+$/, "");
+    // Text only: no control characters (a shell reads some as keys: one runs the line, others rewrite it), so what
+    // lands at the prompt is what the panel showed, and nothing runs until you press Enter.
+    const code = withoutControls(String(text ?? "")).replace(/\s+$/, "");
     if (!code || code.length > 100_000) return;
     const terminal = vscode.window.activeTerminal ?? vscode.window.terminals[0] ?? vscode.window.createTerminal({ name: "Solder" });
     terminal.show(false);
@@ -318,13 +320,13 @@ class SolderPanel {
     if (typed === null) return;
     if (this.errorChat === chat.id || !this.errorChat) this.error = null;
     await this.store.save(chat);
+    this.useChat(chat); // what the removed turns had attached is no longer read without asking
     this.post();
     if (edit) {
       // What the message had attached comes back above the box with its words.
       const back = Array.isArray(message.meta?.attachments) ? message.meta.attachments : [];
       if (back.length) {
         this.attachments = back.map((/** @type {any} */ a) => ({ ...a, id: attachmentId() }));
-        for (const a of this.attachments) if (a.kind === "path" && a.full) this.tools.attached.add(String(a.full).toLowerCase());
         this.post();
       }
       this.view?.webview.postMessage({ type: "editText", text: typed === CONTEXT.attachedOnly ? "" : typed });
@@ -349,11 +351,34 @@ class SolderPanel {
   }
 
   /**
+   * Where a chat works, for the tools. Mostly the chat's own folder as saved (relative to the window's first folder,
+   * or a full path). Two cases need more: a folder saved relative to another window's first folder is that folder,
+   * not one of the same name here; and a project's chat with no folder of its own works in its project.
+   * @param {any} chat @returns {string} "" for the whole workspace
+   */
+  folderOf(chat) {
+    const folder = String(chat?.folder || "");
+    const roots = this.tools.roots();
+    const root = roots[0] || "";
+    if (folder) {
+      if (path.isAbsolute(folder)) return folder;
+      const home = String(chat.home || "");
+      return home && root && path.isAbsolute(home) && projectKey(home) !== projectKey(root) ? path.join(home, folder) : folder;
+    }
+    const project = chat?.project && this.projects.has(chat.project) ? path.resolve(chat.project) : "";
+    return project && (roots.length !== 1 || projectKey(project) !== projectKey(root)) ? project : "";
+  }
+
+  /**
    * A chat's working folder and its project's skills, for the tools: set for the chat a task runs in (and the one
    * shown, when nothing runs). An organization that sets the skills leaves no room for a project's. @param {any} chat
    */
   useChat(chat) {
-    this.tools.useFolder(chat.folder);
+    // A task that's running keeps the tools as they are (its folder, its project's skills, what it may read): looking
+    // at another chat meanwhile, or trying to send from it, must not move the task's files under it.
+    if (this.engine?.busy && this.runId && chat.id !== this.runId) return;
+    this.tools.useFolder(this.folderOf(chat));
+    this.tools.attached = this.attachedPaths(chat);
     // No file is read here (this runs on every redraw): where the skills would be is enough.
     const folder = String(chat?.project || "");
     this.tools.projectSkills = folder && this.projects.has(folder) && !policy.locked("skillsFolders") ? skillsFolder(path.resolve(folder)) : "";
@@ -597,6 +622,32 @@ class SolderPanel {
 
   // -------------------------------------------------------------- attachments --
 
+  /** What's attached to the open chat's next message. Each chat has its own: nothing follows you into another chat. @returns {any[]} */
+  get attachments() {
+    const id = this.chat?.id ?? "";
+    let mine = this.drafts.get(id);
+    if (!mine) this.drafts.set(id, mine = []);
+    return mine;
+  }
+
+  set attachments(list) {
+    const id = this.chat?.id ?? "";
+    if (list.length) this.drafts.set(id, list); else this.drafts.delete(id);
+  }
+
+  /**
+   * The files a chat may read without asking because you attached them: those sent with its messages by their path
+   * (too long to send whole). One only picked, or taken off again before sending, gives nothing. @param {any} chat @returns {Set<string>}
+   */
+  attachedPaths(chat) {
+    const paths = new Set();
+    for (const message of chat?.messages || []) {
+      if (message.role !== "user" || !Array.isArray(message.meta?.attachments)) continue;
+      for (const a of message.meta.attachments) if (a && a.kind === "path" && typeof a.full === "string") paths.add(a.full.toLowerCase());
+    }
+    return paths;
+  }
+
   /**
    * Text pasted into the box that's long enough to be in the way there: it goes above the box as a chip, and with
    * your next message. @param {string} text
@@ -616,16 +667,17 @@ class SolderPanel {
    * PowerPoint files go as their text, as read_file reads them. @param {vscode.Uri[]} [given] for the checks
    */
   async attachFiles(given) {
+    const into = this.attachments; // the chat it's for, should you open another while the dialog is up
     const start = this.chat.folder ? this.tools.resolve(this.chat.folder).full : this.tools.root();
     const picked = given ?? await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
       openLabel: "Attach", title: "Solder: attach text files", ...(start ? { defaultUri: vscode.Uri.file(start) } : {}) });
     /** @type {string[]} */
     const refused = [];
     for (const uri of picked || []) {
-      if (this.attachments.length >= MAX_ATTACHMENTS) { refused.push(`only ${MAX_ATTACHMENTS} things can go with one message`); break; }
+      if (into.length >= MAX_ATTACHMENTS) { refused.push(`only ${MAX_ATTACHMENTS} things can go with one message`); break; }
       const full = uri.fsPath;
       const name = path.basename(full);
-      if (this.attachments.some((a) => a.full && a.full.toLowerCase() === full.toLowerCase())) continue;
+      if (into.some((a) => a.full && a.full.toLowerCase() === full.toLowerCase())) continue;
       let text = null;
       try {
         if (fs.statSync(full).size > MAX_ATTACH_BYTES) { refused.push(`${name} is too big`); continue; }
@@ -634,8 +686,9 @@ class SolderPanel {
       if (text === null || text.includes("\uFFFD")) { refused.push(`${name} isn't a text file Solder can read`); continue; }
       text = withoutSignatures(text.replace(/\r\n?/g, "\n")).replace(/\s+$/, "");
       const lines = text.split("\n").length;
-      if (text.length <= MAX_ATTACH_CHARS) this.attachments.push({ id: attachmentId(), kind: "file", name, lines, text, full });
-      else { this.attachments.push({ id: attachmentId(), kind: "path", name, lines, full }); this.tools.attached.add(full.toLowerCase()); }
+      // One too long to send whole goes by its path. It's read without asking once it's sent, not before.
+      if (text.length <= MAX_ATTACH_CHARS) into.push({ id: attachmentId(), kind: "file", name, lines, text, full });
+      else into.push({ id: attachmentId(), kind: "path", name, lines, full });
     }
     if (refused.length) vscode.window.showInformationMessage(`Not attached: ${refused.join("; ")}.`);
     this.post();
@@ -658,7 +711,6 @@ class SolderPanel {
 
   /** What's attached, as it goes to the model after your message, with each one's chip. */
   attachmentParts() {
-    this.useChat(this.chat);
     return this.attachments.map((a) => {
       const chip = attachmentLabel(a);
       if (a.kind === "path") return { block: CONTEXT.attachedPath(this.tools.shown(a.full), a.lines), chip };
@@ -804,7 +856,9 @@ class SolderPanel {
     const config = solderSettings();
     const lanes = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
     return { model: config.get("model", ""), effort: config.get("effort", "default"), modelLocked: policy.locked("model"), effortLocked: policy.locked("effort"),
-      compactAt: Math.max(30_000, config.get("compactAtTokens", 100_000)), maxRounds: Math.max(1, config.get("maxRounds", 30)),
+      // Held to their ranges here too, not only in the Settings form: a value from anywhere else can't make one task
+      // run without end, or stop a chat ever being summarised.
+      compactAt: clamp(config.get("compactAtTokens", 100_000), 30_000, 2_000_000, 100_000), maxRounds: Math.round(clamp(config.get("maxRounds", 30), 1, 100, 30)),
       toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
       modelAllowed: modelAllowed(), readOnly: readOnly(),
       // A Tool model's Assist twin on offer: it writes summaries and titles, free of the allowance.
@@ -914,6 +968,7 @@ class SolderPanel {
         if (event.busy) { this.error = null; this.answerTokens = 0; } else {
           this.status = ""; this.live = ""; this.running = ""; this.approvals = [];
           if (this.chat.id !== this.runId) this.awayDone = this.runId; // finished while you were reading another chat
+          setImmediate(() => { if (!this.engine.busy) this.useChat(this.chat); }); // the tools are the open chat's again
         }
         break;
       case "error": this.error = { message: event.message, resumable: event.resumable, exhausted: event.exhausted, switchTo: this.switchOffer(event) }; this.errorChat = event.chat;
@@ -1251,15 +1306,21 @@ class SolderPanel {
   }
 
   async send(message) {
+    // Another chat's task is running: nothing is prepared here (its tools stay its own), and your words go back in the box.
+    if (this.awayBusy()) {
+      const typed = String(message.text || "").trim();
+      if (!typed && !this.attachments.length) return;
+      vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Go back to it to add to that task, or send this once it's done.`);
+      if (typed) this.view?.webview.postMessage({ type: "restore", text: typed });
+      return;
+    }
+    this.useChat(this.chat);
     const attached = this.attachmentParts();
     // Something attached and nothing typed: it still goes, with a line saying so.
     const text = String(message.text || "").trim() || (attached.length ? CONTEXT.attachedOnly : "");
     if (!text) return;
-    if (this.awayBusy()) {
-      vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Go back to it to add to that task, or send this once it's done.`);
-      this.view?.webview.postMessage({ type: "restore", text });
-      return;
-    }
+    // Sent by its path: from here the task may read it without asking.
+    for (const a of this.attachments) if (a.kind === "path" && a.full) this.tools.attached.add(String(a.full).toLowerCase());
     if (this.engine.busy) {
       // Busy: it goes with the next step, the selection with it when it came from the menu.
       const picked = message.picked ?? (message.editor ? this.selectionBlock(message.editor) : null);
@@ -1278,11 +1339,10 @@ class SolderPanel {
     }
     const parts = [];
     const chips = [];
-    this.useChat(this.chat);
     for (const note of this.chat.notes || []) parts.push(note);
     if (this.chat.folder) {
       // Where you are, not something to read: the model reads only what the request is about.
-      parts.push(CONTEXT.workingIn(this.chat.folder));
+      parts.push(CONTEXT.workingIn(path.isAbsolute(this.folderOf(this.chat)) ? this.folderOf(this.chat) : this.chat.folder));
     }
     this.chat.notes = [];
     const editor = message.editor ?? vscode.window.activeTextEditor;
@@ -1638,6 +1698,25 @@ class SolderPanel {
   }
 }
 
+/**
+ * Text with its control characters taken out, all but tab and new line (a carriage return before a new line just
+ * goes; one alone would be Enter to a terminal). @param {string} text
+ */
+function withoutControls(text) {
+  let out = "";
+  for (const ch of text.replace(/\r\n?/g, "\n")) {
+    const code = ch.charCodeAt(0);
+    if (code === 9 || code === 10 || (code >= 32 && code !== 127 && !(code >= 128 && code <= 159))) out += ch;
+  }
+  return out;
+}
+
+/** A number setting held to its range (the fallback when it isn't a number at all). @param {unknown} value @param {number} low @param {number} high @param {number} fallback */
+function clamp(value, low, high, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(high, Math.max(low, n)) : fallback;
+}
+
 /** 12345 → "12.3k". @param {number} n */
 /** The chats the dropdown shows: the newest 100 that aren't archived (pinned ones always), and the newest 100 archived. @param {any[]} all */
 function chatList(all) {
@@ -1661,4 +1740,4 @@ function compact(n) {
   return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n);
 }
 
-module.exports = { SolderPanel, KEY };
+module.exports = { SolderPanel, KEY, withoutControls };

@@ -115,3 +115,21 @@ test("the Projects screen with no projects yet says what one is, offers New proj
   assert.match(html, /A project is a folder you work in/);
   assert.match(html, /Other chats/);
 });
+
+test("deep quote marks don't break the renderer: quotes nest a few deep, the rest is text", () => {
+  assert.doesNotThrow(() => markdown(">".repeat(10_000) + " deep"));
+  const html = markdown("> > quoted twice\n\nplain");
+  assert.match(html, /<blockquote><blockquote><p>quoted twice<\/p><\/blockquote><\/blockquote>/);
+  const deep = markdown("> ".repeat(12) + "x");
+  assert.equal((deep.match(/<blockquote>/g) || []).length, 8, "eight deep at most");
+  assert.match(deep, /&gt; &gt; &gt; &gt; x/, "the marks past that are shown as they are");
+});
+
+test("a code block ends only at a line of its own marks alone: a fence line inside it is still code", () => {
+  const html = markdown(["```bash", "cat > note.md <<'EOF'", "```js", "const a = 1;", "EOF", "```", "after"].join("\n"));
+  const code = /<code>([\s\S]*?)<\/code>/.exec(html)?.[1] ?? "";
+  assert.match(code, /```js\nconst a = 1;\nEOF$/, "all of it is in the block, so Copy takes all of it");
+  assert.match(html, /<p>after<\/p>/);
+  assert.match(markdown("~~~\na\n~~~~\nb"), /<code>a<\/code><\/pre><p>b<\/p>/, "more marks than opened it closes it too");
+  assert.match(markdown("````\n```\ninner\n```\n````"), /<code>```\ninner\n```<\/code>/, "fewer marks don't");
+});

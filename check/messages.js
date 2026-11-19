@@ -130,7 +130,7 @@ async function main() {
         check("text files attach: a short one whole, a long one by its path; a binary one is refused, and none twice",
           JSON.stringify(panel.attachments.map((a) => [a.kind, a.name, a.lines])) === JSON.stringify([["paste", "Pasted", 120], ["file", "app.log", 50], ["path", "big.log", 4000]])
           && /data\.bin isn't a text file/.test(told.join(" ")), [panel.attachments.map((a) => [a.kind, a.name, a.lines]), told]);
-        check("... and the long one can then be read without asking", panel.tools.needsApproval("read_file", { path: big }) === null
+        check("... picked but not sent, the long one is still asked about like any file outside the workspace", panel.tools.needsApproval("read_file", { path: big }) !== null
           && panel.tools.needsApproval("read_file", { path: binary }) !== null);
         await panel.onMessage({ type: "removeAttachment", id: panel.attachments[1].id });
         check("an attachment can be taken off again", panel.attachments.length === 2 && panel.attachments.every((a) => a.name !== "app.log"));
@@ -143,6 +143,7 @@ async function main() {
           && /\(Attached file .*big\.log, 4,000 lines: too long to send whole\./.test(sent.extra.context) && !sent.extra.context.includes("entry 2000"), sent && sent.extra.context.slice(0, 300));
         check("... as chips on the message, kept with it, and cleared from the box", JSON.stringify(sent.extra.chips.slice(-3)) === JSON.stringify(["Pasted · 120 lines", "big.log · 4,000 lines", "app.log · 50 lines"])
           && sent.extra.attachments.length === 3 && panel.attachments.length === 0, [sent.extra.chips, panel.attachments.length]);
+        check("... and once sent, the long one can be read without asking", panel.tools.needsApproval("read_file", { path: big }) === null);
 
         panel.attachPaste(log);
         await panel.send({ text: "" });

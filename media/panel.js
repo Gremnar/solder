@@ -58,8 +58,9 @@
     });
   }
 
-  /** Markdown → safe HTML (everything is escaped first; no raw HTML passes through). @param {string} source */
-  function markdown(source) {
+  const MAX_QUOTE_DEPTH = 8;
+  /** Markdown → safe HTML (everything is escaped first; no raw HTML passes through). @param {string} source @param {number} [depth] how many quotes deep */
+  function markdown(source, depth = 0) {
     const lines = source.replace(/\r\n/g, "\n").split("\n");
     const out = [];
     let i = 0;
@@ -71,10 +72,12 @@
       const fence = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)/.exec(line);
       if (fence) {
         flush();
-        const close = fence[1];
+        // The block ends at a line of the same marks alone, at least as many as opened it. A line that only starts
+        // with them (```js inside a heredoc, say) is still code: ending there would cut what Copy takes short.
+        const closes = new RegExp("^\\s*" + (fence[1][0] === "`" ? "`" : "~") + "{" + fence[1].length + ",}\\s*$");
         const body = [];
         i++;
-        while (i < lines.length && !lines[i].trim().startsWith(close)) body.push(lines[i++]);
+        while (i < lines.length && !closes.test(lines[i])) body.push(lines[i++]);
         i++;
         // A shell's code gets Paste in terminal too: into VS Code's terminal, for you to run (it never presses Enter).
         const shell = SHELL_LANGS.has(fence[2].toLowerCase());
@@ -119,11 +122,13 @@
         out.push(html + (ordered ? "</ol>" : "</ul>"));
         continue;
       }
-      if (/^\s*>\s?/.test(line)) {
+      // Quotes nest a few deep; past that the marks are just text (a line of thousands of > would otherwise run the
+      // renderer out of stack, and the chat would stop drawing).
+      if (depth < MAX_QUOTE_DEPTH && /^\s*>\s?/.test(line)) {
         flush();
         const quote = [];
         while (i < lines.length && /^\s*>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
-        out.push(`<blockquote>${markdown(quote.join("\n"))}</blockquote>`);
+        out.push(`<blockquote>${markdown(quote.join("\n"), depth + 1)}</blockquote>`);
         continue;
       }
       if (!line.trim()) { flush(); i++; continue; }
@@ -1560,7 +1565,7 @@
     if (el.id === "pf-name" && event.key === "Enter") { event.preventDefault(); el.blur(); }
     if (el.id === "pf-skillName" || el.id === "pf-skillWhen") {
       if (event.key === "Enter") { event.preventDefault(); createProjectSkill(); }
-      if (event.key === "Escape") { event.preventDefault(); vscode.postMessage({ type: "projectSkillForm", open: false }); }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); vscode.postMessage({ type: "projectSkillForm", open: false }); }
     }
   });
 
@@ -1612,7 +1617,7 @@
 
   function resetReveal() {
     if (reveal.timer) clearTimeout(reveal.timer);
-    Object.assign(reveal, { received: "", shown: "", buffer: "", spans: [], timer: null });
+    Object.assign(reveal, { received: "", shown: "", buffer: "", spans: [], timer: null, pending: null });
   }
 
   /** @param {any} message */
@@ -1654,6 +1659,9 @@
 
   /** @param {number} now */
   function paintLive(now) {
+    // Another screen is in the chat's place (Settings, the guided setup, Projects): the words keep arriving and are
+    // drawn when you're back. Drawing them now would put the chat over that screen, and lose what you typed there.
+    if (state && (state.setup || state.settings || state.projects)) return;
     let live = document.getElementById("live");
     if (!live) { renderTranscript(); live = document.getElementById("live"); if (!live) return; }
     const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
@@ -1876,6 +1884,8 @@
         renderSlash();
         return;
       }
+      // Shift+Tab moves focus back, as anywhere: it doesn't pick (it used to run /new).
+      if (event.key === "Tab" && event.shiftKey) { hideSlash(); return; }
       if ((event.key === "Enter" && !event.shiftKey && !event.isComposing) || event.key === "Tab") {
         event.preventDefault();
         pickSlash(slashAt);
@@ -1886,7 +1896,9 @@
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (!document.querySelectorAll(".menu:not(.hidden)").length && state?.busy) vscode.postMessage({ type: "stop" });
+      // Escape stops the reply only from the chat itself: on Settings, the guided setup or Projects it's just Escape.
+      const elsewhere = !!state && (!!state.setup || !!state.settings || !!state.projects);
+      if (!document.querySelectorAll(".menu:not(.hidden)").length && state?.busy && !elsewhere) vscode.postMessage({ type: "stop" });
       closeMenus();
     }
   });

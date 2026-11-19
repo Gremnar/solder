@@ -92,7 +92,16 @@ class ChatStore {
   /** Written to a temporary file first, so a crash mid-save never leaves half a chat. @param {any} chat */
   async save(chat) {
     this.cache.set(chat.id, chat);
-    if (!chat.messages.length) return; // an empty chat isn't worth a file
+    if (!chat.messages.length) {
+      // An empty chat isn't worth a file; one that had turns and lost them all (deleted, or its first message being
+      // edited) loses its file too, in its turn, or the old conversation would be back after a reload.
+      const before = this.saving.get(chat.id) || Promise.resolve();
+      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {});
+      this.summaries.delete(chat.id + ".json");
+      this.saving.set(chat.id, gone);
+      gone.finally(() => { if (this.saving.get(chat.id) === gone) this.saving.delete(chat.id); });
+      return gone;
+    }
     if (chat.home === undefined) chat.home = this.homeOf(chat);
     // One chat's saves run one after another (a title saved meanwhile would race for the same temporary file);
     // each writes the chat as it is when its turn comes, so the newest state is what lands.

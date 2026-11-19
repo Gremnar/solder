@@ -10,6 +10,7 @@ const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { SolderPanel, KEY } = require("./panel.js");
 const os = require("node:os");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const FEEDBACK_TO = "support@gremnar.com";
@@ -28,7 +29,11 @@ async function keepChanges(context) {
     const raw = vscode.workspace.getConfiguration("solder");
     const set = raw.inspect("readOnly");
     const chosen = set && (set.globalValue !== undefined || set.workspaceValue !== undefined || set.workspaceFolderValue !== undefined);
-    const before = String(raw.get("endpoint", "") || "").trim() || (await context.secrets.get(KEY));
+    // Signs of Solder having been used here before read-only mode: a saved key, or saved chats. An endpoint alone
+    // isn't one (a new profile can come with it filled in), and such a profile starts read-only like any other.
+    let chats = false;
+    try { chats = fs.readdirSync(path.join(context.globalStorageUri.fsPath, "chats")).some((name) => name.endsWith(".json")); } catch { chats = false; }
+    const before = chats || !!(await context.secrets.get(KEY));
     if (!chosen && before && !policy.locked("readOnly")) await raw.update("readOnly", false, vscode.ConfigurationTarget.Global);
   } catch { /* left as it is: read-only */ }
   await context.globalState.update(DONE, true);
