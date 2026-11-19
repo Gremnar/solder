@@ -7,7 +7,7 @@
  *     MyProject\
  *       AGENTS.md              the project's rules (an instruction file, as anywhere)
  *       .solder\
- *         project.json         {"name": "My project"}
+ *         project.json         {"name": "My project", "skills": {"ps_scripts": false}}   its name, and skills switched on or off in it
  *         skills\*.md          skills only this project's chats are offered
  *
  * The folder is the only place a project is kept. Solder itself remembers just which project folders you use
@@ -15,7 +15,8 @@
  * in the folder: they stay in your VS Code profile.
  *
  * A project made by someone else brings instructions written by them (its rules and skills), so one is only used
- * once you've said so: being on your list is that yes. Nothing in a project folder can change a setting.
+ * once you've said so: being on your list is that yes. Nothing in a project folder can change a setting; its skill
+ * switches say which skills its own chats are offered, and nothing else.
  * No vscode here: tested under node.
  */
 const fs = require("node:fs");
@@ -163,7 +164,7 @@ class ProjectList {
   /** @param {string} file */
   constructor(file) {
     this.file = file;
-    /** @type {{path: string, added: number, skills: Record<string, boolean>}[]} skills: your switches for skills in this project */
+    /** @type {{path: string, added: number}[]} */
     this.items = this._load();
   }
 
@@ -173,7 +174,7 @@ class ProjectList {
       const seen = new Set();
       return (Array.isArray(data?.projects) ? data.projects : [])
         .filter((item) => item && typeof item.path === "string" && item.path.trim() && path.isAbsolute(item.path))
-        .map((item) => ({ path: path.resolve(item.path), added: Number(item.added) || 0, skills: switchesFrom(item.skills) }))
+        .map((item) => ({ path: path.resolve(item.path), added: Number(item.added) || 0 }))
         .filter((item) => !seen.has(projectKey(item.path)) && seen.add(projectKey(item.path)));
     } catch { return []; }
   }
@@ -195,7 +196,7 @@ class ProjectList {
   /** @param {string} folder @returns {boolean} whether it was new */
   add(folder) {
     if (this.has(folder)) return false;
-    this.items.push({ path: path.resolve(folder), added: Date.now(), skills: {} });
+    this.items.push({ path: path.resolve(folder), added: Date.now() });
     this._save();
     return true;
   }
@@ -207,32 +208,53 @@ class ProjectList {
     this.items = this.items.filter((item) => projectKey(item.path) !== key);
     if (this.items.length !== before) this._save();
   }
-
-  /**
-   * Your switches for skills in a project: on or off there, whatever the skill is everywhere else. They're yours, kept
-   * with the list, not in the project's folder: a project someone shares can't turn your skills on or off.
-   * @param {string} folder @returns {Record<string, boolean>} by lower-case skill name ({} for a folder that isn't on the list)
-   */
-  switches(folder) {
-    const key = projectKey(folder);
-    return { ...(this.items.find((item) => projectKey(item.path) === key)?.skills || {}) };
-  }
-
-  /** Set a skill's switch in a project, or take it away (null: the skill is as it is everywhere). @param {string} folder @param {string} name @param {boolean | null} on */
-  setSwitch(folder, name, on) {
-    const key = projectKey(folder);
-    const item = this.items.find((entry) => projectKey(entry.path) === key);
-    const skill = String(name).trim().toLowerCase();
-    if (!item || !skill || skill.length > MAX_SWITCH_NAME) return;
-    if (on === null) delete item.skills[skill];
-    else if (Object.keys(item.skills).length < MAX_SWITCHES || skill in item.skills) item.skills[skill] = !!on;
-    this._save();
-  }
 }
 
 const MAX_SWITCHES = 500;
 const MAX_SWITCH_NAME = 200;
-/** The switches in a saved list entry: names with true or false, nothing else. @param {unknown} value @returns {Record<string, boolean>} */
+/**
+ * What's in a project's file, as an object: null when the folder isn't a project (no file, not the folder's own, too
+ * big, or not an object). @param {string} folder @returns {Record<string, any> | null}
+ */
+function readData(folder) {
+  const file = path.join(folder, DIR, FILE);
+  try {
+    if (!ownFile(file, folder) || fs.statSync(file).size > MAX_PROJECT_FILE_BYTES) return null;
+    const text = fs.readFileSync(file, "utf8");
+    const data = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch { return null; }
+}
+
+/**
+ * A project's skill switches: skills switched on or off in this project's chats, whatever they are everywhere else.
+ * They're in the project's file, so they travel with it. All they decide is which skills this project's chats are
+ * offered: they can't change a setting, and the organization's skills stay on whatever they say.
+ * @param {string} folder @returns {Record<string, boolean>} by lower-case skill name ({} when there are none, or it isn't a project)
+ */
+function projectSwitches(folder) {
+  return switchesFrom(readData(path.resolve(folder))?.skills);
+}
+
+/**
+ * Set a skill's switch in a project, or take it away (null: the skill is as it is everywhere). The rest of the file is
+ * kept as it is. @param {string} folder @param {string} name @param {boolean | null} on
+ */
+function setProjectSwitch(folder, name, on) {
+  const full = path.resolve(folder);
+  const data = readData(full);
+  const skill = String(name).trim().toLowerCase();
+  if (!data) throw new Error("That folder isn't a project any more.");
+  if (!skill || skill.length > MAX_SWITCH_NAME) return;
+  const switches = { ...switchesFrom(data.skills) };
+  if (on === null) delete switches[skill];
+  else if (Object.keys(switches).length < MAX_SWITCHES || skill in switches) switches[skill] = !!on;
+  const next = { ...data };
+  if (Object.keys(switches).length) next.skills = switches; else delete next.skills;
+  writeFile(full, next);
+}
+
+/** The switches in a project's file: names with true or false, nothing else. @param {unknown} value @returns {Record<string, boolean>} */
 function switchesFrom(value) {
   /** @type {Record<string, boolean>} */
   const out = Object.create(null);
@@ -244,5 +266,5 @@ function switchesFrom(value) {
   return out;
 }
 
-module.exports = { ProjectList, readProject, createProject, renameProject, nearestProject, isProject, nameProblem, projectKey, skillsFolder,
+module.exports = { ProjectList, projectSwitches, setProjectSwitch, readProject, createProject, renameProject, nearestProject, isProject, nameProblem, projectKey, skillsFolder,
   DIR, MAX_NAME_CHARS };

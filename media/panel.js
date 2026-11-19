@@ -1465,7 +1465,7 @@
         `<div class="actions-row"><button class="link-button primary" data-pchat="${at}">New chat in this project</button></div>`) +
       section("Rules", rules) +
       section("Skills", (skills ? `<div class="pskills">${skills}</div>` : `<div class="hint">No skills of its own yet. A project's skill is instructions for a kind of task here; the model reads it only when a task needs it.</div>`) + skillForm) +
-      (yours ? section("Your skills in this project", `<ul class="yskills">${yours}</ul><div class="hint">A switch here is for this project's chats alone, whatever the skill is everywhere else (Settings → Skills). These switches are yours: they aren't in the project's folder, so they aren't shared with it.</div>`) : "") +
+      (yours ? section("Your skills in this project", `<ul class="yskills">${yours}</ul><div class="hint">A switch here is for this project's chats alone, whatever the skill is everywhere else (Settings → Skills). The switches are kept in the project's folder, so they travel with it: someone you share it with gets them, for skills of the same name.</div>`) : "") +
       section("Chats", projectChats(page.chats, page.path)) +
       section("Sharing", `<div class="hint">Everything above is in the project's own folder: its rules file, and the <code>.solder</code> folder with its name and skills. ` +
         `Copy or zip the folder (or just those two) and someone else can use the project as it is. Chats aren't in the folder: they stay on this PC.</div>` +

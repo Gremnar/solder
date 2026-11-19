@@ -18,7 +18,7 @@ const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
 const { MAX_SKILLS, offered, offNames, switchedOn } = require("./skills.js");
-const { ProjectList, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
+const { ProjectList, projectSwitches, setProjectSwitch, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
 const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
 
@@ -372,7 +372,7 @@ class SolderPanel {
 
   /**
    * Skills with their switches. A skill can be switched off everywhere (the skillsOff setting), and on or off in one
-   * project whatever it is elsewhere (your switches for that project, kept with your list of projects). The
+   * project whatever it is elsewhere (the project's own switches, in its file, so they travel with it). The
    * organization's skills are always on.
    * @param {string} [project] the folder of the project the chat is in ("" for none)
    * @param {import("./skills.js").Skill[]} [list] the skills (the ones the tools would offer now, otherwise)
@@ -380,7 +380,7 @@ class SolderPanel {
   skillSwitches(project = "", list = this.tools.skills()) {
     const org = this.tools.skillsFolders(policy.orgSkills()).map((folder) => folder.toLowerCase());
     const off = offNames(solderSettings().get("skillsOff", []));
-    const own = project && this.projects.has(project) ? this.projects.switches(project) : {};
+    const own = project && this.projects.has(project) ? projectSwitches(project) : {};
     return list.map((skill) => {
       const isOrg = org.includes(path.dirname(skill.path).toLowerCase());
       const everywhere = isOrg || switchedOn(skill.name, off);
@@ -401,7 +401,8 @@ class SolderPanel {
     if (!this.projects.has(folder)) return;
     const found = this.skillSwitches("", [...this.tools.skills(false), ...(readProject(folder)?.skills || [])]).find((item) => item.skill.name.toLowerCase() === name.trim().toLowerCase());
     if (!found || found.org) return;
-    this.projects.setSwitch(folder, found.skill.name, on === found.everywhere ? null : on);
+    try { setProjectSwitch(folder, found.skill.name, on === found.everywhere ? null : on); }
+    catch (error) { this.projectNotice(error instanceof Error ? error.message : String(error), "bad"); return; }
     this.post();
   }
 
@@ -504,7 +505,10 @@ class SolderPanel {
     if (!folder) return;
     if (isProject(folder) && !this.projects.has(folder)) {
       const theirs = readProject(folder, this.ruleNames());
-      const brings = [theirs?.rules.length ? "rules" : "", theirs?.skills.length ? `${theirs.skills.length} skill${theirs.skills.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+      const switched = Object.keys(projectSwitches(folder)).length;
+      const brings = [theirs?.rules.length ? "rules" : "", theirs?.skills.length ? `${theirs.skills.length} skill${theirs.skills.length === 1 ? "" : "s"}` : "",
+        switched ? `switches for ${switched} skill${switched === 1 ? "" : "s"} (on or off in its chats)` : ""].filter(Boolean)
+        .reduce((text, part, index, all) => text + (index ? (index === all.length - 1 ? " and " : ", ") : "") + part, "");
       const pick = await vscode.window.showWarningMessage(`Use the project "${theirs?.name ?? path.basename(folder)}"?`, { modal: true,
         detail: `This folder is already set up as a Solder project${brings ? `, with ${brings}` : ""}. A project's rules and skills are instructions the model follows in its chats: use it only if you trust where it came from. You can read them on its page first.` },
       "Use project");

@@ -151,10 +151,10 @@ A project is a folder you work in, with its own rules, skills and chats. Everyth
 - **Its page:** the arrow beside a project (or the project chip above the box) opens its page, where you can read all of it:
   - **Rules:** the project's `AGENTS.md`, shown in full. **Edit** opens it in the editor; **Create AGENTS.md** makes one if it has none.
   - **Skills:** the project's own skills, in `.solder\skills`. Click one to read it; **Edit**, **Delete** and **New skill…** work as in Settings. Only this project's chats are offered them, beside your own skills.
-  - **Your skills in this project:** your own skills, each with a switch for this project alone: switch off one that doesn't fit here, or switch on one you keep off everywhere else. The project's own skills have switches too. These switches are yours, kept on your PC, so they aren't shared with the folder.
+  - **Your skills in this project:** your own skills, each with a switch for this project alone: switch off one that doesn't fit here, or switch on one you keep off everywhere else. The project's own skills have switches too. The switches are kept in the project's folder, so they travel with it.
   - **Name:** change it there. The folder isn't renamed.
-- **Sharing one:** copy or zip the folder (or just `AGENTS.md` and `.solder`). Whoever gets it opens the folder in VS Code, and the Projects screen offers it with **Use it…**. Chats aren't in the folder: they stay on your PC.
-- **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode.
+- **Sharing one:** copy or zip the folder (or just `AGENTS.md` and `.solder`). Its rules, its skills and its skill switches come along. Whoever gets it opens the folder in VS Code, and the Projects screen offers it with **Use it…**. Chats aren't in the folder: they stay on your PC.
+- **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode; its skill switches only decide which skills its own chats are offered, and your organization's skills stay on.
 - **Removing one:** **Remove from my projects** on its page takes it off your list. The folder, its rules and its skills stay as they are, and its chats move to **Other chats**.
 - **For organizations:** when the `SkillsFolders` policy sets the skills and users can't add their own, a project's skills aren't used either.
 

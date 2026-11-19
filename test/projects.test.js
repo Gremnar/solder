@@ -113,24 +113,32 @@ test("the list of projects you use: added once however the folder is spelt, kept
   assert.deepEqual(new ProjectList(file).paths(), [path.resolve(folder)], "only real folder paths are taken");
 }));
 
-test("your switches for skills in a project are kept with the list: set, kept across restarts, taken away, and only true or false is read back", () => inTemp((base) => {
-  const file = path.join(base, "storage", "projects.json");
+test("a project's skill switches are in its own file, so they travel: set, read back, taken away, the rest of the file kept, and only true or false is read", () => inTemp((base) => {
+  const { projectSwitches, setProjectSwitch } = require("../src/projects.js");
   const folder = path.join(base, "Proj");
+  const file = path.join(folder, ".solder", "project.json");
   fs.mkdirSync(folder);
-  createProject(folder);
-  const list = new ProjectList(file);
-  list.setSwitch(folder, "PS_Scripts", false);
-  assert.deepEqual(list.switches(folder), {}, "a folder that isn't on the list has none");
+  assert.deepEqual({ ...projectSwitches(folder) }, {}, "not a project: none");
+  assert.throws(() => setProjectSwitch(folder, "x", true), /isn't a project/);
+  createProject(folder, "Proj");
+  fs.writeFileSync(file, JSON.stringify({ name: "Proj", future: { x: 1 } }));
+  setProjectSwitch(folder, " PS_Scripts ", false);
+  setProjectSwitch(folder, "sql_style", true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { name: "Proj", future: { x: 1 }, skills: { ps_scripts: false, sql_style: true } });
+  // Copied somewhere else (unzipped on another PC): the switches come along.
+  const moved = path.join(base, "elsewhere");
+  fs.cpSync(folder, moved, { recursive: true });
+  assert.deepEqual({ ...projectSwitches(moved) }, { ps_scripts: false, sql_style: true });
+  setProjectSwitch(folder, "ps_scripts", null);
+  setProjectSwitch(folder, "SQL_Style", null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { name: "Proj", future: { x: 1 } }, "none left: the key goes");
+  assert.equal(readProject(folder)?.name, "Proj");
+  fs.writeFileSync(file, JSON.stringify({ name: "Proj", skills: { a: true, b: "yes", c: 0, " D ": false, "": true } }));
+  assert.deepEqual({ ...projectSwitches(folder) }, { a: true, d: false });
+  fs.writeFileSync(file, JSON.stringify({ name: "Proj", skills: [true] }));
+  assert.deepEqual({ ...projectSwitches(folder) }, {});
+  // The list of your projects holds folders only.
+  const list = new ProjectList(path.join(base, "storage", "projects.json"));
   list.add(folder);
-  list.setSwitch(folder, " PS_Scripts ", false);
-  list.setSwitch(folder, "sql_style", true);
-  assert.deepEqual({ ...new ProjectList(file).switches(folder.toUpperCase()) }, { ps_scripts: false, sql_style: true }, "by lower-case name, however the folder is spelt");
-  list.setSwitch(folder, "ps_scripts", null);
-  assert.deepEqual({ ...new ProjectList(file).switches(folder) }, { sql_style: true });
-  assert.equal(fs.existsSync(path.join(folder, ".solder", "project.json")) && Object.keys(JSON.parse(fs.readFileSync(path.join(folder, ".solder", "project.json"), "utf8"))).join(), "name", "nothing about switches goes in the project's folder");
-  fs.writeFileSync(file, JSON.stringify({ projects: [{ path: folder, skills: { a: true, b: "yes", c: 0, " D ": false, "": true } }, { path: folder + "2", skills: [true] }] }));
-  assert.deepEqual({ ...new ProjectList(file).switches(folder) }, { a: true, d: false });
-  assert.deepEqual({ ...new ProjectList(file).switches(folder + "2") }, {});
-  list.remove(folder);
-  assert.deepEqual(list.switches(folder), {});
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(base, "storage", "projects.json"), "utf8")).projects[0]).sort(), ["added", "path"]);
 }));
