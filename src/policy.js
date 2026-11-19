@@ -35,6 +35,8 @@ const SETTINGS = {
   effort: { value: "Effort", kind: "choice", choices: ["default", "low", "medium", "high"] },
   compactAtTokens: { value: "CompactAtTokens", kind: "number" },
   maxRounds: { value: "MaxRounds", kind: "number" },
+  assistMaxRounds: { value: "AssistMaxRounds", kind: "number" },
+  assistCarryTokens: { value: "AssistCarryTokens", kind: "number" },
   rules: { value: "Rules", kind: "text" },
   instructionFiles: { value: "InstructionFiles", kind: "list" },
   storageLimitGB: { value: "StorageLimitGB", kind: "number" },

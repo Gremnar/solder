@@ -81,6 +81,8 @@ class SettingsScreen {
       embeddingsCache: String(config.get("embeddingsCache", "") || ""),
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
+      assistMaxRounds: Number(config.get("assistMaxRounds", 60)),
+      assistCarryTokens: Number(config.get("assistCarryTokens", 200_000)),
       modelFilter: String(config.get("modelFilter", "")),
       toolModels: String(config.get("toolModels", "")), assistSessionBlock: String(config.get("assistSessionBlock", "")),
       // Each model offered, and its kind as it is now (from the Assist models list, or else the Tool models pattern).
@@ -90,7 +92,7 @@ class SettingsScreen {
       storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
-        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["embeddingsCache", "embeddingsCache"], ["modelFilter", "modelFilter"],
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["assistMaxRounds", "assistMaxRounds"], ["assistCarryTokens", "assistCarryTokens"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["embeddingsCache", "embeddingsCache"], ["modelFilter", "modelFilter"],
         ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"],
         ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
@@ -163,6 +165,14 @@ class SettingsScreen {
           const n = Math.round(Number(value));
           if (!Number.isFinite(n) || n < 1 || n > 100) { this.notice("Max rounds needs to be between 1 and 100.", "bad"); return; }
           await save("maxRounds", n, field);
+        } else if (field === "assistMaxRounds") {
+          const n = Math.round(Number(value));
+          if (!Number.isFinite(n) || n < 1 || n > 200) { this.notice("Assist max rounds needs to be between 1 and 200.", "bad"); return; }
+          await save("assistMaxRounds", n, field);
+        } else if (field === "assistCarryTokens") {
+          const n = Math.round(Number(String(value ?? "").replace(/[,_\s]/g, "")));
+          if (!Number.isFinite(n) || n < 20_000 || n > 900_000) { this.notice("Assist carry-over needs to be between 20,000 and 900,000 tokens.", "bad"); return; }
+          await save("assistCarryTokens", n, field);
         } else if (field === "docsSearch" && ["keyword", "hybrid"].includes(value)) await save("docsSearch", value, field);
         else if (field === "embeddingModel") await save("embeddingModel", String(value || "").trim(), field);
         else if (field === "embeddingsCache") {

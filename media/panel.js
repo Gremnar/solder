@@ -472,7 +472,12 @@
       advanced: section("Cost",
         `<div class="pair"><div>${label("Compact at tokens", "compactAt", saved("compactAt"))}<input class="field" id="sf-compactAt" data-field="compactAt" type="number" min="30000" step="10000" value="${s.compactAt}"></div>` +
         `<div>${label("Max rounds", "maxRounds", saved("maxRounds"))}<input class="field" id="sf-maxRounds" data-field="maxRounds" type="number" min="1" max="100" value="${s.maxRounds}"></div></div>` +
-        `<div class="hint">Every step sends the whole chat again: compacting sooner costs less. Max rounds is the most steps with tool calls for one message.</div>`) +
+        `<div class="hint">Every step sends the whole chat again: compacting sooner costs less. Max rounds is the most steps with tool calls for one message.</div>` +
+        // The Assist lane's own limits, where there are Assist models: their tokens aren't billed, so they're looser.
+        ((s.kinds || []).some((/** @type {any} */ k) => k.assist)
+          ? `<div class="pair"><div>${label("Assist max rounds", "assistMaxRounds", saved("assistMaxRounds"))}<input class="field" id="sf-assistMaxRounds" data-field="assistMaxRounds" type="number" min="1" max="200" value="${s.assistMaxRounds}"></div>` +
+            `<div>${label("Assist carry-over tokens", "assistCarryTokens", saved("assistCarryTokens"))}<input class="field" id="sf-assistCarryTokens" data-field="assistCarryTokens" type="number" min="20000" max="900000" step="10000" value="${s.assistCarryTokens}"></div></div>` +
+            `<div class="hint">Assist models aren't billed, so nothing of theirs is trimmed or summarised by itself, and a message may take more steps. Carry-over is how much of a chat goes to an Assist model in one request (on a switch to one, or when the gateway's session has ended): keep it well inside what the model can hold.</div>` : "")) +
       section("Models",
         label("Model filter", "modelFilter", saved("modelFilter")) + `<input class="field" id="sf-modelFilter" data-field="modelFilter" spellcheck="false" placeholder="A regular expression, such as -tools$" value="${escape(s.modelFilter)}">` +
         `<div class="hint">Only models whose id matches are offered.</div>` +

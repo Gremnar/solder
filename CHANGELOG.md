@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Assist models are held back less.** Their tokens aren't billed, so the limits that are there to save tokens no longer apply to them:
+  - **Nothing is trimmed.** Older tool results are no longer cut to stand-ins on the Assist lane (they were never summarised by themselves there).
+  - **More steps a message.** A chat on an Assist model may take 60 steps with tool calls before it pauses, against 30 on a Tool model. The new **Assist max rounds** setting (and `AssistMaxRounds` policy) changes it.
+  - **A bigger carry-over, set on its own.** When a conversation has to go to an Assist model in one request (a chat switched to one, or the gateway's session ended), it now takes up to 200,000 tokens of it, where it took four fifths of Compact at. The new **Assist carry-over tokens** setting (and `AssistCarryTokens` policy) sets it: keep it well inside what your Assist models can hold.
+
 ## 0.3.4 (2026-11-19)
 
 - **The Explorer's right-click entry is named for Solder.** "Work in this folder" on a folder is now **Solder: Work in this folder**, so it's clear whose it is, as the docs and skills entries beside it already were.

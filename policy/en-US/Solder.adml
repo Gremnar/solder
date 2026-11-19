@@ -88,6 +88,10 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <string id="CompactAtTokens_Help">When the older part of a chat is summarized to save tokens (30,000 or more).</string>
       <string id="MaxRounds">Max rounds</string>
       <string id="MaxRounds_Help">The most steps with tool calls for one message (1 to 100).</string>
+      <string id="AssistMaxRounds">Assist max rounds</string>
+      <string id="AssistMaxRounds_Help">The most steps with tool calls for one message when the chat's model is an Assist model (1 to 200). Absent: 60. Higher than Max rounds by default, as an Assist model's tokens aren't billed.</string>
+      <string id="AssistCarryTokens">Assist carry-over tokens</string>
+      <string id="AssistCarryTokens_Help">How much of a conversation is carried over to an Assist model in one request, in tokens at about four characters each (20,000 to 900,000). It applies when a chat switches to an Assist model, when the gateway's session has ended, and on every request if the gateway keeps no session. Absent: 200,000. Keep it well inside what your Assist models can hold, and inside the largest request your gateway accepts.</string>
       <string id="StorageLimitGB">Storage limit (GB)</string>
       <string id="StorageLimitGB_Help">The most disk space Undo's backups may use; past it, the oldest go first.</string>
 
@@ -120,6 +124,8 @@ Not configured: feedback goes to Solder's support address.</string>
       <presentation id="CompactAtTokens"><decimalTextBox refId="CompactAtTokens" defaultValue="100000">Tokens:</decimalTextBox></presentation>
       <presentation id="EmbedDailyBudget"><decimalTextBox refId="EmbedDailyBudget" defaultValue="250000">Tokens a day:</decimalTextBox></presentation>
       <presentation id="MaxRounds"><decimalTextBox refId="MaxRounds" defaultValue="30">Rounds:</decimalTextBox></presentation>
+      <presentation id="AssistMaxRounds"><decimalTextBox refId="AssistMaxRounds" defaultValue="60">Rounds:</decimalTextBox></presentation>
+      <presentation id="AssistCarryTokens"><decimalTextBox refId="AssistCarryTokens" defaultValue="200000">Tokens:</decimalTextBox></presentation>
       <presentation id="StorageLimitGB"><decimalTextBox refId="StorageLimitGB" defaultValue="5">GB:</decimalTextBox></presentation>
     </presentationTable>
   </resources>

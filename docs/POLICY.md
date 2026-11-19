@@ -45,6 +45,8 @@ Solder reads two registry keys, both writable only by administrators:
 | `InstructionFiles` | REG_MULTI_SZ | Workspace files the model follows, one per line, such as `AGENTS.md`. |
 | `CompactAtTokens` | REG_DWORD | When the older part of a chat is summarized (30,000 or more). |
 | `MaxRounds` | REG_DWORD | The most steps with tool calls for one message (1–100). |
+| `AssistMaxRounds` | REG_DWORD | The same limit for chats on an Assist model (1–200). Absent: 60. It's higher by default because an Assist model's tokens aren't billed. |
+| `AssistCarryTokens` | REG_DWORD | How much of a conversation is carried over to an Assist model in one request, in tokens at about four characters each (20,000–900,000). Absent: 200,000. Keep it well inside what your Assist models can hold, and inside the largest request your gateway accepts. |
 | `StorageLimitGB` | REG_DWORD | The most disk space Undo's backups may use. |
 | `FeedbackAddress` | REG_SZ | The email address **Send feedback** goes to, such as `solder-feedback@example.com`, instead of Solder's own support address, so feedback that may mention your code stays inside your organization. If it isn't a usable email address, or the policy can't be read, Send feedback opens nothing: it never falls back to Solder's address. |
 

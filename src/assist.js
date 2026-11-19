@@ -476,9 +476,17 @@ function sessionPlan(chat, model, settings, context, resultText) {
   return { kind: "carry_over", messages: [{ role: "user", content: carryOver(setup, rendered, carryBudget(settings)) }], session: null, setup, single: null };
 }
 
-/** Well within the model's context: four fifths of the compaction limit, in characters. @param {{compactAt: number}} settings */
+/** What a carry-over holds when the setting doesn't say: tokens, at about four characters each. */
+const CARRY_TOKENS = 200_000;
+
+/**
+ * How much of the conversation a carry-over takes, in characters: the Assist carry-over setting (in tokens, at about
+ * four characters each). It follows what the Assist models can hold, not Compact at, which is about what Tool models
+ * cost. @param {{assistCarryTokens?: number}} settings
+ */
 function carryBudget(settings) {
-  return Math.floor((settings.compactAt || 100_000) * 4 * 0.8);
+  const tokens = Number(settings.assistCarryTokens);
+  return Math.floor((Number.isFinite(tokens) && tokens >= 1 ? tokens : CARRY_TOKENS) * 4);
 }
 
 /**

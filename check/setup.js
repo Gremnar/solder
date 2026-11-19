@@ -83,6 +83,31 @@ async function main() {
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- the Assist lane's own limits: saved within their ranges; your organization's are used and locked
+    {
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "assistMaxRounds", value: "80" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "assistCarryTokens", value: "600,000" });
+      check("Assist max rounds and carry-over save, and the engine is given them", raw().get("assistMaxRounds") === 80 && raw().get("assistCarryTokens") === 600000
+        && again.settings().assistMaxRounds === 80 && again.settings().assistCarryTokens === 600000, [raw().get("assistMaxRounds"), raw().get("assistCarryTokens")]);
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "assistMaxRounds", value: "500" });
+      const tooMany = again.settingsScreen.view.notice;
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "assistCarryTokens", value: "5" });
+      check("... values outside their ranges are refused, with why", raw().get("assistMaxRounds") === 80 && raw().get("assistCarryTokens") === 600000
+        && /between 1 and 200/.test(tooMany) && /between 20,000 and 900,000/.test(again.settingsScreen.view.notice), [tooMany, again.settingsScreen.view.notice]);
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["assistmaxrounds", 120], ["assistcarrytokens", 700000]]), "");
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "assistMaxRounds", value: "5" });
+      check("your organization's Assist limits: used, shown locked, and not changed by you", again.settings().assistMaxRounds === 120 && again.settings().assistCarryTokens === 700000
+        && again.settingsScreen.view.locked.assistMaxRounds === true && again.settingsScreen.view.locked.assistCarryTokens === true && raw().get("assistMaxRounds") === 80,
+        [again.settings().assistMaxRounds, again.settings().assistCarryTokens, again.settingsScreen.view.locked]);
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await raw().update("assistMaxRounds", undefined, vscode.ConfigurationTarget.Global);
+      await raw().update("assistCarryTokens", undefined, vscode.ConfigurationTarget.Global);
+      check("left alone, the defaults: 60 steps, 200,000 tokens", again.settings().assistMaxRounds === 60 && again.settings().assistCarryTokens === 200000);
+    }
+
     // ---- the shared embeddings folder: a full path, saved; your organization's is used and locked
     {
       const shared = path.join(T, "shared-embeddings");

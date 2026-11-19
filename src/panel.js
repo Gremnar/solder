@@ -986,6 +986,8 @@ class SolderPanel {
       // Held to their ranges here too, not only in the Settings form: a value from anywhere else can't make one task
       // run without end, or stop a chat ever being summarised.
       compactAt: clamp(config.get("compactAtTokens", 100_000), 30_000, 2_000_000, 100_000), maxRounds: Math.round(clamp(config.get("maxRounds", 30), 1, 100, 30)),
+      // The Assist lane's own: more steps a message (its tokens aren't billed), and how much a carry-over holds.
+      assistMaxRounds: Math.round(clamp(config.get("assistMaxRounds", 60), 1, 200, 60)), assistCarryTokens: Math.round(clamp(config.get("assistCarryTokens", 200_000), 20_000, 900_000, 200_000)),
       toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
       modelAllowed: modelAllowed(), readOnly: readOnly(),
       // A Tool model's Assist twin on offer: it writes summaries and titles, free of the allowance.

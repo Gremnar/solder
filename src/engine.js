@@ -72,7 +72,7 @@ function estimate(text) {
  *   needsApproval(name: string, args: any): string | null,
  *   save(chat: Chat): Promise<void>,
  * }} Host
- * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, modelAllowed?: ((id: string) => boolean) | null,
+ * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, assistMaxRounds?: number, assistCarryTokens?: number, modelAllowed?: ((id: string) => boolean) | null,
  *            readOnly?: boolean, assistTwinOf?: (model: string) => string}} Settings
  *   assistTwinOf: a Tool model's Assist twin on offer ("" for none): it writes summaries and titles, free of the allowance
  *   readOnly: Solder's read-only mode: the tools that change files are neither offered nor run
@@ -199,7 +199,7 @@ class Engine {
       if (last.role === "assistant" || summarisedAll || stoppedSteps || limited) {
         // It stopped mid-answer (or all of it is in the recap): ask it to carry on, since the history
         // can't end with its own turn.
-        const note = limited ? TEXTS.resumeLimit(this.settings().maxRounds) : stoppedSteps ? TEXTS.resumeStopped : TEXTS.resume;
+        const note = limited ? TEXTS.resumeLimit(this._roundLimit(chat)) : stoppedSteps ? TEXTS.resumeStopped : TEXTS.resume;
         chat.messages.push({ role: "user", content: `${timeNote(this.now())}\n\n${note}`,
           meta: { typed: "Carry on", resume: true } });
         await this._save(chat);
@@ -284,9 +284,20 @@ class Engine {
     }
   }
 
+  /**
+   * The most replies with tool calls for one message, for the lane the chat's model is on. The limit is there mostly to
+   * cap what a task can spend; an Assist model's tokens aren't billed, so that lane has its own, higher one.
+   * @param {Chat} chat @param {any} [settings]
+   */
+  _roundLimit(chat, settings = this.settings()) {
+    const assist = laneOf(modelOf(chat, settings), settings) === "assist";
+    return assist && Number(settings.assistMaxRounds) >= 1 ? Number(settings.assistMaxRounds) : settings.maxRounds;
+  }
+
   /** @param {Chat} chat @param {AbortSignal} signal */
   async _loop(chat, signal) {
     const settings = this.settings();
+    const maxRounds = this._roundLimit(chat, settings);
     const tools = toolDefinitions(!!settings.readOnly);
     let rounds = 0;
     let repairs = 0;
@@ -336,22 +347,22 @@ class Engine {
       this.emit({ type: "message", chat: chat.id });
       if (!reply.calls.length) {
         // Its answer after the last reply with calls allowed: the turn ends here, paused (you choose whether to go on).
-        const atLimit = rounds >= settings.maxRounds;
+        const atLimit = rounds >= maxRounds;
         if (atLimit) { chat.limitHit = true; await this._save(chat); }
-        this.emit({ type: "done", chat: chat.id, ...(atLimit ? { limit: settings.maxRounds } : {}) });
+        this.emit({ type: "done", chat: chat.id, ...(atLimit ? { limit: maxRounds } : {}) });
         this._title(chat);
         return;
       }
       rounds += 1;
-      if (rounds > settings.maxRounds) {
+      if (rounds > maxRounds) {
         this._settle(chat, TEXTS.notRunLimit);
         chat.limitHit = true;
         await this._save(chat);
         this.emit({ type: "message", chat: chat.id });
-        this.emit({ type: "done", chat: chat.id, limit: settings.maxRounds });
+        this.emit({ type: "done", chat: chat.id, limit: maxRounds });
         return;
       }
-      await this._batch(chat, assistant, reply.finishReason === "length", settings.maxRounds - rounds, signal);
+      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal);
       if (signal.aborted) throw new Cancelled();
     }
   }
@@ -365,7 +376,8 @@ class Engine {
    * @returns {Promise<{repair: true} | {repair?: false, reply: any, assistant: Stored}>}
    */
   async _assistStep(chat, model, settings, signal, repairs) {
-    trim(chat, settings.compactAt); // smaller stand-ins for a carry-over; what the session holds is unaffected
+    // Nothing is trimmed on this lane: its tokens aren't billed, so there's nothing to save by cutting what the model
+    // read. A session holds it all anyway; a carry-over takes what fits in its own budget (carryBudget), newest first.
     const context = (await this.host.assistContext?.(chat)) || { workspace: "" };
     const block = String(settings.assistSessionBlock || "").trim();
     let plan = sessionPlan(chat, model, settings, context, resultText);

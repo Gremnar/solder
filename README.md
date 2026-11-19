@@ -176,6 +176,8 @@ Some gateways offer two kinds of model: **Tool models**, which take a system pro
 
 - **Tell them apart:** in **Settings → Advanced → Kinds of model**, every model starts on the right as a Tool model; move an Assist model to the left with its arrow (**Refresh models** asks the gateway for the list). Assist models are tagged **Assist** in the picker. Admins can set the list by policy (`AssistModels`), or a pattern (**Tool models**, under *For admins*).
 - **How Assist models work in Solder:** Solder tells them about your workspace and its tools in plain words, and they ask for a tool by writing a short request in their reply. Steps, approvals, Review and Undo work the same. Assist models take no thinking level.
+- **They're held back less:** an Assist model's tokens usually aren't billed, so Solder doesn't trim or summarise their chats by itself, and lets a message take more steps (**Assist max rounds**, 60) than on a Tool model (**Max rounds**, 30). They still have a limit to what they can hold: `/compact` summarises a long chat when you want it to.
+- **Carry-over:** when a whole conversation has to go to an Assist model in one request (a chat switched to one, a session that ended, or a gateway that keeps none), Solder sends as much of it as **Assist carry-over tokens** allows (200,000), newest first. Set it well inside what your Assist models can hold.
 - **Sessions:** if your gateway keeps Assist conversations in a session, set **Assist session block** to the name of the object its responses carry it in. Solder then sends only each new message.
 - **Switching:** a chat can move between the two at any point. If your Tool models' daily allowance runs out mid-task, Solder offers to switch the chat to the Assist version of the same model and carry on.
 
@@ -209,6 +211,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 | **Effort** | how hard new chats think |
 | **Compact at tokens** | when the older part of a chat is summarised |
 | **Max rounds** | the most steps with tool calls for one message |
+| **Assist max rounds**, **Assist carry-over tokens** | the same limit for chats on an Assist model, and how much of a conversation is carried over to one in a single request (see [Two kinds of model](#two-kinds-of-model-optional)) |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
 | **Meaning floor** | how similar a passage must be to a docs search to count; `0` uses Solder's own, 0.58 |

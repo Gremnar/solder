@@ -169,6 +169,8 @@ Embedding the same docs on every PC spends the same tokens each time, against a 
 | `solder.meaningFloor` | 0 | how similar a passage must be to a docs search to count; 0 is Solder's own, 0.58 (`MEANING_FLOOR` in `src/docs.js`, where the measurement is noted) |
 | `solder.embeddingsCache` | "" | a folder where PCs share docs embeddings (see Shared embeddings) |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
+| `solder.assistMaxRounds` | 60 | the same on the Assist lane, whose tokens aren't billed (decided 2026-11-19: that lane isn't trimmed or compacted by itself either) |
+| `solder.assistCarryTokens` | 200,000 | how much of a chat a carry-over to an Assist model holds, at four characters a token; its own setting because it follows the Assist models' context, not Compact at |
 
 **Workspace Trust.** Set `capabilities.untrustedWorkspaces: { supported: false }`, so Solder only runs in trusted folders.
 

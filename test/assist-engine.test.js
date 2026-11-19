@@ -177,3 +177,42 @@ test("/compact on the Assist lane: a plain request, whole, with no session; the 
     assert.ok(next.includes(ASSIST.carryOverLead) && next.includes("SUMMARY OF IT"), "the recap (the summary) is carried over");
   } finally { gw.close(); }
 });
+
+test("the Assist lane isn't trimmed, has its own step limit, and carries over by its own budget", async () => {
+  const { trim } = require("../src/engine.js");
+  const { carryBudget } = require("../src/assist.js");
+  const gw = await fakeAssist({ script });
+  try {
+    const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
+    const state = { model: "model-a" };
+    const host = {
+      async systemPrompt() { return "SYSTEM"; },
+      async assistContext() { return { workspace: "C:\\w" }; },
+      needsApproval: () => null,
+      async runTool() { return { output: "x".repeat(60_000), summary: "Read a.js" }; }, // a big file, every time
+      async save() {},
+    };
+    const engine = new Engine({ client, host, retryDelays: [0, 0], now: () => new Date(2026, 10, 9, 10, 0),
+      settings: () => ({ model: state.model, compactAt: 100_000, maxRounds: 10, assistMaxRounds: 60, toolModels: "-tools$", assistSessionBlock: "test_session" }), onEvent() {} });
+    const chat = Engine.newChat();
+    for (let turn = 0; turn < 5; turn++) await engine.ask(chat, "What's in a.js?");
+    const results = chat.messages.filter((m) => m.role === "tool");
+    assert.equal(results.length, 5);
+    assert.equal(results.some((m) => m.meta?.stub), false, "five big reads over five messages: all still whole on the Assist lane");
+    assert.equal(chat.compaction, null, "and nothing was summarised by itself");
+    // The same chat on a Tool model would have its older results cut: that's what trimming does there.
+    assert.equal(trim(JSON.parse(JSON.stringify(chat)), 100_000), true);
+
+    // Steps a message: the Assist lane's own limit; a Tool model keeps Max rounds.
+    assert.equal(engine._roundLimit(chat), 60);
+    state.model = "model-a-tools";
+    assert.equal(engine._roundLimit(chat), 10);
+    const plain = new Engine({ client, host, settings: () => ({ model: "model-a", compactAt: 100_000, maxRounds: 10, toolModels: "-tools$" }), onEvent() {} });
+    assert.equal(plain._roundLimit(Engine.newChat()), 10, "with no Assist limit given, Max rounds");
+
+    // A carry-over holds what the setting says (tokens, at four characters each), not a share of Compact at.
+    assert.equal(carryBudget({ assistCarryTokens: 500_000 }), 2_000_000);
+    assert.equal(carryBudget({ compactAt: 30_000 }), 800_000, "200,000 tokens when it isn't set, whatever Compact at is");
+    assert.equal(carryBudget({ assistCarryTokens: NaN }), 800_000);
+  } finally { await gw.close(); }
+});
