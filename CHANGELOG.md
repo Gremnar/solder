@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Search by meaning no longer returns noise.** A passage now has to be near enough in meaning to count. Before, a question about nothing in your docs still brought back its nearest passages, whatever they were. How near is near enough depends on the embeddings model, so Solder has a floor per model family, measured on real docs, and sends the question the way the model expects a search put. A search with nothing near enough falls back to keywords alone. The log (Copy diagnostics) shows each search's best similarity, and the new **Meaning floor** setting overrides the floor.
 - **What you attach costs less.** Attached text goes whole with your message only up to about 40,000 characters in all. Past that, the rest goes by its path and the model reads the lines it needs: a file from where it is, a paste from a copy Solder saves in its own storage. Whole text is sent again with every step of a task, so a 400,000-character log used to cost about 100,000 tokens a step.
 - **Each chip says what it will cost** before you send: about how many tokens when it goes whole, or "by path".
 - **A file read twice in one task is kept once.** When the model reads lines of a file it has already read in the same task (often to check an edit), the older copy is cut to a line pointing at the newer one. Both used to be sent again with every later step. In a live test of read, edit, read again, the task used about 15% fewer tokens.

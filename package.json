@@ -99,6 +99,8 @@
           "markdownDescription": "How docs search finds passages. **hybrid** needs **Embeddings model** and sends every passage of your docs folders to the gateway once (then only changed files), plus each search's words." },
         "solder.embeddingModel": { "type": "string", "default": "", "scope": "machine", "order": 10.2,
           "description": "The gateway's embeddings model, for docs search by meaning (Docs search: hybrid)." },
+        "solder.meaningFloor": { "type": "number", "default": 0, "minimum": 0, "maximum": 1, "scope": "machine", "order": 10.25,
+          "markdownDescription": "How near in meaning a passage must be to a docs search to count, from just above 0 to 1. `0`: Solder's own floor for the embeddings model. Each model scores on its own scale, so tune it by the log (Copy diagnostics), which shows each search's best similarity." },
         "solder.embedDailyBudget": { "type": "number", "default": 250000, "minimum": 0, "maximum": 100000000, "scope": "application", "order": 10.3,
           "markdownDescription": "The most tokens docs search by meaning may send to the embeddings model in a day (the gateway's day, from midnight UTC). Past it, embedding waits for the next day; keyword search goes on. `0`: no embedding. A gateway on this PC isn't counted." },
         "solder.embeddingsCache": { "type": "string", "default": "", "scope": "machine", "order": 10.4,

@@ -165,6 +165,7 @@ Embedding the same docs on every PC spends the same tokens each time, against a 
 | `solder.docsFolders` | [] | per user (scope `machine`): paths, or `{path, about}`. The setting's description lists the file types that are searched. Also set with **Use as Solder docs** on a folder in the Explorer |
 | `solder.skillsFolders` | [] | per user (scope `machine`): folders of skills, one `.md` file each; a new one is saved in the first |
 | `solder.skillsOff` | [] | the names of skills switched off everywhere (Settings → Skills); a project's own switches are in its `project.json` |
+| `solder.meaningFloor` | 0 | how similar a passage must be to a docs search to count; 0 is the embeddings model's own floor (`meaningTuning` in `src/docs.js`, where the measurements are noted) |
 | `solder.embeddingsCache` | "" | a folder where PCs share docs embeddings (see Shared embeddings) |
 | `solder.maxRounds` | 30 | replies with tool calls per answer |
 

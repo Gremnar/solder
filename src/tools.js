@@ -13,7 +13,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
-const { DocsIndex, EmbedBudget, EmbedCache, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
+const { DocsIndex, EmbedBudget, EmbedCache, meaningTuning, queryText, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
 
 const MAX_READ_LINES = 2000;
@@ -880,8 +880,9 @@ class WorkspaceTools {
     if (counts && counts.embedded < counts.passages && !index.active) setTimeout(() => this.refreshDocs(), 0);
     if (counts && counts.embedded) {
       try {
-        const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
-        meaning = { vector: vectors[0], model };
+        // The question as this model wants a search put, and how near a passage must be to count (per model).
+        const { vectors, tokens } = await this.embedder(model, [queryText(model, query)], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
+        meaning = { vector: vectors[0], model, floor: meaningTuning(model, solderSettings().get("meaningFloor", 0)).floor };
         if (!this.embedFree()) this.embedBudget().spend(tokens); // counted, but a search is never held back by the budget
         this.onDocsLog?.(`docs search by meaning · ${tokens} tokens`);
       } catch (error) {
@@ -890,6 +891,11 @@ class WorkspaceTools {
       }
     }
     const hits = await index.search(query, undefined, meaning);
+    // What the best match scored, for tuning the floor by; nothing near enough means the keywords alone answered.
+    const near = meaning ? index.lastNearest : null;
+    if (near) this.onDocsLog?.(near.kept ? `docs search by meaning · best similarity ${near.best.toFixed(3)} · ${near.kept} at or above the floor (${near.floor})`
+      : `docs search by meaning · best similarity ${near.best.toFixed(3)}, below the floor (${near.floor}): keywords only`);
+    if (near && !near.kept) meaning = null;
     const notes = [state.unfinished ? RESULTS.docsBuilding(state.files) : "", state.truncated ? RESULTS.docsTruncated : ""].filter(Boolean);
     if (!hits.length) return { output: [RESULTS.docsNoMatches(query), ...notes].join("\n\n"), summary: `Searched docs for "${short(query)}" · no matches` };
     const vague = meaning ? null : loose(hits, query);

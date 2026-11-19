@@ -41,6 +41,39 @@ const SHARED_AGAIN_MS = 10 * 60 * 1000;
 const EMBED_BATCH = 32;
 /** How many each search takes from the keyword ranking and from the meaning ranking before they're merged. */
 const CANDIDATES = 50;
+/**
+ * How near in meaning a passage must be to a question to count (unit vectors' dot product). Without a floor, a
+ * question about nothing in the docs still brings back its nearest passages, which are noise. Each embeddings model
+ * scores on its own scale, so the floor is per model, by the model's family as its name gives it; these come from
+ * measuring real questions against real docs (related passages against unrelated ones):
+ * - Gemini embedding models: related scored 0.61 and up but for one outlier, the best unrelated 0.545 at most, so
+ *   0.58. Questions go as they are.
+ * - EmbeddingGemma: bare, related and unrelated couldn't be told apart; it's trained to be told a text is a search.
+ *   With its prefix on the question (passages stay as they are, so nothing is embedded again), 0.6.
+ * - Any other model: 0.6, the cautious one, until it's measured. The log shows each search's best similarity, to
+ *   tune by, and the meaningFloor setting overrides the floor.
+ */
+const MEANING_FLOOR = 0.6;
+const MEANING_BY_FAMILY = [
+  { family: /embeddinggemma/i, floor: 0.6, prefix: "task: search result | query: " },
+  { family: /gemini/i, floor: 0.58, prefix: "" },
+];
+
+/**
+ * The floor and the question's prefix for an embeddings model. @param {string} model
+ * @param {unknown} [setting] the meaningFloor setting: a number above 0 and up to 1 is used as the floor, anything else isn't
+ * @returns {{floor: number, prefix: string}}
+ */
+function meaningTuning(model, setting) {
+  const known = MEANING_BY_FAMILY.find((entry) => entry.family.test(String(model || "")));
+  const own = Number(setting);
+  return { floor: Number.isFinite(own) && own > 0 && own <= 1 ? own : known ? known.floor : MEANING_FLOOR, prefix: known ? known.prefix : "" };
+}
+
+/** A question as it's sent to be embedded: with the model's search prefix, where it has one. @param {string} model @param {string} query */
+function queryText(model, query) {
+  return meaningTuning(model).prefix + String(query);
+}
 /** Reciprocal rank fusion's constant: a passage high in either ranking does well; one high in both, best. */
 const FUSION_K = 60;
 const SKIP_FOLDERS = new Set([".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
@@ -402,6 +435,8 @@ class DocsIndex {
     this.sharedPass = /** @type {{mark: string, at: number} | null} */ (null);
     /** @type {Map<string, number>} */
     this.sharedMisses = new Map();
+    /** The last search by meaning: its best similarity, the floor, and how many passages were at or above it. @type {{best: number, floor: number, kept: number} | null} */
+    this.lastNearest = null;
     /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
     this.loaded = null;
     this.version = 0;
@@ -661,9 +696,11 @@ class DocsIndex {
   /**
    * The passages nearest a query's vector, nearest first: [sid, similarity]. All vectors are compared (they're
    * kept in memory, normalised, until they change): about 10 ms for 10,000 passages.
-   * @param {number[]} query @param {string} model @param {number} limit @returns {[number, number][]}
+   * Only passages at least `floor` similar count (see MEANING_FLOOR); what the search's best was is kept in lastNearest.
+   * @param {number[]} query @param {string} model @param {number} limit @param {number} [floor] @returns {[number, number][]}
    */
-  nearest(query, model, limit) {
+  nearest(query, model, limit, floor = 0) {
+    this.lastNearest = { best: 0, floor, kept: 0 };
     if (!this.loaded || this.loaded.model !== model || this.loaded.version !== this.version) {
       const listed = this._inListed("key");
       const rows = this._open().prepare(`SELECT sid, vec FROM vectors WHERE model = ? AND ${listed.sql}`).all(model, ...listed.values);
@@ -685,6 +722,9 @@ class DocsIndex {
       let dot = 0;
       const base = row * dims;
       for (let i = 0; i < dims; i++) dot += all[base + i] * target[i];
+      if (dot > this.lastNearest.best) this.lastNearest.best = dot;
+      if (dot < floor) continue;
+      this.lastNearest.kept++;
       if (best.length < limit) { best.push([ids[row], dot]); if (best.length === limit) best.sort((a, b) => b[1] - a[1]); }
       else if (dot > best[limit - 1][1]) {
         best[limit - 1] = [ids[row], dot];
@@ -818,7 +858,8 @@ class DocsIndex {
         const words = matchQuery(query.replace(/["()*^]|\b(AND|OR|NOT)\b/g, " "));
         rows = words ? db.prepare(sql).all(words, ...listed.values, take) : [];
       }
-      if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES), limit);
+      // Passages near enough in meaning to count; with none, it's the keyword ranking alone (cut to what was asked for).
+      if (meaning) rows = this._merge(db, rows, this.nearest(meaning.vector, meaning.model, CANDIDATES, meaning.floor ?? meaningTuning(meaning.model).floor), limit);
       /** @type {Map<number, number>} */
       const counts = new Map(rows.map((row) => [Number(row.rowid), 0]));
       const terms = queryTerms(query);
@@ -1186,4 +1227,4 @@ class EmbedBudget {
 }
 
 module.exports = { DocsIndex, available, documentText, isOffice, decodeText, SIGNED, signatureBlocks, withoutSignatures, unzip, officeText, sections, queryTerms,
-  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay, EmbedCache, PassagesHash, packShared, unpackShared };
+  matchQuery, loose, SECTION_CHARS, MAX_FOLDER_FILES, EmbedBudget, utcDay, EmbedCache, PassagesHash, packShared, unpackShared, meaningTuning, queryText };

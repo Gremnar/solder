@@ -494,3 +494,46 @@ test("shared embeddings: a file in the folder is used only if all of it is right
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("search by meaning has a floor: a question about nothing in the docs brings back nothing, not its nearest noise", async () => {
+  const { base, one } = sharedSetup();
+  try {
+    await one.index.refresh([one.folder], { ms: 20_000, embed: { model: "embed-a", fn: fakeEmbed } });
+    const related = (await fakeEmbed(["password reset"])).vectors[0];
+    const unrelated = (await fakeEmbed(["zebra xylophone"])).vectors[0];
+    // Related: well above any floor, and found though it shares no word with the passage.
+    const found = await one.index.search("password reset", 10, { vector: related, model: "embed-a" });
+    assert.equal(found[0]?.path.endsWith("accounts.md"), true);
+    assert.ok(one.index.lastNearest.best > 0.8 && one.index.lastNearest.kept >= 1, JSON.stringify(one.index.lastNearest));
+    // Unrelated: with no floor every passage "matches" (the old behaviour); with one just above its best, none does.
+    const noise = await one.index.search("zebra xylophone", 10, { vector: unrelated, model: "embed-a", floor: 0 });
+    assert.equal(noise.length, 3, "no floor: the nearest passages come back whatever they are");
+    const best = one.index.lastNearest.best;
+    assert.ok(best > 0 && best < 0.8, String(best));
+    const none = await one.index.search("zebra xylophone", 10, { vector: unrelated, model: "embed-a", floor: best + 0.01 });
+    assert.deepEqual(none, []);
+    assert.deepEqual([one.index.lastNearest.kept, one.index.lastNearest.floor], [0, best + 0.01], "what the best was is kept, for the log");
+    // Nothing near enough in meaning leaves the keyword ranking as it would be alone.
+    const keyword = await one.index.search("spooler", 10, { vector: unrelated, model: "embed-a", floor: 0.999 });
+    assert.deepEqual(keyword.map((hit) => path.basename(hit.path)), ["printers.md"]);
+    assert.deepEqual(one.index.nearest(related, "embed-a", 5, 0.5).map(([, similarity]) => similarity >= 0.5), [true], "only passages at or above the floor");
+  } finally {
+    one.index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the floor and the question's prefix go by the embeddings model's family; the setting overrides the floor", () => {
+  const { meaningTuning, queryText } = docs;
+  assert.deepEqual(meaningTuning("embed-a"), { floor: 0.6, prefix: "" }, "a model that hasn't been measured: the cautious floor, the question as it is");
+  assert.deepEqual(meaningTuning("some-Gemini-embedding"), { floor: 0.58, prefix: "" });
+  assert.deepEqual(meaningTuning("EmbeddingGemma-300m"), { floor: 0.6, prefix: "task: search result | query: " });
+  assert.equal(queryText("embeddinggemma", "how do I reset it?"), "task: search result | query: how do I reset it?");
+  assert.equal(queryText("embed-a", "how do I reset it?"), "how do I reset it?");
+  assert.equal(queryText("some-gemini-embedding", "q"), "q");
+  // The setting: a number above 0 and up to 1 is the floor; 0 (the default) and anything odd leave the model's own.
+  assert.equal(meaningTuning("some-gemini-embedding", 0.7).floor, 0.7);
+  assert.equal(meaningTuning("embeddinggemma", 0.45).prefix, "task: search result | query: ", "the prefix is the model's whatever the floor");
+  for (const odd of [0, -1, 1.5, "high", null, undefined, NaN]) assert.equal(meaningTuning("some-gemini-embedding", odd).floor, 0.58, String(odd));
+  assert.equal(meaningTuning("", undefined).floor, 0.6);
+});
