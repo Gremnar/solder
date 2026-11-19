@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4 (2026-11-19)
 
 - **The Explorer's right-click entry is named for Solder.** "Work in this folder" on a folder is now **Solder: Work in this folder**, so it's clear whose it is, as the docs and skills entries beside it already were.
 
