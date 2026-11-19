@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 (2026-11-19)
 
 - **Paste in terminal asks before pasting several lines.** Some terminals, Windows PowerShell among them, run each line of a paste as it arrives, without waiting for Enter. A block of more than one line now asks once, saying how many lines and why, before anything goes to the terminal. A single line is pasted as before.
 - **Export a project.** A project's page has **Export…**: it writes one zip named after the project (`Script tests.solder.zip`), with either the project's own files (its rules, name, skills and their switches) or the whole folder, code included. Whoever gets it unzips it and opens the folder, and the Projects screen offers it. The whole-folder export leaves out git's history and `node_modules`, never follows links out of the folder, and asks first, since every file in the folder goes in.
