@@ -10,6 +10,7 @@ const { laneOf, assistTwin, bestModel } = require("./lanes.js");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
+const { writeZip } = require("./zip.js");
 const { Engine, labelOf, parseArguments, tokenReport, removeTurn, laterMessages } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
@@ -19,7 +20,7 @@ const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
 const { MAX_SKILLS, offered, offNames, switchedOn } = require("./skills.js");
-const { ProjectList, projectSwitches, setProjectSwitch, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
+const { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
 const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
 
@@ -152,6 +153,10 @@ class SolderPanel {
     this.projectNames = new Map();
     /** @type {{at: number, items: {path: string, name: string}[]} | null} */
     this.foundCache = null;
+    /** The look for projects in this window that's under way, if one is. @type {Promise<void> | null} */
+    this.foundScan = null;
+    /** What the last look found, shown while the next is under way. @type {{path: string, name: string}[]} */
+    this.foundLast = [];
     /** @type {Map<string, any[]>} by chat: a chat's unsent attachments are its own, and go nowhere else */
     this.drafts = new Map();
     this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.skillsOffered().length,
@@ -397,10 +402,11 @@ class SolderPanel {
   projectName(folder) {
     const key = projectKey(folder);
     const known = this.projectNames.get(key);
-    if (known && Date.now() - known.at < 5000) return known.name;
-    const project = readProject(folder, []);
-    const name = project?.name ?? path.basename(folder);
-    this.projectNames.set(key, { name, missing: !project, at: Date.now() });
+    if (known && Date.now() - known.at < 15_000) return known.name;
+    // The name alone, from the project's own small file: this is asked on every redraw.
+    const label = projectLabel(folder);
+    const name = label ?? path.basename(folder);
+    this.projectNames.set(key, { name, missing: label === null, at: Date.now() });
     return name;
   }
 
@@ -470,9 +476,10 @@ class SolderPanel {
     const names = this.ruleNames();
     const every = this.store.all();
     const mine = this.projects.paths().map((folder) => {
-      const project = readProject(folder, names);
+      const name = this.projectName(folder);
+      const missing = !!this.projectNames.get(projectKey(folder))?.missing;
       const chats = every.filter((chat) => !chat.archived && chat.project && projectKey(chat.project) === projectKey(folder));
-      return { path: folder, name: project ? project.name : path.basename(folder), missing: !project, here: !!this.tools.rootOf(folder),
+      return { path: folder, name, missing, here: !!this.tools.rootOf(folder),
         chats: chats.slice(0, 200).map(({ id, title, updated }) => ({ id, title, updated })) };
     });
     const other = this.store.list().filter((chat) => !chat.archived && !(chat.project && this.projects.has(chat.project)))
@@ -504,23 +511,22 @@ class SolderPanel {
    * @returns {{path: string, name: string}[]}
    */
   foundProjects() {
-    if (this.foundCache && Date.now() - this.foundCache.at < 10_000) return this.foundCache.items;
-    /** @type {{path: string, name: string}[]} */
-    const items = [];
-    const take = (/** @type {string} */ folder) => {
-      if (!folder || items.some((item) => projectKey(item.path) === projectKey(folder))) return;
-      const name = readProject(folder, [])?.name;
-      if (name) items.push({ path: path.resolve(folder), name });
-    };
-    for (const root of this.tools.roots()) {
-      take(nearestProject(root));
-      let inside = [];
-      try { inside = fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules").slice(0, 300); } catch { inside = []; }
-      for (const entry of inside) if (isProject(path.join(root, entry.name))) take(path.join(root, entry.name));
+    // What the last look found, at once; a new look when that's old (or was thrown away), in the background: the
+    // screen opens without waiting for it, and is drawn again if the look finds something else. (Done all at once,
+    // as it was, a workspace on a network drive froze the screen for seconds each time it opened.)
+    const fresh = this.foundCache && Date.now() - this.foundCache.at < 60_000;
+    if (!fresh && !this.foundScan) {
+      const folders = [...this.tools.roots()];
+      try { if (this.chat.folder) folders.push(this.tools.resolve(this.folderOf(this.chat) || this.chat.folder).full); } catch { /* a folder that's gone */ }
+      const before = JSON.stringify(this.foundCache?.items || this.foundLast);
+      this.foundScan = findProjects(folders).then((items) => {
+        this.foundCache = { at: Date.now(), items };
+        this.foundLast = items;
+        this.foundScan = null;
+        if (this.projectsView && JSON.stringify(items) !== before) this.post();
+      }, () => { this.foundCache = { at: Date.now(), items: [] }; this.foundScan = null; });
     }
-    try { if (this.chat.folder) take(nearestProject(this.tools.resolve(this.chat.folder).full)); } catch { /* a folder that's gone */ }
-    this.foundCache = { at: Date.now(), items };
-    return items;
+    return this.foundCache?.items || this.foundLast;
   }
 
   /**
@@ -598,6 +604,53 @@ class SolderPanel {
     this.projectsView = null;
     this.useChat(this.chat);
     this.post();
+  }
+
+  /**
+   * Export a project as one zip named after it, to hand to someone: its own files alone (rules, name, skills and
+   * their switches), or the whole folder. Whoever gets it unzips it, opens the folder, and the Projects screen offers
+   * it. Chats never go in. @param {string} folder @param {"own" | "all"} [given] for the checks @param {string} [to] for the checks
+   */
+  async exportProject(folder, given, to) {
+    if (!this.projects.has(folder)) return null;
+    const name = this.projectName(folder);
+    let what = given;
+    if (!what) {
+      const pick = await vscode.window.showQuickPick([
+        { label: "The project's own files", detail: "Its rules, its name, its skills and their switches: for someone who has the code already.", what: "own" },
+        { label: "The whole folder", detail: "Everything in the project's folder, the code included (not git's history or node_modules).", what: "all" },
+      ], { title: `Export the project "${name}"`, placeHolder: "What goes in the zip?" });
+      if (!pick) return null;
+      what = /** @type {"own" | "all"} */ (pick.what);
+    }
+    if (what === "all" && !given) {
+      const sure = await vscode.window.showWarningMessage(`Export the whole folder of "${name}"?`, { modal: true,
+        detail: "Every file in it goes in the zip, so check it holds nothing you wouldn't hand over: keys, passwords, data. Only git's history and node_modules are left out." }, "Export");
+      if (sure !== "Export") return null;
+    }
+    const safe = name.replace(/[\\/:*?"<>|]/g, "_").trim() || "project";
+    const target = to ?? (await vscode.window.showSaveDialog({ title: "Solder: export the project", saveLabel: "Export",
+      defaultUri: vscode.Uri.file(path.join(path.dirname(path.resolve(folder)), `${safe}.solder.zip`)), filters: { "Zip file": ["zip"] } }))?.fsPath;
+    if (!target) return null;
+    try {
+      const done = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Solder: exporting "${name}"`, cancellable: true }, async (progress, token) => {
+        const controller = new AbortController();
+        token.onCancellationRequested(() => controller.abort());
+        const listed = await exportEntries(folder, what, this.ruleNames(), { limit: 20_000, signal: controller.signal });
+        if (listed.tooMany) throw new Error("There are more than 20,000 files in it. Zip the folder with Windows instead, or export the project's own files.");
+        // Never the zip itself (or one being written), should it be saved inside the folder.
+        const entries = listed.entries.filter((entry) => !projectKey(entry.file).startsWith(projectKey(target)));
+        return writeZip(target, entries, { signal: controller.signal, onEntry: (at, of) => { if (at % 50 === 0 || at === of) progress.report({ message: `${at.toLocaleString("en-US")} of ${of.toLocaleString("en-US")} files` }); } });
+      });
+      this.projectNotice(`Exported ${done.files.toLocaleString("en-US")} file${done.files === 1 ? "" : "s"} to ${path.basename(target)}.` +
+        (done.skipped.length ? ` ${done.skipped.length} couldn't be read and ${done.skipped.length === 1 ? "was" : "were"} left out.` : ""), "ok");
+      if (!to) vscode.window.showInformationMessage(`Solder: exported "${name}" to ${target}.`, "Show in file explorer")
+        .then((pick) => { if (pick) vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(target)); });
+      return done;
+    } catch (error) {
+      this.projectNotice(`Not exported: ${error instanceof Error ? error.message : String(error)}`, "bad");
+      return null;
+    }
   }
 
   /** The project's rules file: made if it has none (never written over), and opened to read or write. @param {string} folder */
@@ -1111,6 +1164,7 @@ class SolderPanel {
       case "projectSkillSwitch": return this.switchProjectSkill(String(message.path || ""), String(message.name || ""), !!message.on);
       case "projectSkillOpen": return this.projectSkill(String(message.path || ""), String(message.name || ""), "open");
       case "projectSkillDelete": return this.projectSkill(String(message.path || ""), String(message.name || ""), "delete");
+      case "projectExport": await this.exportProject(String(message.path || "")); return;
       case "projectReveal": if (this.projects.has(String(message.path || ""))) await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(String(message.path))); return;
       case "attach": return this.attachFiles();
       case "attachPaste": return this.attachPaste(String(message.text ?? ""));

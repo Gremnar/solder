@@ -24,6 +24,8 @@ class ChatStore {
     fs.mkdirSync(this.folder, { recursive: true });
     this.homes = scope.homes || (() => []);
     this.homeOf = scope.homeOf || (() => "");
+    /** The last pass over the folder, kept for a moment (see all). @type {{at: number, items: any[]} | null} */
+    this.listed = null;
     /** @type {Map<string, any>} whole chats, once opened */
     this.cache = new Map();
     /** @type {Map<string, Promise<void>>} each chat's save in progress, so the next waits for it */
@@ -47,13 +49,19 @@ class ChatStore {
    * project they name, not by the window. {id, title, updated, pinned, archived, home, project}
    */
   all() {
+    // One pass over the folder serves a whole redraw (which asks three times), and the next for a moment: where the
+    // profile's storage is on a network drive, every chat file is a round trip. Anything this store saves or removes
+    // throws it away at once; a chat changed by another window shows a moment later.
+    if (this.listed && Date.now() - this.listed.at < 1000) return this.listed.items.slice();
     const found = [];
     for (const name of fs.readdirSync(this.folder)) {
       if (!name.endsWith(".json")) continue;
       const summary = this.summary(name);
       if (summary) found.push(summary);
     }
-    return found.sort((a, b) => b.updated - a.updated);
+    found.sort((a, b) => b.updated - a.updated);
+    this.listed = { at: Date.now(), items: found };
+    return found.slice();
   }
 
   /** A file's list entry, read again only when the file changed (the chats of every workspace live here). @param {string} name */
@@ -96,7 +104,8 @@ class ChatStore {
       // An empty chat isn't worth a file; one that had turns and lost them all (deleted, or its first message being
       // edited) loses its file too, in its turn, or the old conversation would be back after a reload.
       const before = this.saving.get(chat.id) || Promise.resolve();
-      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {});
+      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {}).then(() => { this.listed = null; });
+      this.listed = null;
       this.summaries.delete(chat.id + ".json");
       this.saving.set(chat.id, gone);
       gone.finally(() => { if (this.saving.get(chat.id) === gone) this.saving.delete(chat.id); });
@@ -113,7 +122,9 @@ class ChatStore {
       await fs.promises.writeFile(temporary, JSON.stringify(chat), "utf8");
       if (this.removed.has(chat.id)) { await fs.promises.rm(temporary, { force: true }); return; }
       await fs.promises.rename(temporary, target);
+      this.listed = null;
     });
+    this.listed = null;
     this.saving.set(chat.id, mine);
     mine.finally(() => { if (this.saving.get(chat.id) === mine) this.saving.delete(chat.id); }).catch(() => {});
     return mine;
@@ -122,6 +133,7 @@ class ChatStore {
   /** @param {string} id */
   remove(id) {
     this.removed.add(id);
+    this.listed = null;
     this.cache.delete(id);
     this.summaries.delete(id + ".json");
     fs.rmSync(this.file(id), { force: true });

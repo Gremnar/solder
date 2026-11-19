@@ -1491,8 +1491,8 @@
       (yours ? section("Your skills in this project", `<ul class="yskills">${yours}</ul><div class="hint">A switch here is for this project's chats alone, whatever the skill is everywhere else (Settings → Skills). The switches are kept in the project's folder, so they travel with it: someone you share it with gets them, for skills of the same name.</div>`) : "") +
       section("Chats", projectChats(page.chats, page.path)) +
       section("Sharing", `<div class="hint">Everything above is in the project's own folder: its rules file, and the <code>.solder</code> folder with its name and skills. ` +
-        `Copy or zip the folder (or just those two) and someone else can use the project as it is. Chats aren't in the folder: they stay on this PC.</div>` +
-        `<div class="actions-row"><button class="link-button" data-premove="${at}">Remove from my projects</button></div>`) + `</div>`;
+        `The folder is the project: copy or zip it (or just those two) and someone else can use it as it is. <b>Export…</b> makes that zip for you, named after the project. Chats aren't in the folder: they stay on this PC.</div>` +
+        `<div class="actions-row"><button class="link-button" data-pexport="${at}">Export…</button> <button class="link-button" data-premove="${at}">Remove from my projects</button></div>`) + `</div>`;
   }
 
   /** What a skill's switch on a project's page says. @param {any} skill */
@@ -1537,7 +1537,7 @@
   transcript.addEventListener("click", (event) => {
     if (!state?.projects) return;
     const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest(
-      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete],[data-pskill-switch]"));
+      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete],[data-pskill-switch],[data-pexport]"));
     if (!el) return;
     const d = el.dataset;
     const page = state.projects.page?.path || "";
@@ -1554,6 +1554,7 @@
     else if (d.prules !== undefined) vscode.postMessage({ type: "projectRules", path: d.prules });
     else if (d.preveal !== undefined) vscode.postMessage({ type: "projectReveal", path: d.preveal });
     else if (d.premove !== undefined) vscode.postMessage({ type: "projectRemove", path: d.premove });
+    else if (d.pexport !== undefined) vscode.postMessage({ type: "projectExport", path: d.pexport });
     else if (d.pskillForm !== undefined) vscode.postMessage({ type: "projectSkillForm", open: d.pskillForm === "1" });
     else if (d.pskillCreate !== undefined) createProjectSkill();
     else if (d.pskillOpen !== undefined) vscode.postMessage({ type: "projectSkillOpen", path: page, name: d.pskillOpen });

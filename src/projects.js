@@ -22,6 +22,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { listSkills } = require("./skills.js");
+const { filesUnder } = require("./zip.js");
 
 const DIR = ".solder";
 const FILE = "project.json";
@@ -156,6 +157,82 @@ function nearestProject(folder) {
 }
 
 /**
+ * Projects in or just under these folders (a window's): each folder itself or the nearest project above it, and the
+ * folders directly inside it. Looked for without holding anything up: every step is asynchronous, a few at a time, and
+ * it gives up at `ms`. On a network drive, hundreds of folders are hundreds of round trips; done in one go, as this
+ * was, that froze the Projects screen for seconds as it opened.
+ * @param {string[]} folders @param {{ms?: number, signal?: AbortSignal}} [options] @returns {Promise<{path: string, name: string}[]>}
+ */
+async function findProjects(folders, options = {}) {
+  const until = Date.now() + (options.ms ?? 15_000);
+  const over = () => Date.now() > until || !!options.signal?.aborted;
+  const marked = async (/** @type {string} */ folder) => {
+    try { return (await fs.promises.stat(path.join(folder, DIR, FILE))).isFile(); } catch { return false; }
+  };
+  /** @type {string[]} */
+  const candidates = [];
+  for (const folder of folders) {
+    if (!folder || over()) continue;
+    // The folder, or the nearest one above it that's a project.
+    let at = path.resolve(folder);
+    for (let depth = 0; depth < 64 && !over(); depth++) {
+      if (await marked(at)) { candidates.push(at); break; }
+      const up = path.dirname(at);
+      if (up === at) break;
+      at = up;
+    }
+    let inside = [];
+    try {
+      inside = (await fs.promises.readdir(folder, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules").slice(0, 300).map((entry) => path.join(folder, entry.name));
+    } catch { inside = []; }
+    for (let index = 0; index < inside.length && !over(); index += 16) {
+      const batch = inside.slice(index, index + 16);
+      const hits = await Promise.all(batch.map(marked));
+      batch.forEach((dir, n) => { if (hits[n]) candidates.push(dir); });
+    }
+  }
+  /** @type {{path: string, name: string}[]} */
+  const found = [];
+  for (const folder of candidates) {
+    // Read properly (the file is the folder's own, and says it's a project), each once.
+    if (found.some((item) => projectKey(item.path) === projectKey(folder))) continue;
+    const name = readName(folder);
+    if (name !== null) found.push({ path: path.resolve(folder), name });
+  }
+  return found;
+}
+
+/** Folders left out of a whole-folder export: git's own store and installed packages, which are big and remade elsewhere. */
+const EXPORT_SKIP = new Set([".git", "node_modules"]);
+
+/**
+ * What goes in a project's export, as entries for a zip, all under the folder's own name (so unzipping gives the
+ * folder back). "own": the project's own files alone, its rules (the instruction files at its top) and its .solder
+ * folder. "all": everything in the folder but git's store and node_modules. Links and junctions are never followed.
+ * @param {string} folder @param {"own" | "all"} what @param {string[]} [ruleNames] @param {{limit?: number, signal?: AbortSignal}} [options]
+ * @returns {Promise<{entries: {name: string, file: string}[], tooMany: boolean, top: string}>}
+ */
+async function exportEntries(folder, what, ruleNames = ["AGENTS.md"], options = {}) {
+  const full = path.resolve(folder);
+  if (readName(full) === null) throw new Error("That folder isn't a project any more.");
+  const top = path.basename(full).replace(/[\\/:*?"<>|]/g, "_") || "project";
+  if (what === "all") {
+    const listed = await filesUnder(full, top, { skip: (name) => EXPORT_SKIP.has(name.toLowerCase()), limit: options.limit, signal: options.signal });
+    return { ...listed, top };
+  }
+  /** @type {{name: string, file: string}[]} */
+  const entries = [];
+  for (const rule of ruleNames) {
+    if (!/^[^\\/:]+$/.test(rule) || rule === "." || rule === "..") continue;
+    const file = path.join(full, rule);
+    if (ownFile(file, full)) entries.push({ name: `${top}/${rule}`, file });
+  }
+  const own = await filesUnder(path.join(full, DIR), `${top}/${DIR}`, { limit: options.limit, signal: options.signal });
+  return { entries: [...entries, ...own.entries], tooMany: own.tooMany, top };
+}
+
+/**
  * The project folders you use, in the order added: a small JSON file in Solder's own storage. Being on it is your yes
  * to a project's rules and skills. A file that can't be read is an empty list; saving can fail quietly (the list
  * lives on in memory).
@@ -266,5 +343,5 @@ function switchesFrom(value) {
   return out;
 }
 
-module.exports = { ProjectList, projectSwitches, setProjectSwitch, readProject, createProject, renameProject, nearestProject, isProject, nameProblem, projectKey, skillsFolder,
+module.exports = { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel: readName, readProject, createProject, renameProject, nearestProject, isProject, nameProblem, projectKey, skillsFolder,
   DIR, MAX_NAME_CHARS };

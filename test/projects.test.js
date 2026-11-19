@@ -142,3 +142,64 @@ test("a project's skill switches are in its own file, so they travel: set, read 
   list.add(folder);
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(base, "storage", "projects.json"), "utf8")).projects[0]).sort(), ["added", "path"]);
 }));
+
+test("a project's export: its own files or the whole folder, under the folder's name, links never followed; the zip reads back whole", async (t) => {
+  const { exportEntries, findProjects } = require("../src/projects.js");
+  const { writeZip, crc32 } = require("../src/zip.js");
+  const { unzip } = require("../src/docs.js");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-export-"));
+  try {
+    const folder = path.join(base, "Script tests");
+    fs.mkdirSync(path.join(folder, "src", "deep"), { recursive: true });
+    fs.mkdirSync(path.join(folder, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(folder, "node_modules", "x"), { recursive: true });
+    createProject(folder, "Script tests");
+    fs.writeFileSync(path.join(folder, "AGENTS.md"), "Rules.\n");
+    fs.writeFileSync(path.join(folder, "CLAUDE.md"), "More rules.\n");
+    fs.writeFileSync(path.join(skillsFolder(folder), "run_tests.md"), "When to use: Running the tests.\n\nRun them.\n");
+    fs.writeFileSync(path.join(folder, "src", "a.ps1"), "Write-Host 'a'\n".repeat(500));
+    fs.writeFileSync(path.join(folder, "src", "deep", "ünï.txt"), "ünïcode\n");
+    fs.writeFileSync(path.join(folder, "src", "empty.txt"), "");
+    fs.writeFileSync(path.join(folder, ".git", "config"), "[core]\n");
+    fs.writeFileSync(path.join(folder, "node_modules", "x", "index.js"), "x\n");
+    const outside = path.join(base, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "secret.txt"), "a secret\n");
+    let linked = true;
+    try { fs.symlinkSync(outside, path.join(folder, "src", "link"), "junction"); } catch { linked = false; t.diagnostic("a junction couldn't be made here: links not tested"); }
+
+    const own = await exportEntries(folder, "own", ["AGENTS.md", "CLAUDE.md", "../outside/secret.txt", "NONE.md"]);
+    assert.deepEqual(own.entries.map((e) => e.name), ["Script tests/AGENTS.md", "Script tests/CLAUDE.md", "Script tests/.solder/project.json", "Script tests/.solder/skills/run_tests.md"]);
+    const all = await exportEntries(folder, "all");
+    const names = all.entries.map((e) => e.name);
+    assert.ok(names.includes("Script tests/src/a.ps1") && names.includes("Script tests/src/deep/ünï.txt") && names.includes("Script tests/.solder/project.json"));
+    assert.ok(!names.some((name) => /\/\.git\/|\/node_modules\//.test(name)), "git's store and installed packages stay out");
+    assert.ok(!names.some((name) => name.includes("secret") || name.includes("/link")), "a link out of the folder isn't followed" + (linked ? "" : " (not tested here)"));
+    assert.equal((await exportEntries(folder, "all", undefined, { limit: 2 })).tooMany, true);
+    await assert.rejects(exportEntries(outside, "own"), /isn't a project/);
+
+    const target = path.join(base, "Script tests.solder.zip");
+    const done = await writeZip(target, [...all.entries, { name: "Script tests/gone.txt", file: path.join(folder, "gone.txt") }]);
+    assert.deepEqual([done.files, done.skipped], [all.entries.length, ["Script tests/gone.txt"]], "a file that can't be read is left out and named");
+    assert.equal(done.bytes, fs.statSync(target).size);
+    const back = unzip(fs.readFileSync(target), () => true);
+    assert.deepEqual([...back.keys()].sort(), [...names].sort());
+    for (const entry of all.entries) assert.ok(back.get(entry.name).equals(fs.readFileSync(entry.file)), entry.name);
+    assert.equal(fs.readdirSync(base).some((name) => name.endsWith(".part")), false, "nothing half-made is left");
+    assert.equal(crc32(Buffer.from("123456789")), 0xcbf43926, "the standard check value");
+    // Names that would land outside where the zip is unpacked are refused, and no file is left behind.
+    const bad = path.join(base, "bad.zip");
+    await assert.rejects(writeZip(bad, [{ name: "../evil.txt", data: Buffer.from("x") }]), /Not a name for inside a zip/);
+    await assert.rejects(writeZip(bad, [{ name: "/abs.txt", data: Buffer.from("x") }]), /Not a name for inside a zip/);
+    assert.equal(fs.existsSync(bad) || fs.readdirSync(base).some((name) => name.startsWith("bad.zip")), false);
+
+    // Looking for projects in a window's folders: the folder itself or one above it, and the folders just inside it.
+    const inner = path.join(base, "Second");
+    fs.mkdirSync(path.join(inner, "sub"), { recursive: true });
+    createProject(inner, "Second one");
+    fs.mkdirSync(path.join(base, "plain"));
+    const found = await findProjects([base, path.join(inner, "sub"), path.join(base, "no-such-folder")]);
+    assert.deepEqual(found.map((p) => p.name).sort(), ["Script tests", "Second one"], "each once, however it was reached");
+    assert.deepEqual(await findProjects([base], { ms: -1 }), [], "out of time: nothing, rather than holding anything up");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});

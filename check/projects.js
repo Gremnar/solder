@@ -129,7 +129,11 @@ async function main() {
     check("opening a chat from the screen closes it", panel.projectsView === null && panel.chat.id === chat.id);
 
     // ---- a project someone else set up: asked about first
+    const opened = Date.now();
     await panel.onMessage({ type: "projects" });
+    s = state();
+    check("the Projects screen opens at once: the look for projects in this window goes on behind it", Date.now() - opened < 1000 && !!panel.foundScan, [Date.now() - opened, !!panel.foundScan]);
+    await panel.foundScan;
     s = state();
     check("a project in this window that isn't yours yet is listed as found", s.projects.found.some((f) => f.name === "Shared tooling"), s.projects.found);
     asked.length = 0;
@@ -191,6 +195,30 @@ async function main() {
       await config().update("skillsOff", undefined, vscode.ConfigurationTarget.Global);
     }
     panel.useChat(outsider);
+
+    // ---- export: one zip named after the project, its own files or the whole folder
+    {
+      const { unzip } = require(path.join(REPO, "src", "docs.js"));
+      fs.mkdirSync(path.join(mine, "src"), { recursive: true });
+      fs.mkdirSync(path.join(mine, "node_modules", "pkg"), { recursive: true });
+      fs.writeFileSync(path.join(mine, "src", "restore.sql"), "RESTORE DATABASE x;\n");
+      fs.writeFileSync(path.join(mine, "node_modules", "pkg", "index.js"), "// not ours\n");
+      const names = (/** @type {string} */ file) => [...unzip(fs.readFileSync(file), () => true).keys()].sort();
+      const own = path.join(T, "decloning-own.solder.zip");
+      const all = path.join(T, "decloning-all.solder.zip");
+      await panel.onMessage({ type: "projects", path: mine });
+      const first = await panel.exportProject(mine, "own", own);
+      check("Export, the project's own files: its rules and its .solder folder, under the folder's name", !!first && JSON.stringify(names(own)) === JSON.stringify(
+        ["decloning/.solder/project.json", "decloning/.solder/skills/restore_steps.md", "decloning/AGENTS.md"]) && /Exported 3 files/.test(panel.projectsView.notice), [names(own), panel.projectsView.notice]);
+      const whole = await panel.exportProject(mine, "all", all);
+      check("Export, the whole folder: the code too, but not installed packages", !!whole && names(all).includes("decloning/src/restore.sql") && names(all).includes("decloning/AGENTS.md")
+        && !names(all).some((name) => name.includes("node_modules")), names(all));
+      check("... and what's in the zip is the files as they are", unzip(fs.readFileSync(all), (name) => name.endsWith("AGENTS.md")).get("decloning/AGENTS.md").toString("utf8") === fs.readFileSync(rules, "utf8"));
+      const refused = await panel.exportProject(theirs + "-not-mine", "own", path.join(T, "no.zip"));
+      check("a folder that isn't your project isn't exported", refused === null && !fs.existsSync(path.join(T, "no.zip")));
+      fs.rmSync(path.join(mine, "node_modules"), { recursive: true, force: true });
+      await panel.onMessage({ type: "projects" });
+    }
 
     // ---- light edits: the name; and removing it from your list
     await panel.onMessage({ type: "projectRename", path: mine, name: "SQL decloning" });

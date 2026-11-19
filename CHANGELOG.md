@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Export a project.** A project's page has **Export…**: it writes one zip named after the project (`Script tests.solder.zip`), with either the project's own files (its rules, name, skills and their switches) or the whole folder, code included. Whoever gets it unzips it and opens the folder, and the Projects screen offers it. The whole-folder export leaves out git's history and `node_modules`, never follows links out of the folder, and asks first, since every file in the folder goes in.
+- **Fix: the Projects screen could take seconds to open.** Opening it looked for projects in every folder of the workspace, one at a time, before drawing anything, and read every project's rules and skills just to show its name. On a network drive that was hundreds of round trips. The screen now opens at once and the look goes on behind it; a project's name comes from its own small file; and one pass over the saved chats serves a whole redraw.
+
 ## 0.3.2 (2026-11-18)
 
 - **A chat's project shows in the bar.** In a project's chat, the project's name comes before the chat's title at the top of the panel (`Work › Fix the build`), so you can see which project you're in, or that you're in none, without opening anything. Clicking the name opens the project.
