@@ -1807,8 +1807,11 @@
   window.addEventListener("message", (event) => {
     const message = event.data;
     if (message.type === "state") {
-      // While words are still appearing, the next state (the finished answer, the next step) waits.
-      if (reveal.timer && state && message.chat.id === state.chat.id) { reveal.pending = message; return; }
+      // While words are still appearing, the next state (the finished answer, the next step) waits. Not when another
+      // screen is involved, though: opening Settings, the guided setup or Projects, working in one, and coming back all
+      // happen at once (they waited for the reply to finish, so Settings couldn't be opened while one streamed).
+      const screen = (/** @type {any} */ s) => !!(s.setup || s.settings || s.projects);
+      if (reveal.timer && state && message.chat.id === state.chat.id && !screen(message) && !screen(state)) { reveal.pending = message; return; }
       applyState(message);
     } else if (message.type === "live" && state) {
       if (!message.text.startsWith(reveal.received)) resetReveal();

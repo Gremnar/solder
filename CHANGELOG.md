@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fix: Settings, the guided setup and Projects wouldn't open while a reply was streaming.** They waited for the words to finish appearing. They now open at once, work while the reply goes on, and the reply is there when you go back.
 - **Assist models are held back less.** Their tokens aren't billed, so the limits that are there to save tokens no longer apply to them:
   - **Nothing is trimmed.** Older tool results are no longer cut to stand-ins on the Assist lane (they were never summarised by themselves there).
   - **More steps a message.** A chat on an Assist model may take 60 steps with tool calls before it pauses, against 30 on a Tool model. The new **Assist max rounds** setting (and `AssistMaxRounds` policy) changes it.
