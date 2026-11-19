@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The Explorer's right-click entry is named for Solder.** "Work in this folder" on a folder is now **Solder: Work in this folder**, so it's clear whose it is, as the docs and skills entries beside it already were.
+
 - **Fix: right-clicking a file's name in an answer.** The menu was VS Code's own, with Cut, and a Copy that copied nothing. A file's name now has its own menu: **Copy** (the name as shown), **Copy as path** (its full path), **Open in VS Code** and **Show in Explorer**. It opens from the keyboard too (Shift+F10 or the menu key).
 
 ## 0.3.3 (2026-11-19)

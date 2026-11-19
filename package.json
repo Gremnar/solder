@@ -33,7 +33,7 @@
       { "command": "solder.focus", "title": "Open chat", "category": "Solder" },
       { "command": "solder.checkConnection", "title": "Check connection", "category": "Solder" },
       { "command": "solder.setApiKey", "title": "Set API key", "category": "Solder" },
-      { "command": "solder.useFolder", "title": "Work in this folder", "category": "Solder" },
+      { "command": "solder.useFolder", "title": "Solder: Work in this folder" },
       { "command": "solder.useAsDocs", "title": "Use as Solder docs", "category": "Solder" },
       { "command": "solder.useAsSkills", "title": "Use as Solder skills", "category": "Solder" },
       { "command": "solder.newSkill", "title": "New skill", "category": "Solder" },
