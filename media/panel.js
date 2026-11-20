@@ -403,6 +403,8 @@
       if (el) { el.textContent = status.text; el.className = "status-pill" + (status.busy ? " busy" : ""); }
       const today = $("embed-today");
       if (today) { const html = embedTodayHtml(s); if (today.innerHTML !== html) today.innerHTML = html; }
+      const control = $("embed-control");
+      if (control) { const html = embedControlHtml(s); if (control.innerHTML !== html) keepFocus(control, () => { control.innerHTML = html; }); }
       const shared = $("embed-shared");
       if (shared) { const html = embedSharedHtml(s); if (shared.innerHTML !== html) shared.innerHTML = html; }
       const notice = $("settings-notice");
@@ -455,6 +457,7 @@
           ? label("Embeddings model", "embeddingModel", saved("embeddingModel")) + `<div class="row-field"><input class="field" id="sf-embeddingModel" data-field="embeddingModel" spellcheck="false" placeholder="The gateway's embeddings model id" value="${escape(s.embeddingModel)}">` +
             `<button class="link-button" data-sact="testEmbedding">Test</button></div>` +
             label("Daily budget", "embedBudget", saved("embedBudget")) + `<div class="row-field"><input class="field" id="sf-embedBudget" data-field="embedBudget" inputmode="numeric" spellcheck="false" value="${escape(String(s.embedBudget))}"><span class="grey">tokens a day</span></div>` +
+            `<div class="embed-control" id="embed-control">${embedControlHtml(s)}</div>` +
             `<div class="hint" id="embed-today">${embedTodayHtml(s)}</div>` +
             label("Pace", "embedRate", saved("embedRate")) + `<div class="row-field"><input class="field" id="sf-embedRate" data-field="embedRate" inputmode="numeric" spellcheck="false" value="${escape(String(s.embedRate))}"><span class="grey">tokens a minute</span></div>` +
             `<div class="hint">The most sent to the embeddings model in a minute, so a big folder goes at a steady pace under what your gateway allows. 0: no limit.</div>` +
@@ -500,6 +503,7 @@
     // A tab that wants a look: no gateway or key yet, or a skill with something wrong with it.
     /** @type {Record<string, string>} */
     const attention = { connection: !s.endpoint || !s.hasKey || s.policyError ? "needs setting up" : "",
+      docs: s.docsStatus?.meaning?.waiting && !s.docsStatus.meaning.held ? "passages are waiting for you to start embedding" : "",
       skills: s.skills.some((/** @type {any} */ k) => k.problem) ? "a skill needs a look" : "" };
     const tabs = SETTINGS_TABS.map(([id, text]) => `<button role="tab" id="stab-${id}" class="stab${id === settingsTab ? " on" : ""}" data-stab="${id}" ` +
       `aria-selected="${id === settingsTab}" aria-controls="settings-panel" tabindex="${id === settingsTab ? 0 : -1}"` +
@@ -690,6 +694,25 @@
       (reached || m.paused ? (s.locked?.embedBudget ? " It waits for tomorrow (midnight UTC)." : ` It waits for tomorrow (midnight UTC), or <button class="link" data-sact="raiseEmbedBudget">raise it for today</button>.`) : "");
   }
 
+  /**
+   * Embedding's own row: where it stands in a line, and one button, Start or Stop. A big run waits here for Start (it
+   * used to ask in a notification that went away); Stop holds everything until Start. @param {any} s
+   */
+  function embedControlHtml(s) {
+    const m = s.docsStatus?.meaning;
+    if (!m) return `<span class="embed-state">Search by meaning starts once the embeddings model is set and a docs folder is indexed.</span>`;
+    const n = (/** @type {number} */ value) => Number(value || 0).toLocaleString("en-US");
+    const left = Math.max(0, Number(m.passages || 0) - Number(m.embedded || 0));
+    const start = (/** @type {string} */ text) => `<button class="link-button primary" data-sact="startEmbedding">${text}</button>`;
+    const stop = `<button class="link-button" data-sact="stopEmbedding">Stop embedding</button>`;
+    if (m.held) return `<span class="embed-state"><b>Embedding is stopped.</b> ${n(m.embedded)} of ${n(m.passages)} passages have theirs${left ? "; search by meaning covers those" : ""}.</span>${start("Start embedding")}`;
+    if (m.waiting) return `<span class="embed-state"><b>${n(m.waiting.passages)} passages are waiting to be embedded:</b> about ${compact(m.waiting.tokens)} tokens, sent to the gateway once${m.free ? "" : ", within the daily budget above"}.</span>${start("Start embedding")}`;
+    if (m.error) return `<span class="embed-state warn"><b>Embedding stopped on an error</b> (the log has it). ${n(m.embedded)} of ${n(m.passages)} passages are done.</span>${start("Try again")}`;
+    if (m.paused) return `<span class="embed-state"><b>Waiting for tomorrow's budget.</b> ${n(m.embedded)} of ${n(m.passages)} passages are done.</span>${stop}`;
+    if (left) return `<span class="embed-state"><b>${s.docsStatus.active ? "Embedding…" : "Embedding shortly:"}</b> ${n(m.embedded)} of ${n(m.passages)} passages${m.pacing ? ", at the pace below" : ""}.</span>${stop}`;
+    return `<span class="embed-state"><b>All ${n(m.passages)} passages are embedded.</b> New and changed files are embedded as they're indexed.</span>${stop}`;
+  }
+
   /** What the shared embeddings folder has done since VS Code started, or why it isn't used. @param {any} s */
   function embedSharedHtml(s) {
     const m = s.docsStatus?.meaning;
@@ -706,7 +729,8 @@
     const m = d.meaning;
     const meaning = !m ? "" : m.error ? " · meaning: stopped, see the log"
       : m.paused ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages, paused (today's embedding budget is used up)`
-      : m.waiting ? ` · meaning: waiting for your OK to send ${Number(m.waiting.passages).toLocaleString()} passages (Index again asks)` : m.passages
+      : m.held ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages, stopped`
+      : m.waiting ? ` · meaning: ${Number(m.waiting.passages).toLocaleString()} passages waiting for you to start` : m.passages
       ? ` · meaning: ${Number(m.embedded).toLocaleString()} of ${Number(m.passages).toLocaleString()} passages${m.tokens ? `, ${compact(m.tokens)} tokens` : ""}` : "";
     if (d.active) return { text: `Indexing… ${Number(d.indexed).toLocaleString()} files so far${meaning}`, busy: true };
     return { text: `Ready · ${Number(d.indexed).toLocaleString()} file${d.indexed === 1 ? "" : "s"} indexed${meaning}`, busy: false };

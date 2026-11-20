@@ -169,6 +169,12 @@ class SolderPanel {
     this.tools.embedder = (/** @type {string} */ model, /** @type {string[]} */ input, /** @type {AbortSignal | undefined} */ signal) =>
       this.client().embed({ model, input, signal });
     this.tools.onDocsLog = (/** @type {string} */ line) => this.log.write(line);
+    // A big embedding run waits in Settings → Docs / RAG, where Start is: said once, with the way there.
+    this.tools.onEmbedWaiting = (/** @type {number} */ passages, /** @type {number} */ tokens) => {
+      this.post();
+      vscode.window.showInformationMessage(`Solder: ${passages.toLocaleString("en-US")} passages of your docs are waiting to be embedded for search by meaning (about ${compact(tokens)} tokens, sent once). Start it in Settings → Docs / RAG when you're ready.`, "Open Settings")
+        .then((pick) => { if (pick) { this.projectsView = null; this.settingsScreen.open("docs"); } });
+    };
     this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
       skills: () => this.tools.skills(false), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(), interviewSkill: () => this.interviewSkill(), createSkill: (/** @type {string} */ name, /** @type {string} */ when) => this.createSkill(name, when),
       deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name), orgSkillsFolders: () => this.tools.skillsFolders(policy.orgSkills()),
@@ -177,7 +183,8 @@ class SolderPanel {
         const { vectors, tokens } = await this.client().embed({ model, input: ["A test passage from Solder's settings."], signal: AbortSignal.timeout(30_000) });
         return { dims: vectors[0].length, tokens };
       },
-      refreshDocs: (/** @type {boolean} */ ask) => { if (ask) this.tools.embedDeclinedAt = 0; this.tools.refreshDocs(); },
+      refreshDocs: () => this.tools.refreshDocs(),
+      startEmbedding: () => this.tools.startEmbedding(), stopEmbedding: () => this.tools.stopEmbedding(),
       raiseEmbedBudget: () => this.tools.raiseEmbedBudget(),
       instructions: () => this.instructionsStatus(), openInstructions: () => this.openInstructions(), refreshModels: () => this.refreshModels() }, () => this.post());
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);

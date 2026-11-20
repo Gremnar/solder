@@ -729,6 +729,7 @@ class WorkspaceTools {
       try {
         const budget = this.embedBudget();
         meaning = { model, ...index.vectorCount(model), tokens: index.embedding.tokens, error: index.embedding.error, waiting: index.embedding.waiting ?? null,
+          held: this.embedState().held, pacing: !!index.embedding.pacing,
           paused: !!index.embedding.paused, free: this.embedFree(), shared: this.embedCache()?.folder || "", reused: index.embedding.reused, given: index.embedding.given,
           sharedProblem: index.embedding.sharedProblem, today: budget.used(), budget: budget.allowed(this.embedBudgetSetting()), raised: budget.raisedToday() !== undefined };
       } catch { meaning = null; }
@@ -797,7 +798,8 @@ class WorkspaceTools {
     const model = this.semantic();
     // What this run is for. A run started for something else (a folder since removed, search by meaning since turned
     // off, another model, gateway or shared folder) is stopped at once: it sends nothing more of what was withdrawn.
-    const mark = JSON.stringify([folders, model, this.embedCache()?.folder || "", String(solderSettings().get("endpoint", "") || "")]);
+    const held = this.embedState().held;
+    const mark = JSON.stringify([folders, model, this.embedCache()?.folder || "", String(solderSettings().get("endpoint", "") || ""), held, this.embedState().agreed]);
     if (index.active) {
       if (this._docsRun && this._docsRun.mark !== mark) this._docsRun.controller.abort();
       // Again after it, once however often that's asked meanwhile.
@@ -813,7 +815,7 @@ class WorkspaceTools {
       (progress) => {
         // The status bar counts the passages as they get their vectors; the log has a line every 320 or so.
         let logged = 0;
-        const embed = model && this.embedder ? { model, cache: this.embedCache(),
+        const embed = model && this.embedder && !held ? { model, cache: this.embedCache(),
           fn: (/** @type {string[]} */ texts, /** @type {AbortSignal | undefined} */ signal) => this.embedder(model, texts, signal),
           confirm: (/** @type {number} */ passages, /** @type {number} */ tokens) => this.confirmEmbedding(model, passages, tokens),
           // Held to today's embedding budget (a gateway on this PC is free, and isn't).
@@ -832,7 +834,14 @@ class WorkspaceTools {
         return index.refresh(folders, { ms: 30 * 60_000, embed, signal: controller.signal });
       }).then(() => {}, () => {});
     if (this._docsRun?.controller === controller) this._docsRun = null;
-    const embed = model && this.embedder;
+    const embed = model && this.embedder && !held;
+    if (embed) {
+      // The big run that was started is done: the next big one (a new folder, another model) waits for you again.
+      try {
+        const now = index.vectorCount(model);
+        if (now.embedded >= now.passages && this.embedState().agreed) this.setEmbedState({ agreed: "" });
+      } catch { /* the index is closed */ }
+    }
     if (embed) {
       // What it cost, for the log (Copy diagnostics): the gateway's own token count.
       const counts = index.vectorCount(model);
@@ -844,21 +853,60 @@ class WorkspaceTools {
   }
 
   /**
-   * A big embedding run (a first build, a new model, many new files) asks first, with its estimated cost: it can use a
-   * real share of a day's allowance. Asked once a session per model; "Not now" isn't asked again for 6 hours (Index
-   * again asks again). No answer in 2 minutes counts as not now.
+   * Embedding's two switches, kept across restarts in a small file beside the index: `held` (you pressed Stop:
+   * nothing is embedded until you press Start) and `agreed` (the embeddings model whose big run you started: it
+   * carries on over as many days as the budget takes, without asking again, until it's done).
+   * @returns {{held: boolean, agreed: string}}
+   */
+  embedState() {
+    if (!this._embedState) {
+      let saved = {};
+      try { saved = JSON.parse(fs.readFileSync(this.embedStateFile(), "utf8")) || {}; } catch { saved = {}; }
+      this._embedState = { held: saved.held === true, agreed: typeof saved.agreed === "string" ? saved.agreed : "" };
+    }
+    return this._embedState;
+  }
+
+  embedStateFile() {
+    return path.join(this.context.globalStorageUri.fsPath, "docs", "embed-state.json");
+  }
+
+  /** @param {{held?: boolean, agreed?: string}} change */
+  setEmbedState(change) {
+    Object.assign(this.embedState(), change);
+    try {
+      fs.mkdirSync(path.dirname(this.embedStateFile()), { recursive: true });
+      fs.writeFileSync(this.embedStateFile(), JSON.stringify(this._embedState), "utf8");
+    } catch { /* kept for this session */ }
+  }
+
+  /** Start (Settings → Docs / RAG): embedding goes ahead, a big run included, from now until it's done or you stop it. */
+  startEmbedding() {
+    this.setEmbedState({ held: false, agreed: this.semantic() });
+    const index = this.docsIndex();
+    if (index) index.embedding.waiting = null;
+    this.refreshDocs();
+  }
+
+  /** Stop: the run in progress ends where it is (what it embedded is kept), and nothing more is sent until Start. */
+  stopEmbedding() {
+    this.setEmbedState({ held: true });
+    this._docsRun?.controller.abort();
+    this.refreshDocs(); // the keyword index carries on
+  }
+
+  /**
+   * A big embedding run (a first build, a new model, many new files) waits for you: it can use a real share of a day's
+   * allowance. It isn't asked about in a notification that goes away; Settings → Docs / RAG shows what's waiting, with
+   * Start, for as long as it waits. You're told once a session that it's there.
    * @param {string} model @param {number} passages @param {number} tokens
    */
   async confirmEmbedding(model, passages, tokens) {
-    if (this.embedAgreed === model) return true;
-    if (Date.now() - (this.embedDeclinedAt ?? 0) < 6 * 60 * 60 * 1000) return false;
-    const pick = await Promise.race([
-      vscode.window.showWarningMessage(`Solder's docs search by meaning needs to send ${passages.toLocaleString("en-US")} passages to the gateway's embeddings model: about ${compactCount(tokens)} tokens, once. Go ahead?`,
-        "Embed them", "Not now"),
-      new Promise((resolve) => setTimeout(() => resolve(undefined), 120_000)),
-    ]);
-    if (pick === "Embed them") { this.embedAgreed = model; return true; }
-    this.embedDeclinedAt = Date.now();
+    if (this.embedState().agreed === model) return true;
+    if (this.embedToldFor !== model) {
+      this.embedToldFor = model;
+      this.onEmbedWaiting?.(passages, tokens);
+    }
     return false;
   }
 

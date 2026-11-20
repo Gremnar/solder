@@ -83,6 +83,41 @@ async function main() {
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- embedding waits for Start in Settings, and Stop holds it: no notification to answer in time
+    {
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await raw().update("docsSearch", "hybrid", vscode.ConfigurationTarget.Global);
+      await raw().update("embeddingModel", "embed-a", vscode.ConfigurationTarget.Global);
+      const tools = again.tools;
+      tools.setEmbedState({ held: false, agreed: "" });
+      tools.embedToldFor = "";
+      const told = [];
+      const before = tools.onEmbedWaiting;
+      tools.onEmbedWaiting = (passages, tokens) => { told.push([passages, tokens]); };
+      try {
+        const first = await tools.confirmEmbedding("embed-a", 4210, 1_200_000);
+        const second = await tools.confirmEmbedding("embed-a", 4210, 1_200_000);
+        check("a big embedding run waits for you: nothing is sent, and you're told once that it's waiting", first === false && second === false && told.length === 1 && told[0][0] === 4210, [first, second, told]);
+        await again.onMessage({ type: "settings" });
+        await again.onMessage({ type: "settingsScreen", action: "startEmbedding" });
+        check("Start in Settings lets it go ahead, and says it carries on with Settings closed", tools.embedState().agreed === "embed-a" && tools.embedState().held === false
+          && await tools.confirmEmbedding("embed-a", 4210, 1_200_000) === true && /carries on/.test(again.settingsScreen.view.notice), [tools.embedState(), again.settingsScreen.view.notice]);
+        check("... for that model only: another model's big run waits again", await tools.confirmEmbedding("embed-b", 500, 1000) === false);
+        await again.onMessage({ type: "settingsScreen", action: "stopEmbedding" });
+        check("Stop holds embedding until Start, and says what's kept", tools.embedState().held === true && /stopped/i.test(again.settingsScreen.view.notice), [tools.embedState(), again.settingsScreen.view.notice]);
+        const saved = JSON.parse(fs.readFileSync(tools.embedStateFile(), "utf8"));
+        tools._embedState = null; // as after a restart
+        check("... and both are remembered across restarts", saved.held === true && saved.agreed === "embed-a" && tools.embedState().held === true && tools.embedState().agreed === "embed-a", saved);
+        await again.onMessage({ type: "settingsScreen", action: "startEmbedding" });
+        check("Start again takes the hold off", tools.embedState().held === false);
+      } finally {
+        tools.onEmbedWaiting = before;
+        tools.setEmbedState({ held: false, agreed: "" });
+        await raw().update("docsSearch", undefined, vscode.ConfigurationTarget.Global);
+        await raw().update("embeddingModel", undefined, vscode.ConfigurationTarget.Global);
+      }
+    }
+
     // ---- the embedding pace: tokens a minute, saved; your organization's is used and locked
     {
       policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");

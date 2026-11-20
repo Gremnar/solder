@@ -15,7 +15,7 @@ class SettingsScreen {
   /**
    * @param {vscode.ExtensionContext} context
    * @param {string} keyName the secret's name
-   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: (ask?: boolean) => void, raiseEmbedBudget: () => void,
+   * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: () => void, startEmbedding: () => void, stopEmbedding: () => void, raiseEmbedBudget: () => void,
    *          instructions: () => {folder: string, name: string, found: string[]}, openInstructions: () => Promise<string>, refreshModels: () => Promise<void>,
    *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>, interviewSkill: () => Promise<void>,
    *          createSkill: (name: string, when: string) => Promise<{file: string} | {problem: string}>,
@@ -335,7 +335,17 @@ class SettingsScreen {
         this.notice(problem, problem ? "bad" : "");
         return;
       }
-      case "reindex": this.hooks.refreshDocs(true); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "reindex": this.hooks.refreshDocs(); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "startEmbedding":
+        this.hooks.startEmbedding();
+        Object.assign(this.view, { docsStatus: this.hooks.docs() });
+        this.notice("Embedding in the background. You can close Settings: it carries on.", "ok");
+        return;
+      case "stopEmbedding":
+        this.hooks.stopEmbedding();
+        Object.assign(this.view, { docsStatus: this.hooks.docs() });
+        this.notice("Embedding stopped. What's embedded is kept, and search by meaning uses it.", "ok");
+        return;
       case "raiseEmbedBudget":
         if (policy.locked("embedDailyBudget")) { this.notice("Your organization sets the daily embedding budget.", "bad"); return; }
         this.hooks.raiseEmbedBudget();
