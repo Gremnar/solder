@@ -531,3 +531,53 @@ test("the floor is one number for every embeddings model, and the setting overri
   assert.equal(meaningFloor(1), 1);
   for (const odd of [0, -1, 1.5, "high", null, undefined, NaN]) assert.equal(meaningFloor(odd), 0.58, String(odd));
 });
+
+test("embedding is paced to a rate of tokens a minute: each batch takes the time its tokens are worth; Stop ends a wait at once", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-pace-"));
+  const folder = path.join(base, "docs");
+  fs.mkdirSync(folder);
+  for (let i = 0; i < 70; i++) fs.writeFileSync(path.join(folder, `note-${String(i).padStart(2, "0")}.md`), `# Note ${i}\nThe printer on floor ${i} needs its spooler restarted.`);
+  const make = (/** @type {string} */ name) => new docs.DocsIndex(path.join(base, name, "docs.sqlite"));
+  const stamps = [];
+  const embedder = (/** @type {number} */ tokens) => async (/** @type {string[]} */ texts) => { stamps.push(Date.now()); return { vectors: (await fakeEmbed(texts)).vectors, tokens }; };
+  const fast = make("fast");
+  const paced = make("paced");
+  const stopped = make("stopped");
+  const counted = make("counted");
+  try {
+    // No rate: three batches (32, 32, 6) as fast as they go.
+    let began = Date.now();
+    await fast.refresh([folder], { ms: 20_000, embed: { model: "embed-a", fn: embedder(100) } });
+    assert.deepEqual(fast.vectorCount("embed-a"), { passages: 70, embedded: 70 });
+    const unpaced = Date.now() - began;
+
+    // 100 tokens a batch at 60,000 a minute: 100 ms a batch, so the three take about 300 ms, and no two start closer.
+    stamps.length = 0;
+    began = Date.now();
+    await paced.refresh([folder], { ms: 20_000, embed: { model: "embed-a", fn: embedder(100), perMinute: () => 60_000 } });
+    const took = Date.now() - began;
+    assert.deepEqual(paced.vectorCount("embed-a"), { passages: 70, embedded: 70 });
+    assert.equal(stamps.length, 3);
+    assert.ok(stamps[1] - stamps[0] >= 90 && stamps[2] - stamps[1] >= 90, `batches started ${stamps[1] - stamps[0]} and ${stamps[2] - stamps[1]} ms apart`);
+    assert.ok(took >= 280 && took > unpaced, `paced ${took} ms, unpaced ${unpaced} ms`);
+    assert.equal(paced.embedding.pacing, false, "not left marked as waiting");
+
+    // A gateway that reports no usage is paced by the text's size (four characters a token), not let through at full speed.
+    stamps.length = 0;
+    began = Date.now();
+    await counted.refresh([folder], { ms: 20_000, embed: { model: "embed-a", fn: embedder(0), perMinute: () => 600_000 } });
+    assert.ok(Date.now() - began >= 100, `with no usage reported it still waited (${Date.now() - began} ms)`);
+
+    // A rate so low the wait would be minutes: Stop ends it at once, with what was embedded kept.
+    const controller = new AbortController();
+    began = Date.now();
+    const once = embedder(100_000);
+    const thenStop = async (/** @type {string[]} */ texts) => { setTimeout(() => controller.abort(), 150); return once(texts); }; // Stop, a moment into the wait
+    await stopped.refresh([folder], { ms: 20_000, signal: controller.signal, embed: { model: "embed-a", fn: thenStop, perMinute: () => 1000 } });
+    assert.ok(Date.now() - began < 3000, `stopped in ${Date.now() - began} ms`);
+    assert.equal(stopped.vectorCount("embed-a").embedded, 32, "the first batch is kept; the rest waits for the next run");
+  } finally {
+    for (const index of [fast, paced, stopped, counted]) index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Embedding is paced.** Docs search by meaning now sends at most so many tokens a minute to the embeddings model, 250,000 unless you change it, so a big folder is embedded at a steady pace and isn't refused part-way by a gateway's per-minute limit. **Pace** in Settings → Docs / RAG sets it (0 for no limit), and the `EmbedTokensPerMinute` policy sets it for everyone. A gateway on this PC isn't paced.
+
 ## 0.3.5 (2026-11-19)
 
 - **Fix: Settings, the guided setup and Projects wouldn't open while a reply was streaming.** They waited for the words to finish appearing. They now open at once, work while the reply goes on, and the reply is there when you go back.

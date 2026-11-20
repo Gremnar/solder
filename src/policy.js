@@ -43,6 +43,7 @@ const SETTINGS = {
   docsSearch: { value: "DocsSearch", kind: "choice", choices: ["keyword", "hybrid"] },
   embeddingModel: { value: "EmbeddingModel", kind: "text" },
   embedDailyBudget: { value: "EmbedDailyBudget", kind: "number" },
+  embedTokensPerMinute: { value: "EmbedTokensPerMinute", kind: "number" },
   embeddingsCache: { value: "EmbeddingsCache", kind: "text" },
   docsFolders: { value: "DocsFolders", kind: "docs" },
   skillsFolders: { value: "SkillsFolders", kind: "folders" },

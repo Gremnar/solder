@@ -78,6 +78,7 @@ class SettingsScreen {
       docsSearch: String(config.get("docsSearch", "keyword")) === "hybrid" ? "hybrid" : "keyword",
       embeddingModel: String(config.get("embeddingModel", "")),
       embedBudget: Number(config.get("embedDailyBudget", 250_000)),
+      embedRate: Number(config.get("embedTokensPerMinute", 250_000)),
       embeddingsCache: String(config.get("embeddingsCache", "") || ""),
       compactAt: Number(config.get("compactAtTokens", 100_000)),
       maxRounds: Number(config.get("maxRounds", 30)),
@@ -92,7 +93,7 @@ class SettingsScreen {
       storageLimit: Number(config.get("storageLimitGB", 5)),
       // What the organisation enforces: those fields are shown locked.
       locked: Object.fromEntries([["endpoint", "endpoint"], ["model", "model"], ["effort", "effort"], ["rules", "rules"], ["instructionFiles", "instructionFiles"],
-        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["assistMaxRounds", "assistMaxRounds"], ["assistCarryTokens", "assistCarryTokens"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["embeddingsCache", "embeddingsCache"], ["modelFilter", "modelFilter"],
+        ["compactAt", "compactAtTokens"], ["maxRounds", "maxRounds"], ["assistMaxRounds", "assistMaxRounds"], ["assistCarryTokens", "assistCarryTokens"], ["docsSearch", "docsSearch"], ["embeddingModel", "embeddingModel"], ["embedBudget", "embedDailyBudget"], ["embedRate", "embedTokensPerMinute"], ["embeddingsCache", "embeddingsCache"], ["modelFilter", "modelFilter"],
         ["toolModels", "toolModels"], ["assistSessionBlock", "assistSessionBlock"], ["kinds", "assistModels"], ["storageLimit", "storageLimitGB"],
         ["access", "readOnly"]]
         .map(([field, name]) => [field, policy.locked(name)])),
@@ -184,6 +185,11 @@ class SettingsScreen {
           const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
           if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens, from 0 to 100,000,000.", "bad"); return; }
           await save("embedDailyBudget", tokens, field);
+        }
+        else if (field === "embedRate") {
+          const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
+          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens a minute, from 0 (no limit) to 100,000,000.", "bad"); return; }
+          await save("embedTokensPerMinute", tokens, field);
         }
         else if (field === "modelFilter") {
           const text = String(value || "").trim();

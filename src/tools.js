@@ -768,6 +768,12 @@ class WorkspaceTools {
     return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 250_000;
   }
 
+  /** The embedding rate's setting (your organization's, if it sets one): tokens a minute, 0 for no limit. */
+  embedRateSetting() {
+    const value = Number(solderSettings().get("embedTokensPerMinute", 250_000));
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 250_000;
+  }
+
   /** A gateway on this PC (a local embeddings server) is free: neither counted nor held to the budget. */
   embedFree() {
     try { return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(String(solderSettings().get("endpoint", ""))).hostname); } catch { return false; }
@@ -813,6 +819,8 @@ class WorkspaceTools {
           // Held to today's embedding budget (a gateway on this PC is free, and isn't).
           left: () => this.embedFree() ? Infinity : this.embedBudget().left(this.embedBudgetSetting()),
           spend: (/** @type {number} */ tokens) => { if (!this.embedFree()) this.embedBudget().spend(tokens); },
+          // Paced to the gateway's tokens a minute (a gateway on this PC has no such limit).
+          perMinute: () => this.embedFree() ? 0 : this.embedRateSetting(),
           onBatch: () => {
             const { passages, embedded } = index.vectorCount(model);
             progress?.report({ message: `${embedded.toLocaleString("en-US")} of ${passages.toLocaleString("en-US")} passages` });

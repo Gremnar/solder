@@ -99,6 +99,10 @@
       <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><decimal id="EmbedDailyBudget" valueName="EmbedDailyBudget" minValue="0" maxValue="100000000" required="true" /></elements>
     </policy>
+    <policy name="EmbedTokensPerMinute" class="Both" displayName="$(string.EmbedTokensPerMinute)" explainText="$(string.EmbedTokensPerMinute_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbedTokensPerMinute)">
+      <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
+      <elements><decimal id="EmbedTokensPerMinute" valueName="EmbedTokensPerMinute" minValue="0" maxValue="100000000" required="true" /></elements>
+    </policy>
     <policy name="EmbeddingModel" class="Both" displayName="$(string.EmbeddingModel)" explainText="$(string.EmbeddingModel_Help)" key="Software\Policies\Gremnar\Solder" presentation="$(presentation.EmbeddingModel)">
       <parentCategory ref="Docs" /><supportedOn ref="SUPPORTED_Solder" />
       <elements><text id="EmbeddingModel" valueName="EmbeddingModel" maxLength="256" required="true" /></elements>

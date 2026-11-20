@@ -72,6 +72,8 @@ Enabled: these folders' skills are offered to every user. Users see them in Sett
       <string id="DocsSearch_Hybrid">Keywords and meaning</string>
       <string id="EmbedDailyBudget">Daily embedding budget</string>
       <string id="EmbedDailyBudget_Help">The most tokens docs search by meaning may send to the embeddings model in a day (the gateway's day, from midnight UTC); it counts against the same daily allowance as the models. Past it, embedding waits for the next day, and keyword search goes on. 0: no embedding. Users can't change it, or raise it for the day. Not configured: 250,000, and each user can change it.</string>
+      <string id="EmbedTokensPerMinute">Embedding tokens a minute</string>
+      <string id="EmbedTokensPerMinute_Help">The most tokens docs search by meaning sends to the embeddings model in a minute. Set it under what your gateway allows each user a minute, so a big folder is embedded at a steady pace and isn't refused part-way. 0: no limit. Absent: 250,000, and users can change it. It applies to each PC by itself: it doesn't add up what several users send at once.</string>
       <string id="EmbeddingModel">Embeddings model</string>
       <string id="EmbeddingModel_Help">The gateway's embeddings model id, for search by meaning.</string>
       <string id="EmbeddingsCache">Shared embeddings folder</string>
@@ -122,6 +124,7 @@ Not configured: feedback goes to Solder's support address.</string>
       <presentation id="OrgRules"><multiTextBox refId="OrgRules">Rules, one per line:</multiTextBox></presentation>
       <presentation id="InstructionFiles"><multiTextBox refId="InstructionFiles">File names, one per line:</multiTextBox></presentation>
       <presentation id="CompactAtTokens"><decimalTextBox refId="CompactAtTokens" defaultValue="100000">Tokens:</decimalTextBox></presentation>
+      <presentation id="EmbedTokensPerMinute"><decimalTextBox refId="EmbedTokensPerMinute" defaultValue="250000">Tokens a minute:</decimalTextBox></presentation>
       <presentation id="EmbedDailyBudget"><decimalTextBox refId="EmbedDailyBudget" defaultValue="250000">Tokens a day:</decimalTextBox></presentation>
       <presentation id="MaxRounds"><decimalTextBox refId="MaxRounds" defaultValue="30">Rounds:</decimalTextBox></presentation>
       <presentation id="AssistMaxRounds"><decimalTextBox refId="AssistMaxRounds" defaultValue="60">Rounds:</decimalTextBox></presentation>

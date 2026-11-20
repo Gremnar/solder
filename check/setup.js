@@ -83,6 +83,26 @@ async function main() {
       && raw().get("embedDailyBudget") === 100000, [again.tools.embedBudgetSetting(), budget.raisedToday()]);
     await raw().update("embedDailyBudget", undefined, vscode.ConfigurationTarget.Global);
 
+    // ---- the embedding pace: tokens a minute, saved; your organization's is used and locked
+    {
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await again.onMessage({ type: "settings" });
+      check("left alone, embedding is paced to 250,000 tokens a minute", again.tools.embedRateSetting() === 250000 && again.settingsScreen.view.embedRate === 250000, again.tools.embedRateSetting());
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embedRate", value: "120,000" });
+      check("the pace saves, commas and all, and the docs index is given it", raw().get("embedTokensPerMinute") === 120000 && again.tools.embedRateSetting() === 120000, raw().get("embedTokensPerMinute"));
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embedRate", value: "fast" });
+      check("... a value that isn't a whole number of tokens is refused, with why", raw().get("embedTokensPerMinute") === 120000 && /whole number of tokens a minute/.test(again.settingsScreen.view.notice), again.settingsScreen.view.notice);
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embedRate", value: "0" });
+      check("... 0 means no limit", raw().get("embedTokensPerMinute") === 0 && again.tools.embedRateSetting() === 0);
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"], ["embedtokensperminute", 200000]]), "");
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "embedRate", value: "999999" });
+      check("your organization's pace: used, shown locked, and not changed by you", again.tools.embedRateSetting() === 200000 && again.settingsScreen.view.locked.embedRate === true && raw().get("embedTokensPerMinute") === 0,
+        [again.tools.embedRateSetting(), again.settingsScreen.view.locked.embedRate]);
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await raw().update("embedTokensPerMinute", undefined, vscode.ConfigurationTarget.Global);
+    }
+
     // ---- the Assist lane's own limits: saved within their ranges; your organization's are used and locked
     {
       policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");

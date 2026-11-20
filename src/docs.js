@@ -35,6 +35,19 @@ const MARKDOWN = new Set([".md", ".markdown", ".mdx", ".mdown"]);
 const UNLISTED_KEPT_MS = 14 * 24 * 60 * 60 * 1000;
 /** An embedding run of this many passages or more asks first, with its estimated cost. */
 const CONFIRM_PASSAGES = 300;
+/** The longest wait between two batches when pacing to a rate (a rate set absurdly low doesn't hang the run). */
+const PACE_MAX_MS = 5 * 60_000;
+
+/** Wait so long, or until stopped. @param {number} ms @param {AbortSignal} [signal] @returns {Promise<void>} */
+function paused(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 /** The shared embeddings folder is asked again for what it didn't have, and gone over again with nothing changed, this often. */
 const SHARED_AGAIN_MS = 10 * 60 * 1000;
 /** Passages sent to the embeddings model at once. */
@@ -511,8 +524,9 @@ class DocsIndex {
    * them (no tokens), then from the gateway; and what this PC has embedded is put in the shared folder for the rest.
    * @param {{model: string, fn: (texts: string[], signal?: AbortSignal) => Promise<{vectors: number[][], tokens: number}>,
    *          confirm?: (passages: number, tokens: number) => Promise<boolean>, cache?: EmbedCache | null,
-   *          onBatch?: (done: number, tokens: number) => void, left?: () => number, spend?: (tokens: number) => void}} embed
-   *   left: today's embedding budget still to spend (none: no budget); spend: counts what a batch used @param {number} stop @param {AbortSignal} [signal]
+   *          onBatch?: (done: number, tokens: number) => void, left?: () => number, spend?: (tokens: number) => void, perMinute?: () => number}} embed
+   *   left: today's embedding budget still to spend (none: no budget); spend: counts what a batch used;
+   *   perMinute: the most tokens to send in a minute (0 or none: as fast as it goes) @param {number} stop @param {AbortSignal} [signal]
    */
   async _embed(embed, stop, signal) {
     const cache = embed.cache || null;
@@ -647,8 +661,10 @@ class DocsIndex {
       // vectors, go on as ever). A batch can take it a little past the budget, never further.
       if (embed.left && embed.left() <= 0) { this.embedding.paused = true; return; }
       let answer;
+      const began = Date.now();
+      const texts = rows.map(passageText);
       try {
-        answer = await embed.fn(rows.map(passageText), signal);
+        answer = await embed.fn(texts, signal);
       } catch (error) {
         this.embedding.error = error instanceof Error ? error.message : String(error);
         return;
@@ -667,6 +683,20 @@ class DocsIndex {
       this.embedding.runTokens += answer.tokens;
       embed.spend?.(answer.tokens);
       embed.onBatch?.(rows.length, answer.tokens);
+      // Paced to a rate (tokens a minute), where one is set: a gateway that allows so many a minute refuses the rest,
+      // and a big folder sent as fast as it goes passes that within the first minute. Each batch takes at least the
+      // time its tokens are worth at the rate, so no minute goes over. The gateway's own count where it gives one,
+      // else four characters a token.
+      const rate = embed.perMinute ? Number(embed.perMinute()) : 0;
+      if (rate > 0) {
+        const used = answer.tokens > 0 ? answer.tokens : Math.ceil(texts.reduce((sum, text) => sum + text.length, 0) / 4);
+        const wait = Math.min(PACE_MAX_MS, used / rate * 60_000 - (Date.now() - began));
+        if (wait > 0) {
+          this.embedding.pacing = true;
+          await paused(wait, signal);
+          this.embedding.pacing = false;
+        }
+      }
       await new Promise((resolve) => setImmediate(resolve));
     }
   }
