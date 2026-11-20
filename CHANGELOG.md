@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6 (2026-11-19)
 
 - **Embedding has a Start and Stop button, in Settings.** A big embedding run used to ask in a notification at the bottom right, which went away and didn't come back until meaning search was turned off and on again. Now Settings → Docs / RAG has a row that says where embedding stands (waiting, running, stopped, waiting for tomorrow's budget, done) with one button: **Start embedding** or **Stop embedding**. A big run waits there for Start for as long as it takes; a notification says once that it's waiting, with a button to open Settings. Once started, a run carries on across restarts and over as many days as the budget needs without asking again. Stop holds everything until you press Start; what's embedded is kept and still used.
 - **Embedding is paced.** Docs search by meaning now sends at most so many tokens a minute to the embeddings model, 250,000 unless you change it, so a big folder is embedded at a steady pace and isn't refused part-way by a gateway's per-minute limit. **Pace** in Settings → Docs / RAG sets it (0 for no limit), and the `EmbedTokensPerMinute` policy sets it for everyone. A gateway on this PC isn't paced.
