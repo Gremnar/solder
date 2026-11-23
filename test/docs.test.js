@@ -626,7 +626,6 @@ test("embedding is paced to a rate of tokens a minute: each batch takes the time
     let began = Date.now();
     await fast.refresh([folder], { ms: 20_000, embed: { model: "embed-a", fn: embedder(100) } });
     assert.deepEqual(fast.vectorCount("embed-a"), { passages: 70, embedded: 70 });
-    const unpaced = Date.now() - began;
 
     // 100 tokens a batch at 60,000 a minute: 100 ms a batch, so the three take about 300 ms, and no two start closer.
     stamps.length = 0;
@@ -636,7 +635,8 @@ test("embedding is paced to a rate of tokens a minute: each batch takes the time
     assert.deepEqual(paced.vectorCount("embed-a"), { passages: 70, embedded: 70 });
     assert.equal(stamps.length, 3);
     assert.ok(stamps[1] - stamps[0] >= 90 && stamps[2] - stamps[1] >= 90, `batches started ${stamps[1] - stamps[0]} and ${stamps[2] - stamps[1]} ms apart`);
-    assert.ok(took >= 280 && took > unpaced, `paced ${took} ms, unpaced ${unpaced} ms`);
+    // (Not compared with the unpaced run's time: that one indexes the files first, and on a slow disk takes longer.)
+    assert.ok(took >= 280, `paced ${took} ms`);
     assert.equal(paced.embedding.pacing, false, "not left marked as waiting");
 
     // A gateway that reports no usage is paced by the text's size (four characters a token), not let through at full speed.
