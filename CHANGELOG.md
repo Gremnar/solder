@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.8 (2026-11-23)
 
 - **A reply can make up to 8 changes in one step.** A reply's calls were run up to 8, but only 5 of them could change files, so a model that sent six, seven or eight edits it already knew had the ones past the fifth refused and had to send them again: a step more, and the whole chat sent once more with it. The 8 now covers reads and changes alike. A change that fails still stops the ones after it.
 
