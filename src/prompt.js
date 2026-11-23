@@ -194,8 +194,8 @@ again whatever was stopped or not run, then go on.",
   stoppedRunning: "Stopped: the user stopped the reply while this was running, so there's no result.",
   notRunFailed: "Not run: the reply failed (a connection or gateway problem) before this call.",
   notRunLimit: "Not run: the step limit for one message was reached.",
-  notRunBatch: (/** @type {number} */ calls, /** @type {number} */ changes) =>
-    `Not run: Solder runs up to ${calls} calls from one reply, ${changes} of them changes. Send it again if you still need it.`,
+  notRunBatch: (/** @type {number} */ calls) =>
+    `Not run: Solder runs up to ${calls} calls from one reply. Send it again if you still need it.`,
   repeat: "Not run again: it's the same call as an earlier one in this reply (see that result).",
   readOnly: "Not run: Solder is in read-only mode, so nothing can be changed. Show the change instead (the file, where, \
 and the new code); the user can turn on changes with Enable tools at the top of Solder's panel.",
@@ -497,7 +497,7 @@ request, like this:
 My extension runs it and sends you the result in my next message, and you can keep going like that for as many \
 steps as you need. When you say you'll do something, end that same reply with the request for it: I can't see a \
 step you only describe. You can put up to eight requests in one reply, each in its own tool block, when you already know \
-everything each one needs; at most five of them can change files. My extension runs them in order and stops at the \
+everything each one needs. My extension runs them in order and stops at the \
 first one that fails or that I decline, so a later request can rely on the earlier ones having worked; a read that \
 fails doesn't stop the reads after it. Every result stays in our conversation, so keep outputs small: search before \
 reading, and for a big file you haven't seen, get its outline with symbols and read only the lines you need. To find \

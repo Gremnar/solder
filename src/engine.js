@@ -42,8 +42,8 @@ const MAX_RESULT_CHARS = 40_000;
 const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
-const MAX_BATCH = 5;
-const MAX_READ_BATCH = 8;
+/** One reply's calls that run, reads and changes alike. A lower limit for changes (it was 5) only cost a step: models send up to this many edits when they know them all, and the ones over it had to be sent again. */
+const MAX_BATCH = 8;
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -432,17 +432,8 @@ class Engine {
    */
   async _batch(chat, assistant, cutOff, roundsLeft, signal) {
     const calls = assistant.tool_calls || [];
-    // Up to MAX_READ_BATCH calls run, at most MAX_BATCH of them changes.
-    let counted = 0;
-    let changes = 0;
-    const within = calls.map((call) => {
-      const name = call.function.name;
-      const change = !READ_ONLY.has(name);
-      if (counted >= MAX_READ_BATCH || (change && changes >= MAX_BATCH)) return false;
-      counted++;
-      if (change) changes++;
-      return true;
-    });
+    // Up to MAX_BATCH calls run.
+    const within = calls.map((_, index) => index < MAX_BATCH);
     const seen = new Set();
     /** @type {string | null} why the rest won't run */
     let skip = null;
@@ -464,7 +455,7 @@ class Engine {
       if (skip) {
         result = { output: skip, summary: "Not run: " + label, failed: true };
       } else if (!within[index]) {
-        result = { output: TEXTS.notRunBatch(MAX_READ_BATCH, MAX_BATCH), summary: "Not run: " + label, failed: true };
+        result = { output: TEXTS.notRunBatch(MAX_BATCH), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {

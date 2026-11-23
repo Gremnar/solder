@@ -689,7 +689,7 @@ test("several edits to one file in a reply: the problems check waits for the las
   assert.equal(e2.meta.summary, "Edited · 1 new problem");
 });
 
-test("the batch limit: up to 8 calls, 5 of them changes", async () => {
+test("the batch limit: up to 8 calls from one reply, reads and changes alike", async () => {
   const reads = (n, from = 0) => Array.from({ length: n }, (_, i) => call(`r${from + i}`, "read_file", { path: `f${from + i}.js` }));
   const edits = (n) => Array.from({ length: n }, (_, i) => call(`e${i}`, "edit_file", { path: `g${i}.js`, old_text: "a", new_text: "b" }));
   const run = async (calls) => {
@@ -699,12 +699,14 @@ test("the batch limit: up to 8 calls, 5 of them changes", async () => {
   };
   assert.equal(await run(reads(8)), 8);
   assert.equal(await run(reads(9)), 8);
-  assert.equal(await run(edits(6)), 5);
-  assert.equal(await run([...reads(3), ...edits(5)]), 8, "a mixed batch runs 8 when 5 or fewer are changes");
-  assert.equal(await run([...reads(3), ...edits(5), ...reads(1, 10)]), 8);
+  assert.equal(await run(edits(8)), 8, "eight edits a model knows all of run in one step");
+  assert.equal(await run(edits(9)), 8);
+  assert.equal(await run([...reads(3), ...edits(5)]), 8);
+  assert.equal(await run([...reads(3), ...edits(5), ...reads(1, 10)]), 8, "reads and changes share the eight");
   const chat = Engine.newChat();
-  await engine(fakeClient([{ calls: edits(6) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
-  assert.match(chat.messages.find((m) => m.tool_call_id === "e5").content, /up to 8 calls from one reply, 5 of them changes/);
+  await engine(fakeClient([{ calls: edits(10) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
+  assert.equal(chat.messages.find((m) => m.tool_call_id === "e7").meta.failed, false, "the eighth ran");
+  for (const id of ["e8", "e9"]) assert.match(chat.messages.find((m) => m.tool_call_id === id).content, /^Not run: Solder runs up to 8 calls from one reply\. Send it again/);
 });
 
 test("argument problems: every missing one at once, and ones a tool doesn't take are named", async () => {

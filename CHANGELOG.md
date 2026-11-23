@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A reply can make up to 8 changes in one step.** A reply's calls were run up to 8, but only 5 of them could change files, so a model that sent six, seven or eight edits it already knew had the ones past the fifth refused and had to send them again: a step more, and the whole chat sent once more with it. The 8 now covers reads and changes alike. A change that fails still stops the ones after it.
+
 ## 0.3.7 (2026-11-22)
 
 - **Solder asks before the model changes a rules file or a project's own files.** An edit, write, move or copy that touches `AGENTS.md` (or whichever names **Instruction files** gives, in any folder) or anything in a project's `.solder` folder (its skills, its name, its skill switches) now shows an approval card first. Later chats follow those files, so a change made in one chat would have carried into every chat after it, and to anyone the project is shared with, without anyone agreeing to it. Reading them is as free as before, and what you do yourself on the Projects screen and in Settings isn't asked about.
