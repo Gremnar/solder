@@ -43,7 +43,7 @@ class Log {
     switch (event.type) {
       case "reply": this.write(`reply ${event.model} ${s(event.ms)} prompt=${n(event.prompt)} out=${n(event.completion)} finish=${event.finish} calls=${event.calls}`); break;
       case "ran": this.write(`tool ${event.name} ${s(event.ms)} ${event.failed ? "failed" : "ok"} ${n(event.chars)} chars`); break;
-      case "retrying": this.write(`retrying (${event.why === "empty" ? "empty reply" : "connection"})`); break;
+      case "retrying": this.write(event.carriedOn ? `cut off partway (${event.why}): carried on by itself` : `retrying (${event.why === "empty" ? "empty reply" : "connection"})`); break;
       case "compacting": this.write("compacting"); break;
       case "compacted": this.write(`compacted through message ${event.through}`); break;
       case "compaction-failed": this.write(`compaction failed: ${pathless(event.message)}`); break;

@@ -496,7 +496,7 @@ request, like this:
 
 My extension runs it and sends you the result in my next message, and you can keep going like that for as many \
 steps as you need. When you say you'll do something, end that same reply with the request for it: I can't see a \
-step you only describe. You can put up to eight requests in one reply, each in its own tool block, when you already know \
+step you only describe. You can put several requests in one reply, each in its own tool block, when you already know \
 everything each one needs. My extension runs them in order and stops at the \
 first one that fails or that I decline, so a later request can rely on the earlier ones having worked; a read that \
 fails doesn't stop the reads after it. Every result stays in our conversation, so keep outputs small: search before \

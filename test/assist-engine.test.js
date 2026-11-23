@@ -27,9 +27,12 @@ function script(/** @type {{role: string, content: string}[]} */ seen, /** @type
 /** The requests a task made (titles, which go on their own afterwards, left out). @param {any} gw */
 const sent = (gw) => gw.requests.filter((/** @type {any} */ r) => !String(r.payload.messages?.at(-1)?.content || "").startsWith("Give a short title"));
 
-/** An engine on the fake gateway; `rules` can change between messages. */
-async function setup() {
-  const gw = await fakeAssist({ script });
+/**
+ * An engine on the fake gateway; `rules` can change between messages.
+ * @param {{script?: (seen: any[], payload: any) => string, cut?: (text: string, count: number) => boolean}} [options]
+ */
+async function setup(options = {}) {
+  const gw = await fakeAssist({ script: options.script || script, cut: options.cut });
   const client = new GatewayClient({ endpoint: gw.endpoint, apiKey: "" });
   const state = { rules: "Be brief.", model: "model-a" };
   const ran = [];
@@ -215,4 +218,99 @@ test("the Assist lane isn't trimmed, has its own step limit, and carries over by
     assert.equal(carryBudget({ compactAt: 30_000 }), 800_000, "200,000 tokens when it isn't set, whatever Compact at is");
     assert.equal(carryBudget({ assistCarryTokens: NaN }), 800_000);
   } finally { await gw.close(); }
+});
+
+/** The fake model for the cut-off tests: reads a.js, then b.js once asked to carry on, then answers. */
+function carrying(/** @type {{role: string, content: string}[]} */ seen) {
+  const last = seen[seen.length - 1].content;
+  if (last.startsWith("Give a short title")) return "A title";
+  if (last.includes("Please carry on from where you stopped.")) return 'Carrying on.\n\n```tool\n{"tool": "read_file", "path": "b.js"}\n```';
+  if (last.includes("returned for read_file b.js")) return "Both files hold the cart, and that's the whole answer.";
+  if (last.includes("returned for read_file a.js")) return "a.js holds the cart, and there is more to say about it here.";
+  return READ_A;
+}
+
+test("assist: a reply cut off partway is carried on from by itself, as Resume would; what had arrived is kept", async () => {
+  // The answer to a.js's result (the second request) stops partway: its stream ends with no finish.
+  const { gw, engine, events } = await setup({ script: carrying, cut: (_text, count) => count === 2 });
+  try {
+    const chat = Engine.newChat();
+    await engine.ask(chat, "What's in a.js?");
+    assert.equal(events.some((e) => e.type === "error"), false, "no error to answer: nothing to click");
+    assert.equal(events.filter((e) => e.type === "retrying" && e.carriedOn).length, 1);
+    const kinds = chat.messages.map((m) => m.role + (m.meta?.incomplete ? ":cut" : m.meta?.auto ? ":auto" : ""));
+    assert.deepEqual(kinds, ["user", "assistant", "tool", "assistant:cut", "user:auto", "assistant", "tool", "assistant"]);
+    const cut = chat.messages[3];
+    assert.ok(cut.content.length > 0 && "a.js holds the cart, and there is more to say about it here.".startsWith(cut.content), "the part that arrived is shown");
+    const carry = chat.messages[4];
+    assert.deepEqual([carry.meta.typed, carry.meta.resume], ["Carry on", true]);
+    assert.match(carry.content, /Please carry on from where you stopped\.$/);
+    const third = sent(gw)[2];
+    assert.ok(third.payload.test_session, "sent in the same session");
+    assert.match(third.payload.messages[0].content, /Please carry on from where you stopped\.$/);
+    assert.equal(third.payload.messages.length, 1, "only the carry-on goes: the part that arrived isn't sent back");
+    assert.equal(chat.messages.at(-1).content, "Both files hold the cart, and that's the whole answer.");
+  } finally { gw.close(); }
+});
+
+test("assist: carried on from once for each cut; a second cut straight after is the error it always was, with Resume", async () => {
+  // Cut, carried on, a reply that finishes, then cut again later in the task: carried on from again.
+  let { gw, engine, events } = await setup({ script: carrying, cut: (_text, count) => count === 2 || count === 4 });
+  try {
+    const chat = Engine.newChat();
+    await engine.ask(chat, "What's in a.js?");
+    assert.equal(events.some((e) => e.type === "error"), false);
+    assert.equal(chat.messages.filter((m) => m.meta?.auto).length, 2, "each cut after a finished reply gets its one carry-on");
+    assert.ok(chat.messages.at(-1).role === "assistant" && !chat.messages.at(-1).meta?.incomplete);
+  } finally { gw.close(); }
+
+  // Cut, carried on, and cut again at once: no third try by itself.
+  ({ gw, engine, events } = await setup({ script: carrying, cut: (_text, count) => count === 2 || count === 3 }));
+  try {
+    const chat = Engine.newChat();
+    await engine.ask(chat, "What's in a.js?");
+    const error = events.find((e) => e.type === "error");
+    assert.ok(error && error.resumable, "the second cut in a row is shown, with Resume");
+    assert.match(error.message, /stream ended before it finished/);
+    assert.equal(chat.messages.filter((m) => m.meta?.auto).length, 1);
+    assert.equal(sent(gw).length, 3, "nothing more was sent");
+    // Resume by hand still works from there.
+    await engine.resume(chat);
+    assert.ok(chat.messages.at(-1).role === "assistant" && !chat.messages.at(-1).meta?.incomplete);
+  } finally { gw.close(); }
+});
+
+test("assist: a Stop, or a failure before any of the reply arrived, isn't carried on from", async () => {
+  const { gw, engine, events } = await setup({ script: carrying });
+  try {
+    const chat = Engine.newChat();
+    // A dead session and a carry-over that fails too would be the gateway's trouble, not a cut reply: here, simply
+    // stopped partway by you.
+    const real = engine.client.reply.bind(engine.client);
+    engine.client.reply = (/** @type {any} */ request) => real({ ...request, onText: (/** @type {string} */ text) => { request.onText(text); engine.stop(); } });
+    await engine.ask(chat, "What's in a.js?");
+    assert.equal(events.some((e) => e.type === "stopped"), true);
+    assert.equal(chat.messages.filter((m) => m.meta?.auto).length, 0, "a reply you stopped stays stopped");
+    assert.equal(sent(gw).length, 1);
+  } finally { gw.close(); }
+});
+
+test("assist: every request in a reply runs (a refactor's fifteen or twenty edits), up to a guard no task meets", async () => {
+  const edits = (/** @type {number} */ n) => "Renaming it everywhere.\n\n" + Array.from({ length: n }, (_, i) =>
+    "```tool\n" + JSON.stringify({ tool: "edit_file", path: `src/f${i}.js`, old_text: "oldName", new_text: "newName" }) + "\n```").join("\n\n");
+  for (const [asked, runs] of [[20, 20], [55, 50]]) {
+    const { gw, engine, ran } = await setup({ script: (seen) => {
+      const last = seen[seen.length - 1].content;
+      return last.startsWith("Give a short title") ? "A title" : seen.length === 1 ? edits(asked) : "All renamed.";
+    } });
+    try {
+      const chat = Engine.newChat();
+      await engine.ask(chat, "Rename oldName to newName everywhere.");
+      assert.equal(ran.length, runs, `${asked} edits sent, ${runs} run`);
+      assert.deepEqual(ran.map(([, args]) => args.path), Array.from({ length: runs }, (_, i) => `src/f${i}.js`), "in order");
+      const refused = chat.messages.filter((m) => m.role === "tool" && /^Not run: Solder runs up to 50 calls from one reply/.test(m.content));
+      assert.equal(refused.length, asked - runs);
+      assert.equal(chat.messages.at(-1).content, "All renamed.");
+    } finally { gw.close(); }
+  }
 });

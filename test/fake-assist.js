@@ -15,9 +15,11 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 
 /**
- * @param {{block?: string, script: (seen: {role: string, content: string}[], request: any) => string}} options
+ * @param {{block?: string, script: (seen: {role: string, content: string}[], request: any) => string,
+ *          cut?: (text: string, count: number) => boolean}} options cut: whether this reply (the count-th request's)
+ *   stops partway, its stream ending without a finish
  */
-async function fakeAssist({ block = "test_session", script }) {
+async function fakeAssist({ block = "test_session", script, cut }) {
   /** @type {{payload: any, seen: {role: string, content: string}[], session: string, status: number, systemSent: boolean, toolsSent: boolean, extrasSent: string[]}[]} */
   const requests = [];
   /** @type {Map<string, {history: {role: string, content: string}[], tokens: Set<string>}>} */
@@ -65,6 +67,12 @@ async function fakeAssist({ block = "test_session", script }) {
         return;
       }
       res.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (cut && cut(text, requests.length)) {
+        // Cut off partway: the first part of the reply, then the stream just ends (no finish, no session block).
+        res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text.slice(0, Math.ceil(text.length / 2)) } }] })}\n\n`);
+        res.end();
+        return;
+      }
       const half = Math.ceil(text.length / 2);
       for (const piece of [text.slice(0, half), text.slice(half)]) {
         if (piece) res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: piece } }] })}\n\n`);

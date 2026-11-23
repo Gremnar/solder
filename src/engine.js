@@ -44,6 +44,12 @@ const LONG_ARGUMENT_CHARS = 1_500;
 const STUB_MIN_CHARS = 2_000;
 /** One reply's calls that run, reads and changes alike. A lower limit for changes (it was 5) only cost a step: models send up to this many edits when they know them all, and the ones over it had to be sent again. */
 const MAX_BATCH = 8;
+/**
+ * On the Assist lane, a reply's calls all run: its tokens aren't billed, so a big refactor sent as fifteen or twenty
+ * edits costs nothing to take whole, and refusing the ones past the eighth only cost a step each time. This is a guard
+ * against a reply gone wrong (the same request written over and over), not a limit a task meets.
+ */
+const ASSIST_MAX_BATCH = 50;
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -301,6 +307,8 @@ class Engine {
     const tools = toolDefinitions(!!settings.readOnly);
     let rounds = 0;
     let repairs = 0;
+    // An Assist reply that was cut off partway has been carried on from, and no reply has finished since.
+    let carried = false;
     for (;;) {
       const model = modelOf(chat, settings);
       // Your organization's model filter applies to what's sent, not only to what the picker offers.
@@ -311,7 +319,24 @@ class Engine {
       let assistant;
       if (laneOf(model, settings) === "assist") {
         // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
-        const step = await this._assistStep(chat, model, settings, signal, repairs);
+        let step;
+        try {
+          step = await this._assistStep(chat, model, settings, signal, repairs);
+        } catch (error) {
+          // Cut off partway (the stream ended, the connection dropped, it went quiet): what Resume would do is done
+          // here, once. Nothing is billed on this lane, and a reply here nearly always starts with words, so the one
+          // resend a failed request gets (_patient: only while nothing has been shown) almost never applied to it.
+          if (carried || !cutOffPartway(chat, error, signal)) throw error;
+          carried = true;
+          this.emit({ type: "retrying", chat: chat.id, why: /** @type {any} */ (error).message, carriedOn: true });
+          chat.messages.push({ role: "user", content: `${timeNote(this.now())}
+
+${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
+          await this._save(chat);
+          this.emit({ type: "message", chat: chat.id });
+          continue;
+        }
+        carried = false;
         if (step.repair) { repairs++; continue; }
         repairs = 0; // the allowance of asking again is for each request, not the whole turn
         ({ reply, assistant } = step);
@@ -362,7 +387,7 @@ class Engine {
         this.emit({ type: "done", chat: chat.id, limit: maxRounds });
         return;
       }
-      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal);
+      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal, assistant.meta?.lane === "assist" ? ASSIST_MAX_BATCH : MAX_BATCH);
       if (signal.aborted) throw new Cancelled();
     }
   }
@@ -429,11 +454,11 @@ class Engine {
   /**
    * Run one reply's calls in order. Each gets its own tool message.
    * @param {Chat} chat @param {Stored} assistant @param {boolean} cutOff @param {number} roundsLeft @param {AbortSignal} signal
+   * @param {number} [limit] how many of the reply's calls run (the lane's)
    */
-  async _batch(chat, assistant, cutOff, roundsLeft, signal) {
+  async _batch(chat, assistant, cutOff, roundsLeft, signal, limit = MAX_BATCH) {
     const calls = assistant.tool_calls || [];
-    // Up to MAX_BATCH calls run.
-    const within = calls.map((_, index) => index < MAX_BATCH);
+    const within = calls.map((_, index) => index < limit);
     const seen = new Set();
     /** @type {string | null} why the rest won't run */
     let skip = null;
@@ -455,7 +480,7 @@ class Engine {
       if (skip) {
         result = { output: skip, summary: "Not run: " + label, failed: true };
       } else if (!within[index]) {
-        result = { output: TEXTS.notRunBatch(MAX_BATCH), summary: "Not run: " + label, failed: true };
+        result = { output: TEXTS.notRunBatch(limit), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {
@@ -1002,6 +1027,18 @@ function removeTurn(chat, index, rest = false) {
 /** How many of your messages come after the one at `index` (what Edit would take with it). @param {Chat} chat @param {number} index */
 function laterMessages(chat, index) {
   return chat.messages.slice(index + 1).filter((m) => m.role === "user" && !m.meta?.resume).length;
+}
+
+/**
+ * Whether a reply failed the way Resume mends: partway, with what had arrived kept as the chat's last message, and for
+ * a reason that passes (the stream ended early, the connection dropped, the gateway went quiet). Not a Stop, not a
+ * used-up allowance, and not a failure that would only repeat (a refused key, a model that isn't there).
+ * @param {Chat} chat @param {any} error @param {AbortSignal} signal
+ */
+function cutOffPartway(chat, error, signal) {
+  if (signal.aborted || error instanceof Cancelled || !error?.transient || error.exhausted) return false;
+  const last = chat.messages[chat.messages.length - 1];
+  return last?.role === "assistant" && !!last.meta?.incomplete;
 }
 
 /**

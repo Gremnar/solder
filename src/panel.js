@@ -1122,7 +1122,8 @@ class SolderPanel {
       case "delta": this.live += event.text; this.status = ""; if (this.chat.id === this.runId) this.postLive(); return;
       case "thinking": this.status = "Thinking…"; this.running = ""; break;
       case "drafting": this.status = draftingLabel(event.calls); break;
-      case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…" : "Connection trouble; trying again…"; break;
+      case "retrying": this.live = ""; this.status = event.why === "empty" ? "The reply came back empty; asking again…"
+        : event.carriedOn ? "The reply was cut off partway; carrying on…" : "Connection trouble; trying again…"; break;
       case "compacting": this.status = "Summarising the older part of this chat to save tokens…"; break;
       case "compaction-failed": this.status = "Couldn't summarise the older part of this chat; sending it as it is."; this.compactProblem = event.message || ""; break;
       case "message": this.live = ""; this.running = ""; this.status = ""; break;
