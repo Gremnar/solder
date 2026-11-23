@@ -18,7 +18,8 @@ Expect a reply within a few days. A fix ships in the next release, credited to y
 - **What it asks before doing:**
   - deleting anything;
   - changing a file outside the workspace, or one with unsaved editor changes;
-  - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`, `.gitmodules`), where a change can make programs run;
+  - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`, `.gitmodules`, a `.code-workspace` file), where a change can make programs run;
+  - changing a rules file (`AGENTS.md`, or whichever names the instruction files setting gives, in any folder) or anything in a project's `.solder` folder (its skills, name and skill switches): the model follows those in later chats, so a change made in one chat would outlast it;
   - reading a file outside the workspace and your docs folders;
   - running git in a folder outside the workspace.
 

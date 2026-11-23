@@ -521,6 +521,74 @@ test("a stream suffix on git's files (.gitattributes::$DATA) is still asked abou
   }
 });
 
+test("asked first: a change to a rules file, to a project's .solder folder, or to a workspace file", () => {
+  const { WorkspaceTools, followedLater, runsPrograms } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-rules-"));
+  try {
+    const ws = path.join(top, "ws");
+    fs.mkdirSync(path.join(ws, ".solder", "skills"), { recursive: true });
+    fs.mkdirSync(path.join(ws, "src"));
+    fs.writeFileSync(path.join(ws, "AGENTS.md"), "rules");
+    fs.writeFileSync(path.join(ws, "notes.md"), "notes");
+    fs.writeFileSync(path.join(ws, ".solder", "skills", "way.md"), "When to use: always\n");
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [ws];
+    tools.docsFolders = () => [];
+    const ask = (/** @type {string} */ name, /** @type {any} */ args) => tools.needsApproval(name, args);
+    // The rules file, at the root or in any folder (a folder's own is read with the first file read there).
+    assert.match(String(ask("edit_file", { path: "AGENTS.md" })), /AGENTS\.md, rules the model follows in later chats/);
+    assert.match(String(ask("write_file", { path: "src/agents.MD" })), /rules the model follows/, "one not there yet, in a folder, whatever its case");
+    assert.match(String(ask("write_file", { path: "AGENTS.md::$DATA" })), /rules the model follows/, "a stream suffix writes to the file itself");
+    // The project's folder: its skills, its name and its skill switches.
+    assert.match(String(ask("write_file", { path: ".solder/skills/new.md" })), /\.solder, a project's own folder/);
+    assert.match(String(ask("edit_file", { path: ".solder/skills/way.md" })), /\.solder/);
+    assert.match(String(ask("write_file", { path: ".Solder/project.json" })), /\.solder/);
+    assert.match(String(ask("write_file", { path: "src/.solder/project.json" })), /\.solder/, "a project in a folder of the workspace");
+    // Moved or copied into place, or away.
+    assert.match(String(ask("move_item", { from: "notes.md", to: "AGENTS.md" })), /rules the model follows/);
+    assert.match(String(ask("move_item", { from: "notes.md", to: ".solder/skills/", copy: true })), /\.solder/);
+    assert.match(String(ask("move_item", { from: "AGENTS.md", to: "old-rules.md" })), /rules the model follows/);
+    assert.match(String(ask("move_item", { from: "src", to: ".solder" })), /\.solder/);
+    // Reading them is free, and so is changing a file that only looks alike.
+    assert.equal(ask("read_file", { path: "AGENTS.md" }), null);
+    assert.equal(ask("read_file", { path: ".solder/skills/way.md" }), null);
+    assert.equal(ask("write_file", { path: "notes.md" }), null);
+    assert.equal(ask("write_file", { path: "docs/AGENTS.md.txt" }), null);
+    assert.equal(ask("write_file", { path: "src/solder/project.json" }), null);
+    assert.equal(ask("move_item", { from: "notes.md", to: "src/notes.md" }), null);
+    // The names come from the instruction files setting.
+    assert.equal(followedLater(path.join(ws, "CLAUDE.md"), ["AGENTS.md"]), "");
+    assert.equal(followedLater(path.join(ws, "claude.md"), ["AGENTS.md", "CLAUDE.md"]), "CLAUDE.md");
+    assert.equal(followedLater(path.join(ws, ".solder"), []), ".solder");
+    // A workspace file holds settings and tasks, as .vscode does.
+    assert.match(String(ask("edit_file", { path: "team.code-workspace" })), /team\.code-workspace, where a change can make programs run/);
+    assert.match(String(ask("write_file", { path: "src/New.Code-Workspace::$DATA" })), /programs run/);
+    assert.match(String(ask("move_item", { from: "notes.md", to: "team.code-workspace" })), /programs run/);
+    assert.equal(runsPrograms(path.join(ws, "code-workspace.md")), "");
+    assert.equal(ask("write_file", { path: "src/workspace.json" }), null);
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("asked first: a rules file or a project folder reached through a link or a short name", (t) => {
+  const { WorkspaceTools } = require("../src/tools.js");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-rules-link-"));
+  try {
+    const ws = path.join(top, "ws");
+    fs.mkdirSync(path.join(ws, ".solder", "skills"), { recursive: true });
+    fs.writeFileSync(path.join(ws, "AGENTS.md"), "rules");
+    try { fs.symlinkSync(path.join(ws, ".solder"), path.join(ws, "tidy"), "junction"); } catch { t.skip("no junctions here"); return; }
+    const tools = new WorkspaceTools(/** @type {any} */ ({ globalStorageUri: { fsPath: path.join(top, "store") }, subscriptions: [] }));
+    tools.roots = () => [ws];
+    tools.docsFolders = () => [];
+    assert.match(String(tools.needsApproval("write_file", { path: "tidy/skills/new.md" })), /\.solder, a project's own folder/);
+    assert.match(String(tools.needsApproval("move_item", { from: "AGENTS.md", to: "tidy/project.json" })), /rules the model follows|\.solder/);
+  } finally {
+    fs.rmSync(top, { recursive: true, force: true });
+  }
+});
+
 test("an instruction file is read only when it's the workspace's own: a link out of it (or a folder by that name) isn't", (t) => {
   const { WorkspaceTools, ownFile } = require("../src/tools.js");
   const top = fs.mkdtempSync(path.join(os.tmpdir(), "solder-agents-"));

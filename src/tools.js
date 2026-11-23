@@ -177,8 +177,9 @@ class WorkspaceTools {
   }
 
   /**
-   * Why a call needs asking about first, or null: removing anything; changes outside the workspace, or to the
-   * files that can make programs run (git's and VS Code's); reading outside the workspace and your docs folders.
+   * Why a call needs asking about first, or null: removing anything; changes outside the workspace, to the files
+   * that can make programs run (git's and VS Code's), or to what the model follows in later chats (the rules files
+   * and a project's .solder folder); reading outside the workspace and your docs folders.
    */
   needsApproval(/** @type {string} */ name, /** @type {any} */ args) {
     if (name === "move_item") {
@@ -187,8 +188,8 @@ class WorkspaceTools {
       try { from = this.resolve(args.from); to = this.resolve(args.to); } catch { return null; }
       const risky = programRisk(from.full) || programRisk(to.full);
       if (risky) return RUNS_PROGRAMS(risky);
-      if (from.inside && to.inside) return null;
-      return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
+      if (!from.inside || !to.inside) return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
+      return this.followed(from.full) || this.followed(to.full) || null;
     }
     if (name === "read_file" || name === "symbols" || name === "problems") {
       if (!args.path) return null;
@@ -221,9 +222,22 @@ class WorkspaceTools {
     const risky = programRisk(target.full);
     if (risky) return RUNS_PROGRAMS(risky);
     if (!target.inside) return "It changes a file outside the workspace folder.";
+    const followed = this.followed(target.full);
+    if (followed) return followed;
     // Solder saves what it changes: unsaved typing in that file would be saved along with it.
     if (this.dirty(target.full)) return "This file has unsaved changes in the editor: they'll be saved along with Solder's change.";
     return null;
+  }
+
+  /**
+   * Why a change to this path is asked about as one the model follows in later chats, or "": a rules file (by the
+   * instruction file names in the settings, in any folder), or anything in a project's .solder folder. @param {string} full
+   */
+  followed(full) {
+    const what = followedLater(full, plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"])));
+    if (!what) return "";
+    return what === PROJECT_FOLDER ? `It changes ${what}, a project's own folder: its skills and skill switches are followed in later chats.`
+      : `It changes ${what}, rules the model follows in later chats.`;
   }
 
   /** Whether an open editor has unsaved changes in this file, or in a file inside this folder. @param {string} full */
@@ -1898,6 +1912,7 @@ function removeEmpty(from, top) {
 /** Where a change can make programs run: git's settings, hooks and filters, and VS Code's tasks and settings. */
 const PROGRAM_FOLDERS = [".git", ".vscode"];
 const PROGRAM_FILES = [".gitattributes", ".gitmodules", ".gitconfig"];
+const WORKSPACE_FILE = ".code-workspace";
 const RUNS_PROGRAMS = (/** @type {string} */ what) =>
   `It changes ${what}, where a change can make programs run (git's hooks and filters, VS Code's tasks and settings).`;
 
@@ -1915,11 +1930,35 @@ function programRisk(full) {
  * isn't there yet, whose real path can't be asked). @param {string} full
  */
 function runsPrograms(full) {
-  const parts = path.resolve(full).split(/[\\/]/).map((part) => part.replace(/:.*$/, "").toLowerCase());
+  const parts = nameParts(full);
   const folder = parts.slice(0, -1).find((part) => PROGRAM_FOLDERS.includes(part));
   if (folder) return folder;
   const last = parts[parts.length - 1];
-  return PROGRAM_FOLDERS.includes(last) || PROGRAM_FILES.includes(last) ? last : "";
+  // A workspace file (name.code-workspace) holds the same settings and tasks as .vscode does.
+  return PROGRAM_FOLDERS.includes(last) || PROGRAM_FILES.includes(last) || last.endsWith(WORKSPACE_FILE) ? last : "";
+}
+
+/** A path's parts, lower-cased, each without a stream suffix. @param {string} full */
+function nameParts(full) {
+  return path.resolve(full).split(/[\\/]/).map((part) => part.replace(/:.*$/, "").toLowerCase());
+}
+
+/** A project's own folder: its name, its skills and its skill switches. */
+const PROJECT_FOLDER = ".solder";
+
+/**
+ * The rules file a path is, or the project folder it is (or is in): what the model is given as instructions in later
+ * chats, so a change there outlasts the chat that made it. As written, or once Windows has resolved it (a short name,
+ * a link); "" when it's neither. @param {string} full @param {string[]} names the instruction file names
+ */
+function followedLater(full, names) {
+  for (const given of [full, realPath(full)]) {
+    const parts = nameParts(given);
+    if (parts.includes(PROJECT_FOLDER)) return PROJECT_FOLDER;
+    const name = names.find((candidate) => candidate.toLowerCase() === parts[parts.length - 1]);
+    if (name) return name;
+  }
+  return "";
 }
 
 /**
@@ -2385,4 +2424,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

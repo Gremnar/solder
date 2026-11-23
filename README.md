@@ -60,7 +60,8 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
 - **It asks first** before:
   - deleting anything;
   - changing a file outside the workspace, or one with unsaved changes;
-  - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`), where a change can make programs run;
+  - changing git's or VS Code's own files (`.git`, `.vscode`, `.gitattributes`, a `.code-workspace` file), where a change can make programs run;
+  - changing a rules file (`AGENTS.md`) or anything in a project's `.solder` folder, which later chats follow;
   - reading a file outside the workspace and your docs and skills folders.
 
   You can add a note for the model when you answer.

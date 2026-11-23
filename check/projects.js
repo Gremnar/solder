@@ -96,6 +96,10 @@ async function main() {
     check("... and its skill, with yours", context.skills.some((k) => k.name === "restore_steps" && k.path.toLowerCase() === skillFile.toLowerCase()), context.skills.map((k) => k.name));
     check("... the rules file isn't brought along again by the first read in that folder", (chat.agentsSeen || []).includes(rules.toLowerCase()));
     check("... reading the project's skill needs no approval, and comes back as a skill", panel.tools.needsApproval("read_file", { path: skillFile }) === null);
+    const changeAsks = [["edit_file", skillFile], ["write_file", path.join(mine, ".solder", "skills", "another.md")], ["write_file", path.join(mine, ".solder", "project.json")], ["edit_file", rules]]
+      .map(([name, file]) => String(panel.tools.needsApproval(name, { path: file })));
+    check("... changing its skills, its project.json or its rules is asked about first: later chats follow them", changeAsks.slice(0, 3).every((reason) => /\.solder, a project's own folder/.test(reason))
+      && /AGENTS\.md, rules the model follows in later chats/.test(changeAsks[3]) && panel.tools.needsApproval("read_file", { path: rules }) === null, changeAsks);
     const plain = Engine.newChat();
     panel.useChat(plain);
     context = panel.promptContext(plain);
