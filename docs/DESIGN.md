@@ -2,7 +2,7 @@
 
 Solder is a **lean coding agent in a VS Code side panel**. It talks to an OpenAI-compatible Chat Completions endpoint that supports tool calling: a corporate gateway, a local server, anything that speaks the format. It is meant for technical users who live in VS Code and want an agent beside the editor that does focused work with as few tokens as possible.
 
-It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's engine lessons ([LESSONS.md](LESSONS.md)) and leaves out everything VS Code already does.
+It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's engine lessons and leaves out everything VS Code already does.
 
 ## What it is, and what it isn't
 

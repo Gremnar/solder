@@ -1,6 +1,6 @@
 # Working on Solder
 
-Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling. Start by reading `docs/DESIGN.md` (the plan and its decisions) and `docs/LESSONS.md` (the engine lessons it's built on).
+Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling. Start by reading `docs/DESIGN.md` (the plan and its decisions).
 
 ## Hard rules
 

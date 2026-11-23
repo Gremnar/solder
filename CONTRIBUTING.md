@@ -1,6 +1,6 @@
 # Working on Solder
 
-Start with [AGENTS.md](AGENTS.md), which has the hard rules and the layout. Then read [docs/DESIGN.md](docs/DESIGN.md), the plan and its decisions, and [docs/LESSONS.md](docs/LESSONS.md), the engine lessons it's built on.
+Start with [AGENTS.md](AGENTS.md), which has the hard rules and the layout. Then read [docs/DESIGN.md](docs/DESIGN.md), the plan and its decisions.
 
 ## Rules
 
