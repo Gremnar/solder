@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.7 (2026-11-22)
 
 - **Solder asks before the model changes a rules file or a project's own files.** An edit, write, move or copy that touches `AGENTS.md` (or whichever names **Instruction files** gives, in any folder) or anything in a project's `.solder` folder (its skills, its name, its skill switches) now shows an approval card first. Later chats follow those files, so a change made in one chat would have carried into every chat after it, and to anyone the project is shared with, without anyone agreeing to it. Reading them is as free as before, and what you do yourself on the Projects screen and in Settings isn't asked about.
 - **A workspace file asks too.** A change to a `.code-workspace` file is asked about like one to `.vscode`: it holds the same settings and tasks.
