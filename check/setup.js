@@ -38,8 +38,8 @@ async function main() {
   const { SolderPanel } = require(path.join(REPO, "src", "panel.js"));
   const refresh = policy.refresh;
   policy.refresh = async () => false; // the policy set here stays (there's none in this PC's registry)
-  let key = "";
-  const make = () => new SolderPanel({ secrets: { get: async () => key, store: async (_, v) => { key = v; }, delete: async () => { key = ""; } },
+  const held = new Map(); // the secret storage: the key, and the gateway it's for
+  const make = () => new SolderPanel({ secrets: { get: async (name) => held.get(name), store: async (name, v) => { held.set(name, v); }, delete: async (name) => { held.delete(name); } },
     subscriptions: [], extension: ext, globalStorageUri: vscode.Uri.file(path.join(T, "gs-setup")), storageUri: undefined,
     extensionUri: ext.extensionUri }, { appendLine() {}, show() {} });
   try {
@@ -56,7 +56,7 @@ async function main() {
     await panel.refreshModels();
     check("... and Not now leaves the 'Set up Solder' card, not a connection error", panel.modelsProblem === "setup", panel.modelsProblem);
 
-    key = "a-wrong-key";
+    held.set("solder.apiKey", "a-wrong-key");
     await panel.refreshModels();
     check("a key that's there is tried: a failure then is a connection problem, as before", panel.modelsProblem && panel.modelsProblem !== "setup", panel.modelsProblem);
     const again = make();
@@ -203,6 +203,44 @@ async function main() {
       check("... and one that's there is opened, never written over", fs.readFileSync(file, "utf8") === "Target Windows PowerShell 5.1.\n");
       await vscode.commands.executeCommand("workbench.action.closeAllEditors");
       fs.rmSync(file, { force: true });
+    }
+
+    // ---- your key goes only to the gateway it was saved for: a new address gets none until it's given its own
+    {
+      const first = "https://gateway-one.invalid/v1/chat/completions";
+      const other = "https://gateway-two.invalid/v1/chat/completions";
+      policy.apply(new Map(), "");
+      held.clear();
+      await raw().update("endpoint", first, vscode.ConfigurationTarget.Global);
+      await again.onMessage({ type: "settings" });
+      await again.onMessage({ type: "settingsScreen", action: "key", key: " key-for-one " });
+      await again.refreshModels();
+      check("a key saved in Settings is kept with the gateway that's set, and used for it", held.get("solder.apiKey") === "key-for-one" && held.get("solder.apiKey.gateway") === "https://gateway-one.invalid"
+        && again.client().apiKey === "key-for-one" && again.settingsScreen.view.hasKey === true, [...held.entries()].map(([name]) => name));
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "endpoint", value: other });
+      await again.refreshModels();
+      check("another gateway's address entered: the saved key isn't sent there, and Settings says whose it is", again.client().apiKey === "" && again.settingsScreen.view.hasKey === false
+        && again.settingsScreen.view.keyElsewhere === true && /another gateway's/.test(again.settingsScreen.view.notice) && again.modelsProblem === "setup",
+        [again.client().apiKey === "", again.settingsScreen.view.hasKey, again.settingsScreen.view.notice, again.modelsProblem]);
+      check("... and that gateway counts as not set up yet (it needs its own key)", await again.setup.needed() === true);
+      await again.setup.start();
+      check("... the guided setup shows no key for it either", again.setup.view.hasKey === false && again.setup.view.endpoint === other, again.setup.view.hasKey);
+      await again.setup.handle({ action: "cancel" });
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "endpoint", value: first });
+      await again.refreshModels();
+      check("back at its own gateway, the key is there as before", again.client().apiKey === "key-for-one" && again.settingsScreen.view.hasKey === true && again.settingsScreen.view.keyElsewhere === false);
+      await again.onMessage({ type: "settingsScreen", action: "set", field: "endpoint", value: other });
+      await again.onMessage({ type: "settingsScreen", action: "key", key: "key-for-two" });
+      await again.refreshModels();
+      check("a key entered for the new gateway is that gateway's", again.client().apiKey === "key-for-two" && held.get("solder.apiKey.gateway") === "https://gateway-two.invalid", held.get("solder.apiKey.gateway"));
+      // Your organization's address takes the key with it: the address is theirs to move.
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await again.refreshModels();
+      check("an address your organization sets is sent the key you have", again.client().apiKey === "key-for-two" && held.get("solder.apiKey.gateway") === "https://gateway.invalid", held.get("solder.apiKey.gateway"));
+      await raw().update("endpoint", undefined, vscode.ConfigurationTarget.Global);
+      held.clear();
+      held.set("solder.apiKey", "a-wrong-key");
+      await again.onMessage({ type: "settings" });
     }
 
     // ---- your organization's Tool models pattern: Kinds of model is shown by it, and locked

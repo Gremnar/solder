@@ -710,7 +710,6 @@ body.in-setup #btn-settings { display: none; }
 body.in-setup #btn-projects { display: none; }
 body.in-projects #transcript { padding-top: 4px; }
 .pfolder { flex: none; width: 13px; height: 13px; color: var(--link); }
-.chip.project { color: var(--fg); }
 .menu .group.project { display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 0.88em; color: var(--fg); }
 .menu .group.project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu button.all-projects { color: var(--muted); }

@@ -16,14 +16,14 @@ const CHECK_MS = 30_000;
 class SetupWizard {
   /**
    * @param {vscode.ExtensionContext} context
-   * @param {string} keyName the secret's name
+   * @param {import("./key.js").SavedKey} key your key, kept with the gateway it's for
    * @param {() => void} changed called whenever what the panel shows changes
    * @param {{skills?: () => number, skillsHome?: () => Promise<void>}} [hooks] skills: how many skills the model is offered
    *   (for the summary); skillsHome: makes your skills folder, if you have none
    */
-  constructor(context, keyName, changed, hooks = {}) {
+  constructor(context, key, changed, hooks = {}) {
     this.context = context;
-    this.keyName = keyName;
+    this.key = key;
     this.changed = changed;
     this.hooks = hooks;
     /** @type {any} what the panel shows, or null when setup isn't running */
@@ -34,15 +34,15 @@ class SetupWizard {
   async needed() {
     const endpoint = String(solderSettings().get("endpoint", "")).trim();
     if (!endpoint) return true;
-    const key = (await this.context.secrets.get(this.keyName)) ?? "";
-    return !key && !isLocal(endpoint);
+    // A key saved for another gateway isn't this one's: this one still needs its own.
+    return !(await this.key.get(endpoint)) && !isLocal(endpoint);
   }
 
   /** Start (or restart) at the first step, with what's already set filled in. */
   async start() {
     await this.hooks.skillsHome?.(); // your skills folder, ready before the summary counts your skills
     const config = solderSettings();
-    const key = (await this.context.secrets.get(this.keyName)) ?? "";
+    const key = await this.key.get();
     this.view = {
       step: "", steps: stepsNow(), busy: false, error: "",
       endpoint: String(config.get("endpoint", "")), hasKey: !!key, models: [], model: String(config.get("model", "")),
@@ -77,14 +77,17 @@ class SetupWizard {
         try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { view.error = messageOf(error); this.changed(); return; }
         view.endpoint = endpoint;
         await save("endpoint", endpoint);
+        // The key step shows whether this gateway has a key: one saved for another gateway doesn't count, and isn't sent.
+        view.hasKey = !!(await this.key.get(endpoint));
         this.go(after("endpoint"));
         return;
       }
       case "key": {
         const typed = String(message.key || "").trim();
         if (action === "skipCheck") { view.models = []; this.go(after("key")); return; }
-        if (typed) await this.context.secrets.store(this.keyName, typed);
-        const key = typed || ((await this.context.secrets.get(this.keyName)) ?? "");
+        const gateway = String(config.get("endpoint", "") || view.endpoint);
+        if (typed) await this.key.save(typed, gateway);
+        const key = typed || await this.key.get(gateway);
         view.hasKey = !!key;
         view.busy = true;
         view.error = "";
@@ -94,7 +97,7 @@ class SetupWizard {
           const timer = setTimeout(() => controller.abort(), CHECK_MS);
           let ids;
           policy.gate();
-          try { ids = await new GatewayClient({ endpoint: String(config.get("endpoint", "") || view.endpoint), apiKey: key }).models(controller.signal); }
+          try { ids = await new GatewayClient({ endpoint: gateway, apiKey: key }).models(controller.signal); }
           finally { clearTimeout(timer); }
           const filter = String(config.get("modelFilter", ""));
           if (filter) { try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); } catch { /* shown in settings */ } }

@@ -73,6 +73,7 @@ Details that matter:
     - `.docx`, `.xlsx` and `.pptx`, which are zips of XML, read with `node:zlib`.
   - **What's not:** PDFs, images and the old binary Office formats.
   - **Indexing:** in the background, 15 s after start and when the folders change, yielding between files. Before a search, a catch-up of up to 4 s runs if a folder hasn't been walked for 2 minutes.
+  - **Failing to read isn't "empty", and failing to list isn't "deleted"** (2026-11-22). A file that can't be read (open in another program, a share that dropped) keeps its passages, its vectors and its old stamp, so it's read again next time. A folder that wouldn't list, a file that wouldn't stat, or the docs folder itself not answering: nothing known under it is forgotten. Only what a walk could look at and didn't find is taken as gone. Otherwise one bad moment on a network share cost passages that had been paid to embed.
   - **What the model gets:** results are the 10 best passages, with path, lines, heading and a bracketed excerpt. The model then reads the lines it needs with `read_file`.
   - **Restraint:** Alloy's "loose matches" note when the best hits share a third or fewer of the query's words, and a "try once with other words, else carry on" note when nothing matches.
   - **The system prompt:** it lists the folders and the user's one-line description of each.
@@ -117,7 +118,9 @@ The prompt is in `src/prompt.js` (`RULES`). It's about 450 tokens before `AGENTS
   - Typing while the model works queues a **steer** that goes with the next result.
   - **Stop** ends the reply. **Resume** continues after a failure from the last finished step.
 - **Status bar:** this chat's tokens and the allowance left (`2.1M left · resets 4h`). The tooltip breaks it down per answer.
-- **Chats:** a list per workspace (new, rename, delete), saved as JSON in `workspaceStorage`.
+- **Chats:** a list per workspace (new, rename, delete), saved as JSON in Solder's global storage, one file a chat (`src/store.js`).
+  - **Every window has its own copy of a chat it has opened, over the same file** (decided 2026-11-22). A window remembers each chat's file as it last read or wrote it (stamp, a hash of its text, a hash of what's said in it, and what was set on it), and looks again before using or saving its copy. Changed in another window: read again when the window gets focus or the chat is acted on. A save from a copy that's behind (a pin, a name, a model) is made to the chat as the file has it, so the other window's turns stay. A copy that's only behind doesn't bring back a chat deleted elsewhere. When both windows added turns, this window's are saved under the chat and the other's are kept as one copy, "(from another window)". No lock is used: every case that was found needed no race, only a window writing back the whole of what it started with.
+  - **The project list is the same** (`ProjectList`): the file is the list, read again (at most once a second) before it's used and always before it's changed, since being on it is the yes to a project's rules.
 - **Projects** (`src/projects.js`, decided 2026-11-18). A project is a folder; chats are grouped by it and share its folder, rules and skills.
   - **The folder is the only source of truth.** `.solder\project.json` holds the name, `.solder\skills\*.md` the project's own skills, and its rules are the instruction files at its root (`AGENTS.md`). Nothing about a project's contents is kept anywhere else, so copying or zipping the folder shares the whole project. Paths inside are relative, so it works wherever it's put.
   - **Solder keeps only a list of project folders** (`projects.json` in global storage), and each chat remembers its project's folder. Chats stay in the profile: they aren't the project's to share.
@@ -156,7 +159,7 @@ Embedding the same docs on every PC spends the same tokens each time, against a 
 |---|---|---|
 | `solder.endpoint` | "" | the full `/chat/completions` URL |
 | `solder.modelsEndpoint` | "" | worked out from the endpoint when empty |
-| API key | — | **SecretStorage** (`Solder: Set API key`), never in settings |
+| API key | — | **SecretStorage** (`Solder: Set API key`), never in settings. Kept with the gateway it was saved for (scheme, host and port, `src/key.js`) and sent nowhere else: a new address gets no key until it's given one, since the models are listed the moment an address is saved. A policy-set address takes the key along |
 | `solder.model` | "" | picked from `/models` |
 | `solder.modelFilter` | "" | a regex: only models matching it are offered (for example, only tool-capable ones) |
 | `solder.modelNames` | {} | `{ "<id>": "<short name>" }` for the picker. Deployments set this privately or by policy |

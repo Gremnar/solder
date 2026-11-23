@@ -27,7 +27,7 @@ Expect a reply within a few days. A fix ships in the next release, credited to y
 - **Links and network paths:** a path counts as inside the workspace only if it's still inside once links and junctions are followed. Network paths (`\\server\share`) outside the workspace aren't opened.
 - **Settings a workspace can't change:** the endpoint and the model filter are per-machine settings, so a folder's `.vscode/settings.json` can't send your key or code elsewhere. Instruction files are plain file names only.
 - **Workspace Trust:** Solder doesn't run in Restricted Mode.
-- **Your key:** it's kept in VS Code's secret storage, never in settings, and never written to the log or diagnostics.
+- **Your key:** it's kept in VS Code's secret storage, never in settings, and never written to the log or diagnostics. It goes only to the gateway it was saved for (its scheme, host and port): when you enter another gateway's address, nothing is sent there with the old gateway's key, and Solder asks for the new one's. An address your organization sets by policy takes the key with it.
 - **Your data:** chats, Undo's backups and the docs index stay on your PC, in VS Code's storage for Solder.
 - **What reaches the endpoint:** your messages, and what the tools return: file contents Solder reads, search results and docs passages. Treat it as you would any service you send code to.
 - **Docs search by meaning (off by default):** when it's turned on, every passage of the docs folders is sent to the same endpoint's embeddings model, once, and then each changed file. The vectors that come back are kept in the local index.

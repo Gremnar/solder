@@ -4,9 +4,32 @@
  * Chats saved as one JSON file each, in Solder's global storage, each marked with its home: the workspace folder it
  * was started in. A window lists the chats whose home is one of its folders, so adding a folder to the window (which
  * makes it a different workspace to VS Code) doesn't hide them, and a chat follows its folder into any window.
+ *
+ * Every VS Code window has its own store over the same files, and a chat can be open in two of them. So a window
+ * remembers each chat's file as it last read or wrote it, and looks again before using or saving its copy:
+ * - a chat another window changed is read again when it's next opened here;
+ * - a save from a copy that's behind (a pin, a rename, a model picked) is made to the chat as the file has it now,
+ *   so the turns added in the other window stay;
+ * - a copy that's only behind doesn't bring back a chat the other window deleted;
+ * - when both windows added turns, both are kept: this window's under the chat's name, the other's as a copy.
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
+
+/** What you set on a chat, apart from what's said in it: carried onto the other window's turns when a copy is behind. */
+const SETTABLE = ["title", "titleSource", "titledAt", "pinned", "archived", "model", "effort", "folder", "project", "notes", "pasteUnasked"];
+
+const sha = (/** @type {string} */ text) => crypto.createHash("sha1").update(text).digest("hex");
+/** What's said in a chat, as one value to compare: its messages and its summary. @param {any} chat */
+const bodyOf = (chat) => sha(JSON.stringify([chat.messages, chat.compaction ?? null]));
+const same = (/** @type {any} */ a, /** @type {any} */ b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** A file's stamp: "" when it isn't there, null when that can't be told (a drive that didn't answer). @param {string} file */
+function stampOf(file) {
+  try { const stat = fs.statSync(file); return `${stat.mtimeMs}:${stat.size}`; }
+  catch (error) { return /** @type {any} */ (error)?.code === "ENOENT" ? "" : null; }
+}
 
 /** A home as it's compared: one form per folder, whatever the case or a trailing slash. @param {string | undefined} home */
 function homeKey(home) {
@@ -34,6 +57,14 @@ class ChatStore {
     this.removed = new Set();
     /** @type {Map<string, {stamp: string, summary: any}>} each file's list entry, until the file changes */
     this.summaries = new Map();
+    /**
+     * Each chat's file as this window last read or wrote it: its stamp ("" for no file), its text and what's said in
+     * it as hashes, and what was set on it. What another window did since is told from these.
+     * @type {Map<string, {stamp: string, hash: string, body: string, set: Record<string, any>}>}
+     */
+    this.known = new Map();
+    /** @type {Map<string, string>} by chat: the copy that holds another window's turns, when both added some */
+    this.copies = new Map();
   }
 
   /** This window's chats, newest first: {id, title, updated, pinned, archived, project}. */
@@ -71,30 +102,87 @@ class ChatStore {
     const stamp = `${stat.mtimeMs}:${stat.size}`;
     const known = this.summaries.get(name);
     if (known && known.stamp === stamp) return known.summary;
-    const chat = this.cache.get(name.slice(0, -5)) ?? this.read(name.slice(0, -5));
+    // This window's own copy when the file is as it left it; the file's, when another window wrote it since.
+    const id = name.slice(0, -5);
+    const mine = this.cache.get(id);
+    const chat = mine && (this.saving.has(id) || this.known.get(id)?.stamp === stamp) ? mine : this.read(id) ?? mine;
     const summary = chat ? { id: chat.id, title: chat.title, updated: chat.updated, pinned: !!chat.pinned, archived: !!chat.archived,
       home: chat.home ?? "", project: typeof chat.project === "string" ? chat.project : "" } : null;
     this.summaries.set(name, { stamp, summary });
     return summary;
   }
 
-  /** @param {string} id */
+  /**
+   * A chat, as this window has it, or as its file has it when another window changed it since (null when it was
+   * deleted there, or was never saved). A window has one object for a chat, for as long as it's open: a chat read
+   * again is that same object with the file's contents, so whoever holds it has the chat as it is now, and no older
+   * copy is left anywhere to be saved by mistake. @param {string} id
+   */
   load(id) {
-    if (this.cache.has(id)) return this.cache.get(id);
-    const chat = this.read(id);
-    if (chat) this.cache.set(id, chat);
+    const mine = this.cache.get(id);
+    // In this window's hands (a save under way), or its file is as this window left it: its own copy.
+    if (mine && (this.saving.has(id) || !this.changedElsewhere(id))) return mine;
+    const stamp = stampOf(this.file(id));
+    const text = this.text(id);
+    let chat = text === null ? null : parse(text);
+    if (chat) {
+      if (mine) {
+        for (const key of Object.keys(mine)) delete mine[key];
+        chat = Object.assign(mine, chat);
+      }
+      this.cache.set(id, chat);
+      this.known.set(id, { stamp: stamp ?? "", hash: sha(/** @type {string} */ (text)), body: bodyOf(chat), set: settable(chat) });
+    } else if (mine && text === null && stamp === "") {
+      // Deleted in another window: gone here too.
+      this.cache.delete(id);
+      this.known.delete(id);
+    } else if (mine) return mine; // it couldn't be read just now: as this window has it
     return chat;
+  }
+
+  /**
+   * Brings the chat a window is showing up to date: "same" when its file is as this window left it; "changed" when
+   * another window changed it since (the chat, the same object, now has the file's contents); "gone" when it was
+   * deleted there. @param {any} chat @returns {"same" | "changed" | "gone"}
+   */
+  refresh(chat) {
+    if (this.removed.has(chat.id)) return "gone";
+    // Not one of this store's (new, and not saved yet), or in this window's hands: as it is.
+    if (this.cache.get(chat.id) !== chat || this.saving.has(chat.id) || !this.changedElsewhere(chat.id)) return "same";
+    return this.load(chat.id) ? "changed" : this.cache.has(chat.id) ? "same" : "gone";
+  }
+
+  /** A chat as this window holds it, without looking at its file (the one a task here is working in). @param {string} id */
+  held(id) {
+    return this.cache.get(id) ?? null;
+  }
+
+  /** Whether a chat's file isn't as this window last read or wrote it: changed, or deleted, by another. @param {string} id */
+  changedElsewhere(id) {
+    const file = this.file(id);
+    const stamp = stampOf(file);
+    if (stamp === null) return false; // can't tell: as this window has it
+    const known = this.known.get(id);
+    if (!known) return stamp !== "";
+    if (stamp === known.stamp) return false;
+    if (stamp === "") return true;
+    // A stamp alone can move (a network drive can give a file's time differently later): only other text is a change.
+    const text = this.text(id);
+    if (text === null) return false;
+    if (sha(text) !== known.hash) return true;
+    known.stamp = stamp;
+    return false;
+  }
+
+  /** A chat's file as text, or null. @param {string} id */
+  text(id) {
+    try { return fs.readFileSync(this.file(id), "utf8"); } catch { return null; }
   }
 
   /** @param {string} id */
   read(id) {
-    try {
-      const chat = JSON.parse(fs.readFileSync(this.file(id), "utf8"));
-      if (!chat || !Array.isArray(chat.messages)) return null;
-      chat.usage = chat.usage || { tokens: 0 };
-      chat.compaction = chat.compaction || null;
-      return chat;
-    } catch { return null; }
+    const text = this.text(id);
+    return text === null ? null : parse(text);
   }
 
   /** Written to a temporary file first, so a crash mid-save never leaves half a chat. @param {any} chat */
@@ -104,7 +192,8 @@ class ChatStore {
       // An empty chat isn't worth a file; one that had turns and lost them all (deleted, or its first message being
       // edited) loses its file too, in its turn, or the old conversation would be back after a reload.
       const before = this.saving.get(chat.id) || Promise.resolve();
-      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {}).then(() => { this.listed = null; });
+      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {})
+        .then(() => { this.listed = null; this.known.set(chat.id, { stamp: "", hash: "", body: bodyOf(chat), set: settable(chat) }); });
       this.listed = null;
       this.summaries.delete(chat.id + ".json");
       this.saving.set(chat.id, gone);
@@ -118,10 +207,17 @@ class ChatStore {
     const mine = prior.catch(() => {}).then(async () => {
       if (this.removed.has(chat.id)) return; // deleted while this save waited: it doesn't come back
       const target = this.file(chat.id);
-      const temporary = target + ".tmp";
-      await fs.promises.writeFile(temporary, JSON.stringify(chat), "utf8");
+      // What another window did to this chat since this one read or wrote it, settled first.
+      if (!(await this.settle(chat))) return;
+      // A temporary file of this window's own: two windows saving the same chat don't write into each other's.
+      const temporary = `${target}.${process.pid}.tmp`;
+      const text = JSON.stringify(chat);
+      const body = bodyOf(chat);
+      const set = settable(chat);
+      await fs.promises.writeFile(temporary, text, "utf8");
       if (this.removed.has(chat.id)) { await fs.promises.rm(temporary, { force: true }); return; }
       await fs.promises.rename(temporary, target);
+      this.known.set(chat.id, { stamp: stampOf(target) ?? "", hash: sha(text), body, set });
       this.listed = null;
     });
     this.listed = null;
@@ -130,11 +226,76 @@ class ChatStore {
     return mine;
   }
 
+  /**
+   * Before a save: what another window did to the chat's file since this window read or wrote it.
+   * - Nothing, or only what was set on it there (a pin, a name): this window's copy is saved as it is.
+   * - It added turns, and this window didn't: this window's copy becomes the file's chat, with what was set here kept
+   *   (the object itself is changed, so whoever holds it has the newer turns).
+   * - Both added turns: the other window's are kept as a copy of the chat, and this window's are saved.
+   * - It deleted the chat: a copy that's only behind isn't saved (false), so the chat stays deleted; turns added
+   *   here since are saved, since they exist nowhere else.
+   * @param {any} chat @returns {Promise<boolean>} whether to go on and save
+   */
+  async settle(chat) {
+    const known = this.known.get(chat.id);
+    const target = this.file(chat.id);
+    const stamp = stampOf(target);
+    if (!known || stamp === null || stamp === known.stamp) return true;
+    const mineAdded = bodyOf(chat) !== known.body;
+    if (stamp === "") {
+      if (mineAdded || !known.stamp) return true;
+      // Deleted there, and nothing new here: deleted here too, as if it had been done in this window.
+      this.removed.add(chat.id);
+      this.cache.delete(chat.id);
+      this.known.delete(chat.id);
+      this.listed = null;
+      return false;
+    }
+    let text;
+    try { text = await fs.promises.readFile(target, "utf8"); } catch { return true; }
+    if (sha(text) === known.hash) { known.stamp = stamp; return true; }
+    const theirs = parse(text);
+    if (!theirs) return true;
+    if (bodyOf(theirs) === known.body) {
+      // Only something set there (a pin, a name): kept, where this window didn't set the same thing itself.
+      for (const name of SETTABLE) {
+        if (!same(chat[name], known.set[name]) || same(theirs[name], known.set[name])) continue;
+        if (theirs[name] === undefined) delete chat[name]; else chat[name] = theirs[name];
+      }
+      return true;
+    }
+    if (!mineAdded) {
+      const mine = settable(chat);
+      for (const key of Object.keys(chat)) delete chat[key];
+      Object.assign(chat, theirs);
+      for (const name of SETTABLE) {
+        if (same(mine[name], known.set[name])) continue;
+        if (mine[name] === undefined) delete chat[name]; else chat[name] = mine[name];
+      }
+      return true;
+    }
+    // One copy per chat holds the other window's turns: written again if they go on there, never one more each time.
+    let id = this.copies.get(chat.id);
+    if (!id) {
+      id = Date.now().toString(36) + crypto.randomBytes(4).toString("hex");
+      this.copies.set(chat.id, id);
+    }
+    const copy = { ...theirs, id, title: `${String(theirs.title || "New chat").replace(/ \(from another window\)$/, "").slice(0, 96)} (from another window)`, titleSource: "user" };
+    // A gateway's session goes on with one conversation: the copy starts its own.
+    if (copy.assist) copy.assist = { lost: true, why: "fork", since: Date.now() };
+    const temporary = `${this.file(id)}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporary, JSON.stringify(copy), "utf8");
+    await fs.promises.rename(temporary, this.file(id));
+    this.listed = null;
+    return true;
+  }
+
   /** @param {string} id */
   remove(id) {
     this.removed.add(id);
     this.listed = null;
     this.cache.delete(id);
+    this.known.delete(id);
     this.summaries.delete(id + ".json");
     fs.rmSync(this.file(id), { force: true });
   }
@@ -144,6 +305,22 @@ class ChatStore {
     if (!/^[a-z0-9]+$/i.test(id)) throw new Error("Not a chat id.");
     return path.join(this.folder, id + ".json");
   }
+}
+
+/** A chat from its file's text, or null when it isn't one. @param {string} text */
+function parse(text) {
+  try {
+    const chat = JSON.parse(text);
+    if (!chat || !Array.isArray(chat.messages)) return null;
+    chat.usage = chat.usage || { tokens: 0 };
+    chat.compaction = chat.compaction || null;
+    return chat;
+  } catch { return null; }
+}
+
+/** What's set on a chat (see SETTABLE), to compare later. @param {any} chat @returns {Record<string, any>} */
+function settable(chat) {
+  return Object.fromEntries(SETTABLE.map((name) => [name, chat[name]]));
 }
 
 /**

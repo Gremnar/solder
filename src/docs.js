@@ -100,7 +100,8 @@ function available() {
 
 /**
  * A file's text as Solder reads it: plain text decoded, an Office file converted (headings, sheets and
- * slides as Markdown headings). null when it isn't text Solder can read.
+ * slides as Markdown headings). null when it isn't text Solder can read. A file that can't be read at all (in use,
+ * a share that dropped) throws: that says nothing about what's in it.
  * @param {string} full @returns {Promise<string | null>}
  */
 async function documentText(full) {
@@ -108,7 +109,8 @@ async function documentText(full) {
   const stat = await fs.promises.stat(full);
   if (OFFICE.has(ext)) {
     if (stat.size > MAX_OFFICE_BYTES) return null;
-    try { return officeText(await fs.promises.readFile(full), ext); } catch { return null; }
+    const data = await fs.promises.readFile(full);
+    try { return officeText(data, ext); } catch { return null; }
   }
   if (BINARY.has(ext) || stat.size > MAX_TEXT_BYTES) return null;
   return withoutSignatures(decodeText(await fs.promises.readFile(full)));
@@ -502,7 +504,8 @@ class DocsIndex {
    * Bring the index up to date for these folders, for at most `ms` (what's left is done next time).
    * Folders no longer listed are forgotten. Yields between files, so the extension host stays responsive.
    * @param {string[]} roots @param {{ms?: number, signal?: AbortSignal}} [options]
-   * @returns {Promise<{files: number, changed: number, unfinished: boolean, truncated: boolean}>}
+   * @returns {Promise<{files: number, changed: number, unfinished: boolean, truncated: boolean, unread?: number}>}
+   *   `unread`: files that couldn't be read or looked for this time, kept as the index has them
    */
   refresh(roots, { ms = 60_000, signal, embed } = {}) {
     // Already running: say so at once instead of waiting (a search goes on with what's indexed).
@@ -769,7 +772,7 @@ class DocsIndex {
         const last = Number(db.prepare("SELECT seen FROM roots WHERE root = ?").get(key)?.seen ?? now);
         if (now - last > UNLISTED_KEPT_MS) { this._forget(db, "root = ?", key); db.prepare("DELETE FROM roots WHERE root = ?").run(key); }
       }
-      const result = { files: 0, changed: 0, unfinished: false, truncated: false };
+      const result = { files: 0, changed: 0, unfinished: false, truncated: false, unread: 0 };
       for (const root of roots) {
         const rootKey = keyOf(root);
         const known = new Map(db.prepare("SELECT key, stamp FROM files WHERE root = ?").all(rootKey)
@@ -784,7 +787,10 @@ class DocsIndex {
           const stamp = `${Math.round(file.mtime)}:${file.size}`;
           if (known.get(key) === stamp) continue;
           let text = null;
-          try { text = await documentText(file.full); } catch { text = null; }
+          // A file that can't be read just now (open in another program, a share that dropped) keeps what the index
+          // has of it, and its old stamp, so it's read again next time. Taken as empty, its passages and their
+          // vectors went, and stayed gone until the file next changed.
+          try { text = await documentText(file.full); } catch { result.unread++; continue; }
           db.exec("BEGIN");
           try {
             // Passages whose text is unchanged keep their row (and so their vector): a file copied with a new date, or
@@ -821,8 +827,15 @@ class DocsIndex {
           await new Promise((resolve) => setImmediate(resolve));
         }
         if (walk.complete && !result.unfinished) {
-          // Only a full walk can tell what's gone.
-          for (const key of known.keys()) if (!seen.has(key)) this._forget(db, "key = ?", key);
+          // Only a full walk can tell what's gone, and only where it could look: a file in (or under) a folder
+          // that couldn't be listed this time, or that couldn't be looked at itself, is kept.
+          const unseen = walk.failed.map((full) => keyOf(full));
+          const hidden = (/** @type {string} */ key) => unseen.some((at) => key === at || key.startsWith(at.endsWith(path.sep) ? at : at + path.sep));
+          for (const key of known.keys()) {
+            if (seen.has(key)) continue;
+            if (hidden(key)) result.unread++;
+            else this._forget(db, "key = ?", key);
+          }
         } else if (!walk.truncated) {
           result.unfinished = true;
         }
@@ -952,20 +965,27 @@ function keyOf(full) {
 }
 
 /**
- * The files under a folder (skipping .git, node_modules and the like), up to MAX_FOLDER_FILES.
+ * The files under a folder (skipping .git, node_modules and the like), up to MAX_FOLDER_FILES. `failed` holds what
+ * couldn't be looked at for a reason other than being gone (a folder that wouldn't list, a file that wouldn't stat):
+ * the walk says nothing about those, so nothing known of them may be taken as deleted. The folder itself not being
+ * there counts: a share that's offline looks just like that.
  * @param {string} root @param {() => boolean} late
- * @returns {Promise<{files: {full: string, size: number, mtime: number}[], complete: boolean, truncated: boolean}>}
+ * @returns {Promise<{files: {full: string, size: number, mtime: number}[], complete: boolean, truncated: boolean, failed: string[]}>}
  */
 async function listFiles(root, late) {
   /** @type {{full: string, size: number, mtime: number}[]} */
   const files = [];
+  /** @type {string[]} */
+  const failed = [];
   const stack = [root];
   let truncated = false;
+  const gone = (/** @type {any} */ error) => error?.code === "ENOENT" || error?.code === "ENOTDIR";
   while (stack.length) {
-    if (late()) return { files, complete: false, truncated };
+    if (late()) return { files, complete: false, truncated, failed };
     const folder = /** @type {string} */ (stack.pop());
     let entries;
-    try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); } catch { continue; }
+    try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); }
+    catch (error) { if (folder === root || !gone(error)) failed.push(folder); continue; }
     for (const entry of entries) {
       const full = path.join(folder, entry.name);
       if (entry.isDirectory()) {
@@ -973,14 +993,14 @@ async function listFiles(root, late) {
         continue;
       }
       if (!entry.isFile() || entry.name.startsWith("~$")) continue; // ~$ is an Office lock file
-      if (files.length >= MAX_FOLDER_FILES) return { files, complete: false, truncated: true };
+      if (files.length >= MAX_FOLDER_FILES) return { files, complete: false, truncated: true, failed };
       try {
         const stat = await fs.promises.stat(full);
         files.push({ full, size: stat.size, mtime: stat.mtimeMs });
-      } catch { /* gone, or not allowed */ }
+      } catch (error) { if (!gone(error)) failed.push(full); }
     }
   }
-  return { files, complete: true, truncated };
+  return { files, complete: true, truncated, failed };
 }
 
 // ---------------------------------------------------------------- shared embeddings --

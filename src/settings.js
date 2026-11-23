@@ -14,7 +14,7 @@ const path = require("node:path");
 class SettingsScreen {
   /**
    * @param {vscode.ExtensionContext} context
-   * @param {string} keyName the secret's name
+   * @param {import("./key.js").SavedKey} key your key, kept with the gateway it's for
    * @param {{models: () => {id: string, name: string}[], docs: () => any, refreshDocs: () => void, startEmbedding: () => void, stopEmbedding: () => void, raiseEmbedBudget: () => void,
    *          instructions: () => {folder: string, name: string, found: string[]}, openInstructions: () => Promise<string>, refreshModels: () => Promise<void>,
    *          skills: () => import("./skills.js").Skill[], skillsHome: () => string, newSkill: () => Promise<string>, interviewSkill: () => Promise<void>,
@@ -23,9 +23,9 @@ class SettingsScreen {
    *          testEmbedding: (model: string) => Promise<{dims: number, tokens: number}>}} hooks
    * @param {() => void} changed called whenever what the panel shows changes
    */
-  constructor(context, keyName, hooks, changed) {
+  constructor(context, key, hooks, changed) {
     this.context = context;
-    this.keyName = keyName;
+    this.key = key;
     this.hooks = hooks;
     this.changed = changed;
     /** @type {any} what the panel shows, or null when it's closed */
@@ -63,7 +63,8 @@ class SettingsScreen {
     const raw = config.own("docsFolders", []);
     return {
       endpoint: String(config.get("endpoint", "")),
-      hasKey: !!((await this.context.secrets.get(this.keyName)) ?? ""),
+      // A key for this gateway: one saved for another gateway isn't sent here, and this one needs its own.
+      hasKey: !!(await this.key.get()), keyElsewhere: await this.key.elsewhere(),
       model: String(config.get("model", "")),
       models: this.hooks.models(),
       effort: String(config.get("effort", "default")),
@@ -151,6 +152,7 @@ class SettingsScreen {
           const endpoint = String(value || "").trim();
           if (endpoint) { try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { this.notice(messageOf(error), "bad"); return; } }
           await save("endpoint", endpoint, field);
+          if (endpoint && this.view.keyElsewhere) this.notice("The saved key is another gateway's, so it isn't sent to this one. Enter this gateway's key.", "bad");
         } else if (field === "model") await save("model", String(value || "").trim(), field);
         else if (field === "effort" && ["default", "low", "medium", "high"].includes(value)) await save("effort", value, field);
         // Read-only mode: only ever changed here, by you (Solder never turns it on by itself).
@@ -212,8 +214,7 @@ class SettingsScreen {
       }
       case "key": {
         const key = String(message.key || "").trim();
-        if (key) await this.context.secrets.store(this.keyName, key);
-        else await this.context.secrets.delete(this.keyName);
+        await this.key.save(key);
         Object.assign(this.view, await this.values(), { saved: "key" });
         this.notice(key ? "Key saved." : "Key removed.", "ok");
         await this.hooks.refreshModels();
@@ -223,7 +224,7 @@ class SettingsScreen {
         this.view.checking = true;
         this.notice("Checking…");
         try {
-          const key = (await this.context.secrets.get(this.keyName)) ?? "";
+          const key = await this.key.get();
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 30_000);
           let ids;

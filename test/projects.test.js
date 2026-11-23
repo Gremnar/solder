@@ -113,6 +113,39 @@ test("the list of projects you use: added once however the folder is spelt, kept
   assert.deepEqual(new ProjectList(file).paths(), [path.resolve(folder)], "only real folder paths are taken");
 }));
 
+test("two windows share the one list: each sees what the other added or removed, and neither puts back what the other took off", () => inTemp((base) => {
+  const file = path.join(base, "storage", "projects.json");
+  const [alpha, beta, gamma] = ["Alpha", "Beta", "Gamma"].map((name) => path.join(base, name));
+  for (const folder of [alpha, beta, gamma]) fs.mkdirSync(folder);
+  const first = new ProjectList(file, { every: 0 });
+  first.add(alpha);
+  // Two windows, each started with Alpha on the list.
+  const a = new ProjectList(file, { every: 0 });
+  const b = new ProjectList(file, { every: 0 });
+  a.remove(alpha);
+  assert.equal(b.add(beta), true);
+  assert.deepEqual(new ProjectList(file).paths(), [path.resolve(beta)], "the project removed in one window isn't put back by the other's save");
+  assert.equal(b.has(alpha), false, "and the other window no longer takes it as yours");
+  assert.equal(a.has(beta), true, "what the other added is seen here");
+  // Two additions, one in each: both are kept.
+  a.add(gamma);
+  b.add(alpha);
+  assert.deepEqual(new ProjectList(file).paths().sort(), [alpha, beta, gamma].map((folder) => path.resolve(folder)).sort());
+  // The file is looked at again only so often: within that time a window goes by what it has.
+  const slow = new ProjectList(file, { every: 60_000 });
+  a.remove(gamma);
+  assert.equal(slow.has(gamma), true);
+  assert.equal(slow.add(gamma), true, "but a change always starts from the file: Gamma was gone, so it's new again");
+  assert.equal(slow.has(alpha) && slow.has(beta), true);
+  // A list that can't be read for a moment doesn't empty a window's own, or get saved over as empty.
+  assert.equal(a.has(gamma), true);
+  fs.writeFileSync(file, "not json");
+  assert.equal(a.has(alpha), true);
+  a.remove(beta);
+  assert.deepEqual(new ProjectList(file).paths().sort(), [alpha, gamma].map((folder) => path.resolve(folder)).sort());
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ["projects.json"], "no temporary file is left behind");
+}));
+
 test("a project's skill switches are in its own file, so they travel: set, read back, taken away, the rest of the file kept, and only true or false is read", () => inTemp((base) => {
   const { projectSwitches, setProjectSwitch } = require("../src/projects.js");
   const folder = path.join(base, "Proj");

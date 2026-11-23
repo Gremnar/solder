@@ -20,7 +20,8 @@ Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-co
 | `src/prompt.js` | The system prompt, tool definitions and fixed notes |
 | `src/tools.js` | The tools on VS Code's APIs: read_file, symbols, search (VS Code's bundled ripgrep, or the docs index), find_files, changes (git), edit_file, write_file, move_item, remove_item, problems. Holds the backups behind Review and Undo. |
 | `src/panel.js` | The webview view provider and controller: chats, models, working folder, status bar |
-| `src/store.js` | Chats as JSON files in the workspace's storage |
+| `src/store.js` | Chats as JSON files in Solder's storage, shared by every window: a window looks at a chat's file again before using or saving its own copy (no `vscode`, tested under node) |
+| `src/key.js` | Your key, kept with the gateway it was saved for, so it goes nowhere else (no `vscode`, tested under node) |
 | `src/projects.js` | Projects: a folder with `.solder\project.json` (its name) and `.solder\skills`, its rules being the instruction files at its root; and the list of project folders you use (no `vscode`, tested under node) |
 | `src/zip.js` | Writes a plain zip straight to disk, one file at a time: a project's Export (no `vscode`, tested under node) |
 | `src/skills.js` | Skills: one `.md` file each in the skills folders, with a "When to use:" line (or front matter's description); read whole by read_file (no `vscode`, tested under node) |

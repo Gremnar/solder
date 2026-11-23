@@ -136,6 +136,83 @@ test("the index: built, searched (stemmed, ranked, Office included), updated, an
   }
 });
 
+test("a file or folder that can't be read just now keeps what the index has of it; only what's really gone is forgotten", async (t) => {
+  if (!docs.available()) { t.skip("no node:sqlite with FTS5 here"); return; }
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-docs-"));
+  const folder = path.join(base, "docs");
+  const sub = path.join(folder, "plant");
+  const old = path.join(folder, "old");
+  fs.mkdirSync(sub, { recursive: true });
+  fs.mkdirSync(old);
+  const manual = path.join(folder, "manual.md");
+  const sheet = path.join(folder, "registers.xlsx");
+  fs.writeFileSync(manual, "# Manual\nThe gearbox takes ISO 220 oil.\n");
+  fs.writeFileSync(sheet, xlsx);
+  fs.writeFileSync(path.join(sub, "pumps.md"), "# Pumps\nThe PX-40 primes itself.\n");
+  fs.writeFileSync(path.join(old, "retired.md"), "# Retired\nThe turbine was scrapped.\n");
+  const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
+  const real = { readFile: fs.promises.readFile, readdir: fs.promises.readdir, stat: fs.promises.stat };
+  const failing = (/** @type {string} */ code) => Object.assign(new Error(code), { code });
+  const later = (/** @type {string} */ file) => fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+  try {
+    assert.equal((await index.refresh([folder])).files, 4);
+
+    // Both files change, and neither can be read this once (open in another program).
+    fs.writeFileSync(manual, "# Manual\nThe gearbox takes ISO 320 oil now.\n");
+    later(manual);
+    later(sheet);
+    /** @type {any} */ (fs.promises).readFile = async (/** @type {any} */ file, /** @type {any[]} */ ...rest) => {
+      if ([manual, sheet].includes(String(file))) throw failing("EBUSY");
+      return real.readFile.call(fs.promises, file, ...rest);
+    };
+    const busy = await index.refresh([folder]);
+    assert.deepEqual([busy.changed, busy.unread, busy.files], [0, 2, 4]);
+    assert.equal((await index.search("gearbox"))[0]?.excerpt.includes("220"), true, "what was indexed is still found");
+    assert.equal((await index.search("FB_CTRL")).length, 1, "an Office file that couldn't be read isn't taken as empty either");
+    fs.promises.readFile = real.readFile;
+    const read = await index.refresh([folder]);
+    assert.deepEqual([read.changed, read.unread], [2, 0], "read again the next time, since their stamps were left as they were");
+    assert.match((await index.search("gearbox"))[0]?.excerpt ?? "", /320/);
+
+    // A folder that won't list, and a file that won't be looked at: nothing known of them is taken as deleted.
+    /** @type {any} */ (fs.promises).readdir = async (/** @type {any} */ dir, /** @type {any[]} */ ...rest) => {
+      if (String(dir) === sub) throw failing("EIO");
+      return real.readdir.call(fs.promises, dir, ...rest);
+    };
+    /** @type {any} */ (fs.promises).stat = async (/** @type {any} */ file, /** @type {any[]} */ ...rest) => {
+      if (String(file) === manual) throw failing("EACCES");
+      return real.stat.call(fs.promises, file, ...rest);
+    };
+    const partly = await index.refresh([folder]);
+    assert.deepEqual([partly.files, partly.unread], [4, 2]);
+    assert.equal((await index.search("primes")).length, 1);
+    assert.equal((await index.search("gearbox")).length, 1);
+    fs.promises.readdir = real.readdir;
+    fs.promises.stat = real.stat;
+
+    // The docs folder itself not answering (a share that's offline) forgets nothing.
+    /** @type {any} */ (fs.promises).readdir = async (/** @type {any} */ dir, /** @type {any[]} */ ...rest) => {
+      if (String(dir) === folder) throw failing("ENOENT");
+      return real.readdir.call(fs.promises, dir, ...rest);
+    };
+    const offline = await index.refresh([folder]);
+    assert.deepEqual([offline.files, offline.unread], [4, 4]);
+    fs.promises.readdir = real.readdir;
+    assert.equal((await index.search("turbine")).length, 1);
+
+    // A folder that's really gone takes its files with it, as a deleted file goes.
+    fs.rmSync(old, { recursive: true });
+    const gone = await index.refresh([folder]);
+    assert.deepEqual([gone.files, gone.unread], [3, 0]);
+    assert.equal((await index.search("turbine")).length, 0);
+    assert.equal((await index.search("primes")).length, 1);
+  } finally {
+    Object.assign(fs.promises, real);
+    index.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("a refresh that's running doesn't hold up another caller, and a search runs meanwhile", async (t) => {
   if (!docs.available()) { t.skip("no node:sqlite with FTS5 here"); return; }
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "solder-docs-"));

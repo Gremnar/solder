@@ -846,7 +846,9 @@ class WorkspaceTools {
             }
           } } : undefined;
         return index.refresh(folders, { ms: 30 * 60_000, embed, signal: controller.signal });
-      }).then(() => {}, () => {});
+      }).then((/** @type {any} */ result) => {
+        if (result?.unread) this.onDocsLog?.(`docs index: ${result.unread.toLocaleString("en-US")} file${result.unread === 1 ? "" : "s"} couldn't be read this time (in use, or the folder didn't answer): kept as indexed, tried again next time`);
+      }, () => {});
     if (this._docsRun?.controller === controller) this._docsRun = null;
     const embed = model && this.embedder && !held;
     if (embed) {

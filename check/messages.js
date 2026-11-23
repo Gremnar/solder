@@ -110,6 +110,21 @@ async function main() {
         typed.length = 0;
         await panel.onMessage({ type: "pasteInTerminal", text: "Get-Date" });
         check("... and one line is never asked about", warned.length === 2 && typed.length === 1, [warned.length, typed]);
+        // "Don't ask again" is the chat's own: that chat stops asking, another still does.
+        const asking = panel.chat;
+        const second = warned[1].buttons[1];
+        reply = second;
+        await panel.onMessage({ type: "pasteInTerminal", text: "$b = 2\nWrite-Output $b\n" });
+        check("the warning offers to stop asking in this chat, and pastes when that's picked", /don't ask again in this chat/.test(String(second)) && warned.length === 3
+          && pastes.length === 2 && asking.pasteUnasked === true, [warned.at(-1)?.buttons, pastes.length]);
+        reply = undefined;
+        await panel.onMessage({ type: "pasteInTerminal", text: "$c = 3\nWrite-Output $c\n" });
+        check("... from then on, several lines are pasted in that chat without asking", warned.length === 3 && pastes.length === 3 && pastes.at(-1) === "$c = 3\nWrite-Output $c", [warned.length, pastes]);
+        await panel.onMessage({ type: "new" });
+        await panel.onMessage({ type: "pasteInTerminal", text: "$d = 4\nWrite-Output $d\n" });
+        check("... and another chat still asks (no answer: nothing pasted)", panel.chat !== asking && warned.length === 4 && pastes.length === 3, [warned.length, pastes.length]);
+        asking.pasteUnasked = false;
+        panel.chat = asking;
         await sleep(1200);
         check("... and your clipboard is put back", await own.env.clipboard.readText() === "what you had copied");
       } else log("SKIP Paste in terminal: this window already has a terminal");

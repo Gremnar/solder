@@ -46,6 +46,9 @@ async function activate(context) {
   await keepChanges(context);
   const output = vscode.window.createOutputChannel("Solder");
   const panel = new SolderPanel(context, output);
+  // A key saved before Solder kept the gateway with it is the gateway's that's set now: settled here, at the start,
+  // before the address can be changed.
+  await panel.savedKey.get().catch(() => "");
   // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
   panel.setup.needed().then(async (needed) => {
     if (!needed) return;
@@ -60,12 +63,11 @@ async function activate(context) {
       const key = await vscode.window.showInputBox({ prompt: "The API key for your endpoint", password: true,
         ignoreFocusOut: true });
       if (key === undefined) return;
-      if (key.trim()) await context.secrets.store(KEY, key.trim());
-      else await context.secrets.delete(KEY);
+      await panel.savedKey.save(key);
       vscode.window.showInformationMessage(key.trim() ? "Solder: API key saved." : "Solder: API key removed.");
       await panel.refreshModels();
     }),
-    vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(context, output)),
+    vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(panel.savedKey, output)),
     vscode.commands.registerCommand("solder.focus", () => vscode.commands.executeCommand("solder.chat.focus")),
     vscode.commands.registerCommand("solder.setup", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
@@ -131,16 +133,15 @@ async function activate(context) {
   );
 }
 
-/** @param {vscode.ExtensionContext} context @param {vscode.OutputChannel} output */
-async function checkConnection(context, output) {
+/** @param {import("./key.js").SavedKey} savedKey @param {vscode.OutputChannel} output */
+async function checkConnection(savedKey, output) {
   const config = solderSettings();
   output.show(true);
   const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
   let client;
   try {
     policy.gate();
-    client = new GatewayClient({ endpoint: config.get("endpoint", ""),
-      apiKey: (await context.secrets.get(KEY)) ?? "" });
+    client = new GatewayClient({ endpoint: config.get("endpoint", ""), apiKey: await savedKey.get() });
   } catch (error) {
     log(`Settings: ${message(error)}`);
     vscode.window.showErrorMessage(`Solder: ${message(error)} (Settings → Solder)`);

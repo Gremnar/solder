@@ -236,43 +236,72 @@ async function exportEntries(folder, what, ruleNames = ["AGENTS.md"], options = 
  * The project folders you use, in the order added: a small JSON file in Solder's own storage. Being on it is your yes
  * to a project's rules and skills. A file that can't be read is an empty list; saving can fail quietly (the list
  * lives on in memory).
+ *
+ * Every VS Code window has its own copy of this, over the one file. So the file is the list: it's looked at again
+ * before the list is used (at most once a second) and always just before it's changed, and a change is made to the
+ * list as the file has it then. A window that only held the list it started with would put back a project another
+ * window had removed, and with it your yes to that project's rules, the next time it saved anything.
  */
 class ProjectList {
-  /** @param {string} file */
-  constructor(file) {
+  /** @param {string} file @param {{every?: number}} [options] every: how long, in ms, a look at the file holds good */
+  constructor(file, options = {}) {
     this.file = file;
+    this.every = options.every ?? 1000;
     /** @type {{path: string, added: number}[]} */
-    this.items = this._load();
+    this.items = [];
+    /** The file's text as last read or written: the list is read again when it differs. @type {string | null} */
+    this.text = null;
+    this.looked = 0;
+    this._sync(true);
   }
 
-  _load() {
+  /** The list as the file has it now, if it changed since this window read or wrote it. @param {boolean} [now] look whatever the time */
+  _sync(now = false) {
+    if (!now && Date.now() - this.looked < this.every) return;
+    this.looked = Date.now();
+    let text;
+    // Not there (nothing saved yet), or it can't be read just now: the list stays as this window has it.
+    try { text = fs.readFileSync(this.file, "utf8"); } catch { return; }
+    if (text === this.text) return;
     try {
-      const data = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      const data = JSON.parse(text);
       const seen = new Set();
-      return (Array.isArray(data?.projects) ? data.projects : [])
-        .filter((item) => item && typeof item.path === "string" && item.path.trim() && path.isAbsolute(item.path))
-        .map((item) => ({ path: path.resolve(item.path), added: Number(item.added) || 0 }))
-        .filter((item) => !seen.has(projectKey(item.path)) && seen.add(projectKey(item.path)));
-    } catch { return []; }
+      this.items = (Array.isArray(data?.projects) ? data.projects : [])
+        .filter((/** @type {any} */ item) => item && typeof item.path === "string" && item.path.trim() && path.isAbsolute(item.path))
+        .map((/** @type {any} */ item) => ({ path: path.resolve(item.path), added: Number(item.added) || 0 }))
+        .filter((/** @type {any} */ item) => !seen.has(projectKey(item.path)) && seen.add(projectKey(item.path)));
+      this.text = text;
+    } catch { /* not a list: as this window has it */ }
   }
 
   _save() {
+    const text = JSON.stringify({ projects: this.items }, null, 2);
+    // A temporary file of this window's own: two windows saving at once don't write into each other's.
+    const temporary = `${this.file}.${process.pid}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file + ".tmp", JSON.stringify({ projects: this.items }, null, 2), "utf8");
-      fs.renameSync(this.file + ".tmp", this.file);
-    } catch { /* kept in memory */ }
+      fs.writeFileSync(temporary, text, "utf8");
+      fs.renameSync(temporary, this.file);
+      this.text = text;
+    } catch { try { fs.rmSync(temporary, { force: true }); } catch { /* left */ } /* kept in memory */ }
   }
 
   /** @param {string} folder */
-  has(folder) { const key = projectKey(folder); return !!folder && this.items.some((item) => projectKey(item.path) === key); }
+  has(folder) {
+    if (!folder) return false;
+    this._sync();
+    const key = projectKey(folder);
+    return this.items.some((item) => projectKey(item.path) === key);
+  }
 
   /** The folders, in the order added. */
-  paths() { return this.items.map((item) => item.path); }
+  paths() { this._sync(); return this.items.map((item) => item.path); }
 
   /** @param {string} folder @returns {boolean} whether it was new */
   add(folder) {
-    if (this.has(folder)) return false;
+    this._sync(true);
+    const key = projectKey(folder);
+    if (!folder || this.items.some((item) => projectKey(item.path) === key)) return false;
     this.items.push({ path: path.resolve(folder), added: Date.now() });
     this._save();
     return true;
@@ -280,6 +309,7 @@ class ProjectList {
 
   /** Off the list (the folder and its files are left as they are). @param {string} folder */
   remove(folder) {
+    this._sync(true);
     const key = projectKey(folder);
     const before = this.items.length;
     this.items = this.items.filter((item) => projectKey(item.path) !== key);

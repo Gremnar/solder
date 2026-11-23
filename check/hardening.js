@@ -292,6 +292,50 @@ async function main() {
       await raw().update("endpoint", before.endpoint, vscode.ConfigurationTarget.Global);
     }
 
+    // ---- two windows on one chat: neither writes over what the other did
+    {
+      const storage = path.join(T, "gs-two-windows");
+      fs.rmSync(storage, { recursive: true, force: true });
+      made.push(storage);
+      const window = () => {
+        const each = new SolderPanel({ secrets: { get: async () => "", store: async () => {}, delete: async () => {} }, subscriptions: [], extension: ext,
+          globalStorageUri: vscode.Uri.file(storage), storageUri: undefined, extensionUri: ext.extensionUri }, { appendLine() {}, show() {} });
+        each.refreshModels = async () => {};
+        each.view = { webview: { postMessage: () => Promise.resolve(true) }, visible: true };
+        return each;
+      };
+      const one = window();
+      const two = window();
+      const shared = Engine.newChat();
+      shared.title = "Shared";
+      shared.messages.push({ role: "user", content: "one" }, { role: "assistant", content: "two" });
+      one.chat = shared;
+      await one.store.save(shared);
+      const file = path.join(storage, "chats", shared.id + ".json");
+      const saved = () => JSON.parse(fs.readFileSync(file, "utf8"));
+      await two.onMessage({ type: "open", id: shared.id });
+      check("a chat saved in one window opens in another", two.chat.id === shared.id && two.chat.messages.length === 2, two.chat.messages.length);
+      const behind = two.chat;
+      shared.messages.push({ role: "user", content: "three" }, { role: "assistant", content: "four" });
+      await one.store.save(shared);
+      check("... turns added in the first are shown in the second when it's looked at again", two.syncChat() === "changed" && two.chat === behind && two.chat.messages.length === 4, two.chat.messages.length);
+      shared.messages.push({ role: "user", content: "five" });
+      await one.store.save(shared);
+      await two.onMessage({ type: "chatAction", action: "pin", id: shared.id });
+      check("pinned in the window that's behind: the pin lands on the chat as it is now, and the other window's turns stay", saved().messages.length === 5 && saved().pinned === true && two.chat.messages.length === 5,
+        [saved().messages.length, saved().pinned, two.chat.messages.length]);
+      shared.messages.push({ role: "assistant", content: "six" });
+      await one.store.save(shared);
+      const place = two.chat.messages.length;
+      await two.onMessage({ type: "deleteMessage", index: 0 });
+      check("a message picked by its place in a chat that changed under it is left alone: the chat is shown as it is now", saved().messages.length === 6 && two.chat.messages.length === 6 && place === 5, [saved().messages.length, two.chat.messages.length]);
+      one.store.remove(shared.id);
+      told.length = 0;
+      await two.onMessage({ type: "effort", level: "high" });
+      check("deleted in one window: the other closes it and says so, rather than bringing it back", !fs.existsSync(file) && two.chat.id !== shared.id && told.some((text) => /deleted in another window/.test(text)),
+        [fs.existsSync(file), two.chat.id === shared.id, told]);
+    }
+
     // ---- settings held to their ranges where they're used
     const ranges = panel.settings();
     check("the step limit and Compact at are within their ranges, whatever the setting says", ranges.maxRounds >= 1 && ranges.maxRounds <= 100 && ranges.compactAt >= 30_000 && ranges.compactAt <= 2_000_000, [ranges.maxRounds, ranges.compactAt]);

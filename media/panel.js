@@ -370,7 +370,7 @@
     // Opened at a particular tab (/settings skills): once, as it opens.
     if (!settingsShape && s.tab && SETTINGS_TABS.some(([id]) => id === s.tab)) settingsTab = s.tab;
     // The form is rebuilt only when its structure changes; saved values are put in place, so focus stays where it is.
-    const shape = JSON.stringify({ tab: settingsTab, noEndpoint: !s.endpoint, models: s.models, hasKey: s.hasKey, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
+    const shape = JSON.stringify({ tab: settingsTab, noEndpoint: !s.endpoint, models: s.models, hasKey: s.hasKey, keyElsewhere: !!s.keyElsewhere, docs: s.docs.map((/** @type {any} */ d) => d.path), docsSearch: s.docsSearch,
       locked: s.locked, orgDocs: s.orgDocs, docsLocked: s.docsLocked, orgRules: s.orgRules, policyError: s.policyError,
       skillsFolders: s.skillsFolders, orgSkills: s.orgSkills, skillsLocked: s.skillsLocked, skills: s.skills, skillForm: s.skillForm, kinds: s.kinds, instructionsHere: s.instructionsHere,
       model: s.models.some((/** @type {any} */ m) => m.id === s.model) ? "" : s.model });
@@ -435,7 +435,8 @@
         label("Gateway address", "endpoint", saved("endpoint")) + `<input class="field" id="sf-endpoint" data-field="endpoint" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/chat/completions" value="${escape(s.endpoint)}">` +
         label("API key", "key", saved("key"), "settings-key") + `<div class="row-field"><input class="field" id="settings-key" type="password" placeholder="${s.hasKey ? "A key is saved: type a new one to replace it" : "Paste your key"}">` +
         `<button class="link-button" data-sact="key">Save</button></div>` +
-        (s.hasKey ? `<div class="hint">A key is saved. <button class="link" data-sact="clearKey">Remove it</button></div>` : "") +
+        (s.hasKey ? `<div class="hint">A key is saved. <button class="link" data-sact="clearKey">Remove it</button></div>`
+          : s.keyElsewhere ? `<div class="hint">The key that's saved is another gateway's, so it isn't sent to this one. Enter this gateway's key.</div>` : "") +
         `<div class="actions-row"><button class="link-button" data-sact="check">Check connection</button></div>`) +
       section("Model",
         label("Default model", "model", saved("model")) + modelField +
@@ -1199,11 +1200,8 @@
     input.placeholder = state.busy ? "Add to this: it goes with the next step…"
       : away && !away.done ? "Solder is working in another chat…" : state.readOnly ? "Ask Solder about your code…" : "Ask Solder to read or change your code…";
     // chips
+    // (A chat's project is named once, before its title at the top of the panel: no chip for it here.)
     const chips = [];
-    if (state.project) {
-      chips.push(`<button class="chip project" data-ppage="${escape(state.project.path)}" title="This chat is in the project ${escape(state.project.name)}: it follows the project's rules and can use its skills. Click to open the project.">` +
-        `${P_FOLDER}${escape(state.project.name)}</button>`);
-    }
     if (state.workspace) {
       chips.push(`<button class="chip folder" data-action="folder" title="The folder you're working in: relative paths and searches start here. Click to change.">` +
         `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>${escape(folderLabel(state.folder) || state.workspaceName || "Workspace")}</button>` +

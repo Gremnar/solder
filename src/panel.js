@@ -15,6 +15,7 @@ const { Engine, labelOf, parseArguments, tokenReport, removeTurn, laterMessages 
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
+const { SavedKey, gatewayOf } = require("./key.js");
 const { WorkspaceTools, plainNames, ownFile } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
@@ -103,6 +104,13 @@ function skillNameProblem(text, folder) {
 }
 
 const KEY = "solder.apiKey";
+/** The multi-line paste warning's second button: paste, and no more warnings in that chat. */
+const PASTE_UNASKED = "Paste, and don't ask again in this chat";
+/** Messages from the panel that act on the open chat: it's brought up to date first (see syncChat). */
+const ON_THE_CHAT = new Set(["send", "starter", "command", "chatAction", "switch-and-resume", "resume", "rename", "editMessage", "deleteMessage",
+  "delete", "model", "effort", "undo", "undoTask", "review", "attach", "attachPaste"]);
+/** Of those, the ones that name a message or a step by its place in the chat. */
+const BY_PLACE = new Set(["editMessage", "deleteMessage", "undo", "undoTask", "review"]);
 const MAX_SELECTION_CHARS = 12_000;
 const SHOWN_OUTPUT_CHARS = 6_000;
 
@@ -159,7 +167,9 @@ class SolderPanel {
     this.foundLast = [];
     /** @type {Map<string, any[]>} by chat: a chat's unsent attachments are its own, and go nowhere else */
     this.drafts = new Map();
-    this.setup = new SetupWizard(context, KEY, () => this.post(), { skills: () => this.skillsOffered().length,
+    /** Your key, which goes only to the gateway it was saved for (your organization's address takes it along). */
+    this.savedKey = new SavedKey(context.secrets, KEY, () => ({ endpoint: String(solderSettings().get("endpoint", "") || ""), trusted: policy.locked("endpoint") }));
+    this.setup = new SetupWizard(context, this.savedKey, () => this.post(), { skills: () => this.skillsOffered().length,
       // Your skills folder, ready (and in the setting) once setup is done, so New skill and /skill need no folder picking.
       skillsHome: async () => {
         if (policy.locked("skillsFolders") || this.skillsFolder()) return;
@@ -175,7 +185,7 @@ class SolderPanel {
       vscode.window.showInformationMessage(`Solder: ${passages.toLocaleString("en-US")} passages of your docs are waiting to be embedded for search by meaning (about ${compact(tokens)} tokens, sent once). Start it in Settings → Docs / RAG when you're ready.`, "Open Settings")
         .then((pick) => { if (pick) { this.projectsView = null; this.settingsScreen.open("docs"); } });
     };
-    this.settingsScreen = new SettingsScreen(context, KEY, { models: () => this.models, docs: () => this.tools.docsState(),
+    this.settingsScreen = new SettingsScreen(context, this.savedKey, { models: () => this.models, docs: () => this.tools.docsState(),
       skills: () => this.tools.skills(false), skillsHome: () => this.skillsFolder() || DEFAULT_SKILLS(), newSkill: () => this.newSkill(), interviewSkill: () => this.interviewSkill(), createSkill: (/** @type {string} */ name, /** @type {string} */ when) => this.createSkill(name, when),
       deleteSkill: (/** @type {string} */ name) => this.deleteSkill(name), orgSkillsFolders: () => this.tools.skillsFolders(policy.orgSkills()),
       policyChanged: () => { this.policyChanged(); },
@@ -196,6 +206,8 @@ class SolderPanel {
     if (last) this.chat = this.store.load(last.id) ?? this.chat;
     context.subscriptions.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.postEditor()),
+      // Back in this window: a chat another window went on with shows its newer turns before anything is typed.
+      vscode.window.onDidChangeWindowState((state) => { if (state.focused && this.syncChat() !== "same") this.post(); }),
       vscode.window.onDidChangeTextEditorSelection(() => this.postEditor()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("solder")) { this._client = null; this.refreshModels(); }
@@ -224,7 +236,7 @@ class SolderPanel {
     view.webview.html = this.html(view.webview, media);
     view.webview.onDidReceiveMessage((message) => this.onMessage(message).catch((error) =>
       vscode.window.showErrorMessage(`Solder: ${error instanceof Error ? error.message : error}`)));
-    view.onDidChangeVisibility(() => { if (view.visible) this.post(); });
+    view.onDidChangeVisibility(() => { if (view.visible) { this.syncChat(); this.post(); } });
     // Not set up yet (no gateway, or no key for one, as when your organization sets the gateway): the guided setup
     // starts by itself, once a window, rather than a connection error. It skips what your organization sets.
     this.refreshModels().then(async () => {
@@ -313,20 +325,40 @@ class SolderPanel {
     // (Windows PowerShell among them) run each line as it arrives, and nothing here can tell which this terminal is.
     // VS Code's own warning isn't relied on: it can be switched off, and where it's set to always show, ours would
     // only be a second one.
-    if (vscode.workspace.getConfiguration("terminal.integrated").get("enableMultiLinePasteWarning") !== "always") {
+    // Asked in each chat until you say not to there: that's kept with the chat, and goes no further than it.
+    const chat = this.chat;
+    if (!chat.pasteUnasked && vscode.workspace.getConfiguration("terminal.integrated").get("enableMultiLinePasteWarning") !== "always") {
       const count = code.split("\n").filter((line) => line.trim()).length;
       const pick = await vscode.window.showWarningMessage(`Paste ${count} lines into the terminal?`, { modal: true,
-        detail: "Some terminals run each line as it's pasted, without waiting for Enter (Windows PowerShell does). Paste only if you'd run all of it; otherwise copy it and take the lines one at a time." }, "Paste");
-      if (pick !== "Paste") return;
+        detail: "Some terminals run each line as it's pasted, without waiting for Enter (Windows PowerShell does). Paste only if you'd run all of it; otherwise copy it and take the lines one at a time." }, "Paste", PASTE_UNASKED);
+      if (pick !== "Paste" && pick !== PASTE_UNASKED) return;
+      if (pick === PASTE_UNASKED) {
+        chat.pasteUnasked = true;
+        if (chat.messages.length) await this.store.save(chat);
+      }
     }
-    const before = await Promise.resolve(vscode.env.clipboard.readText()).catch(() => "");
+    // What you had copied goes back afterwards. A paste made before that happens finds the last paste on the
+    // clipboard, not your text: it puts back what the first one found.
+    const pending = this._clipboard;
+    if (pending) clearTimeout(pending.timer);
+    const before = pending ? pending.before : await Promise.resolve(vscode.env.clipboard.readText()).catch(() => "");
+    this._clipboard = { before, timer: undefined };
     await vscode.env.clipboard.writeText(code);
     try {
       await vscode.commands.executeCommand("workbench.action.terminal.paste");
     } finally {
-      if (before) setTimeout(() => { Promise.resolve(vscode.env.clipboard.writeText(before)).catch(() => {}); }, 800);
+      const mine = this._clipboard;
+      if (mine && mine.before === before && !mine.timer) {
+        mine.timer = setTimeout(() => {
+          if (this._clipboard === mine) this._clipboard = null;
+          if (before) Promise.resolve(vscode.env.clipboard.writeText(before)).catch(() => {});
+        }, 800);
+      }
     }
   }
+
+  /** Your clipboard's text, while a terminal paste has borrowed it. @type {{before: string, timer: any} | null} */
+  _clipboard = null;
 
   /**
    * A message of yours, from its bubble: Delete takes it out with its turn; Edit takes it and everything after it, and
@@ -1029,16 +1061,21 @@ class SolderPanel {
     // Fail closed: while the organisation's policy can't be read, nothing is sent (a client made before included).
     policy.gate();
     if (!this._client) {
-      const config = solderSettings();
-      this._client = new GatewayClient({ endpoint: config.get("endpoint", ""), apiKey: this._key ?? "" });
+      const endpoint = solderSettings().get("endpoint", "");
+      // The key that's loaded is one gateway's: an address changed since (the key not yet loaded again) is sent none.
+      this._client = new GatewayClient({ endpoint, apiKey: this._keyGateway && this._keyGateway === gatewayOf(endpoint) ? this._key ?? "" : "" });
     }
     return this._client;
   }
 
   /** @type {string | undefined} */
   _key = undefined;
+  /** The gateway `_key` was loaded for. */
+  _keyGateway = "";
   async loadKey() {
-    this._key = (await this.context.secrets.get(KEY)) ?? "";
+    const endpoint = String(solderSettings().get("endpoint", "") || "");
+    this._key = await this.savedKey.get(endpoint);
+    this._keyGateway = gatewayOf(endpoint);
     this._client = null;
   }
 
@@ -1076,7 +1113,8 @@ class SolderPanel {
     if (event.type === "busy" && event.busy) {
       // The task's chat: its state below is that chat's, shown only while it's the one open.
       this.runId = event.chat;
-      this.runChat = event.chat === this.chat.id ? this.chat : (this.store.load(event.chat) ?? this.chat);
+      // The very copy the task works in, as this window holds it (not read again from its file).
+      this.runChat = event.chat === this.chat.id ? this.chat : (this.store.held(event.chat) ?? this.chat);
       this.awayDone = "";
     }
     if (event.chat !== this.runId) { this.post(); return; }
@@ -1125,8 +1163,40 @@ class SolderPanel {
 
   // ------------------------------------------------------------ panel messages --
 
+  /**
+   * The open chat as it is now, when another window changed its file since this one read or saved it: its newer turns
+   * are shown and built on, not written over. Deleted there, it's closed here. Never while a task here is working in it.
+   * @returns {"same" | "changed" | "gone"}
+   */
+  syncChat() {
+    if (this.engine.busy && this.chat.id === this.runId) return "same";
+    let how;
+    try { how = this.store.refresh(this.chat); } catch { return "same"; }
+    if (how === "same") return how;
+    if (how === "gone") {
+      const gone = this.chat;
+      const next = this.store.list().find((c) => !c.archived);
+      this.chat = (next && this.store.load(next.id)) || Engine.newChat();
+      if (this.errorChat === gone.id) this.error = null;
+      if (this.runChat === gone) this.runChat = null;
+    }
+    if (!this.engine.busy) this.useChat(this.chat);
+    return how;
+  }
+
   /** @param {any} message */
   async onMessage(message) {
+    if (ON_THE_CHAT.has(message.type)) {
+      // What another window did to this chat since, before anything is done to it here.
+      const synced = this.syncChat();
+      if (synced === "gone") {
+        this.post();
+        vscode.window.showInformationMessage("That chat was deleted in another window.");
+        return;
+      }
+      // Something picked by its place in a chat that has just changed under it: shown as it is now, to pick again.
+      if (synced === "changed" && BY_PLACE.has(message.type)) { this.post(); return; }
+    }
     switch (message.type) {
       case "ready": this.post(); this.postEditor(); return;
       case "send": return this.send(message);
@@ -1210,6 +1280,7 @@ class SolderPanel {
         const chat = message.id === this.runId && this.runChat ? this.runChat : this.store.load(message.id);
         if (!chat) return;
         this.chat = chat;
+        this.syncChat(); // as its file has it now, if another window went on with it
         this.projectsView = null;
         if (chat.id === this.awayDone) this.awayDone = "";
         // A project's chat opened in a window its folder isn't in: the folder is added (after asking), so it can work there.
@@ -1444,6 +1515,9 @@ class SolderPanel {
   }
 
   async send(message) {
+    // From a command (the editor's menu), not the panel: the chat is brought up to date here too.
+    // Deleted in another window meanwhile: what's being sent starts a chat of its own, not whichever chat is next.
+    if (this.syncChat() === "gone") { this.chat = Engine.newChat(); this.useChat(this.chat); }
     // Another chat's task is running: nothing is prepared here (its tools stay its own), and your words go back in the box.
     if (this.awayBusy()) {
       const typed = String(message.text || "").trim();
