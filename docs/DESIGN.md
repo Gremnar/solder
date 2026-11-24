@@ -1,6 +1,6 @@
 # Solder: design
 
-Solder is a **lean coding agent in a VS Code side panel**. It talks to an OpenAI-compatible Chat Completions endpoint that supports tool calling: a corporate gateway, a local server, anything that speaks the format. It is meant for technical users who live in VS Code and want an agent beside the editor that does focused work with as few tokens as possible.
+Solder is a **lean coding agent in a VS Code side panel**. It talks to an OpenAI-compatible Chat Completions endpoint, with tool calling (Tool models) or without it (Assist models): a corporate gateway, a local server, anything that speaks the format. It is meant for technical users who live in VS Code and want an agent beside the editor that does focused work with as few tokens as possible.
 
 It's the sibling of **Alloy**, a general Windows assistant. Solder keeps Alloy's engine lessons and leaves out everything VS Code already does.
 
@@ -274,7 +274,7 @@ Made 2026-11-04.
 
 1. **Compaction at 100k tokens** by default, configurable from 30k up. Alloy's 225k is too high when every step resends the whole chat.
 2. **No shell at all:** Solder only reads and edits code. (Before this, the plan was PowerShell 5.1 by default with pwsh supported.)
-3. **Tool-calling models only** in v1. A text-protocol lane for models without tool calling waits until usage asks for it.
+3. **Tool-calling models only** in v1. A text-protocol lane for models without tool calling waits until usage asks for it. (Superseded 2026-11-09: usage asked for it. That lane is the Assist lane; see **Two lanes** above.)
 4. **License:** MIT.
 
 ## Still open

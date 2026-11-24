@@ -1,8 +1,36 @@
 # Solder
 
-**A lean coding agent beside your editor.** Solder sits in VS Code's side bar and reads, searches and edits the code in your workspace. It talks to any OpenAI-compatible Chat Completions endpoint that supports tool calling, such as your company's gateway or a server on your own PC, and to nothing else.
+**A lean coding agent beside your editor.** Solder sits in VS Code's side bar and reads, searches and edits the code in your workspace. It talks to any OpenAI-compatible Chat Completions endpoint, such as your company's gateway or a server on your own PC, and to nothing else. Models with tool calling and models without it both work; Solder only needs to know which is which (see [Tool models and Assist models](#tool-models-and-assist-models)).
 
 <p><img src="media/screenshots/finished-chat.png" width="380" alt="A finished chat: the steps Solder ran, Review and Undo on its edit, and its answer"></p>
+
+## Tool models and Assist models
+
+**Solder works with two kinds of model, and needs to be told which kind each one is.** Both can read, search and edit your code through Solder's tools. What differs is how they ask for a tool. If Solder has a model down as the wrong kind, the model may answer without ever looking at your files, or say it can't open them: Solder isn't broken, it's one setting.
+
+| | **Tool model** | **Assist model** |
+|---|---|---|
+| **What it is** | A model the endpoint serves with tool calling (OpenAI-style function calling) | A model the endpoint serves for chat only, without tool calling |
+| **What Solder sends** | A system prompt, your messages, and its tools in the request's `tools` array | Your messages only: no `tools` array and no system prompt. Solder's tools and instructions are described in plain words inside your message |
+| **How it asks for a tool** | A native tool call in its reply (`tool_calls`) | A short request it writes as text in its reply, which Solder reads and runs |
+| **Can it use Solder's tools?** | Yes | **Yes, all of them.** Approvals, Review, Undo, read-only mode, skills and docs work exactly the same |
+| **Each step** | Faster; takes a thinking level | A few seconds slower; no thinking level |
+| **Typical** | Most OpenAI-compatible APIs, and local servers with function calling turned on | Models a gateway offers for chat without tool calling; some gateways don't count them against a daily allowance |
+
+**Every model starts as a Tool model.** That's right for most endpoints. Change it only for a model your endpoint serves without tool calling.
+
+**Signs a model is set as the wrong kind:**
+
+- **A model without tool calling, left as a Tool model:** it answers in plain prose, says it can't open your files, guesses what a file says, or describes a step without taking it. Mark it as an Assist model.
+- **A model with tool calling, set as an Assist model:** it still works, only more slowly and without a thinking level. Mark it as a Tool model.
+
+**How to check and set it:**
+
+- **Check a model:** run **Solder: Check connection** from the Command Palette (**Ctrl+Shift+P**). It asks the model to read a file with a native tool call. *"works, tool calls included"* means a Tool model. *"answered without calling the tool"* means tool calling isn't on for that model: use it as an Assist model.
+- **Set it:** **Settings → Advanced → Kinds of model**. Every model starts on the right, as a Tool model; move an Assist model to the left with its arrow. Assist models are tagged **Assist** in the model picker.
+- **For organizations:** the `AssistModels` policy lists the Assist models for everyone, or the `ToolModels` policy marks the Tool models by a pattern in their names (see [docs/POLICY.md](docs/POLICY.md)).
+
+More on how Solder runs Assist models: [Assist models in detail](#assist-models-in-detail).
 
 ## Built for organizations
 
@@ -29,7 +57,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
 2. **Run the guided setup.** Solder offers it the first time it starts. You can also run it any time from the panel's **⋯ menu → Guided setup…**. It asks for:
    - **your gateway's address:** the full Chat Completions URL, ending in `/chat/completions`;
    - **your API key:** kept in VS Code's secret storage, never in settings. Solder checks it by listing the models;
-   - **your default model;**
+   - **your default model:** if your endpoint serves it without tool calling, mark it as an Assist model afterwards (see [Tool models and Assist models](#tool-models-and-assist-models));
    - **your own docs folders:** optional, see [Your docs](#your-docs);
    - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`";
    - **whether Solder may change files:** see [Read-only mode](#read-only-mode).
@@ -173,12 +201,12 @@ A project is a folder you work in, with its own rules, skills and chats. Everyth
 
 <p><img src="media/screenshots/new-chat-menu.png" width="380" alt="The arrow beside New chat: a chat in no project, a chat in one of your projects, or a new project"> <img src="media/screenshots/project-skills.png" width="380" alt="A project's page, further down: switches for the project's own skills and for your skills in this project"></p>
 
-## Two kinds of model (optional)
+## Assist models in detail
 
-Some gateways offer two kinds of model: **Tool models**, which take a system prompt and native tool calls (what Solder uses by default), and **Assist models**, which take plain text only and often keep the conversation on their side. Solder can use both.
+What an Assist model is, and how to tell Solder which models are, is at the top: [Tool models and Assist models](#tool-models-and-assist-models). How Solder runs them:
 
 - **Tell them apart:** in **Settings → Advanced → Kinds of model**, every model starts on the right as a Tool model; move an Assist model to the left with its arrow (**Refresh models** asks the gateway for the list). Assist models are tagged **Assist** in the picker. Admins can set the list by policy (`AssistModels`), or a pattern (**Tool models**, under *For admins*).
-- **How Assist models work in Solder:** Solder tells them about your workspace and its tools in plain words, and they ask for a tool by writing a short request in their reply. Steps, approvals, Review and Undo work the same. Assist models take no thinking level.
+- **How Assist models work in Solder:** no `tools` array and no system prompt are sent. Solder tells them about your workspace and its tools in plain words, in your message, and they ask for a tool by writing a short request in their reply, which Solder runs as it runs a native tool call. Several requests can go in one reply. Steps, approvals, Review and Undo work the same. Assist models take no thinking level.
 - **They're held back less:** an Assist model's tokens usually aren't billed, so Solder doesn't trim or summarise their chats by itself, and lets a message take more steps (**Assist max rounds**, 60) than on a Tool model (**Max rounds**, 30). They still have a limit to what they can hold: `/compact` summarises a long chat when you want it to.
 - **A reply that's cut off carries on by itself:** when an Assist model's reply stops partway (the stream ends early, the connection drops), Solder keeps what arrived and asks it to carry on, once, as **Resume** would. If that's cut off too, the error is shown with **Resume**, as before.
 - **Carry-over:** when a whole conversation has to go to an Assist model in one request (a chat switched to one, a session that ended, or a gateway that keeps none), Solder sends as much of it as **Assist carry-over tokens** allows (200,000), newest first. Set it well inside what your Assist models can hold.
@@ -199,7 +227,7 @@ Each step sends the whole chat again, so long chats cost more per step. Solder k
 - when a file is read again in the same task, it keeps the newer copy and cuts the older to a line;
 - what you attach goes whole only up to about 40,000 characters a message, and by its path past that;
 - it summarises the older part of a chat once it passes **Compact at tokens**, 100,000 by default;
-- when a Tool model has an Assist twin (see [Two kinds of model](#two-kinds-of-model-optional)), the twin writes those summaries and the chats' titles, so they don't use your allowance and still work once it's used up.
+- when a Tool model has an Assist twin (see [Assist models in detail](#assist-models-in-detail)), the twin writes those summaries and the chats' titles, so they don't use your allowance and still work once it's used up.
 
 Under the box, the chat shows what it has **spent** (every request added up) and how much is **in context** (what each step sends now, as your gateway counted it): older turns are summarised once that passes **Compact at tokens**. The status bar shows the allowance left when your gateway reports one. **A new chat for each new task is the cheapest habit.**
 
@@ -215,7 +243,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 | **Effort** | how hard new chats think |
 | **Compact at tokens** | when the older part of a chat is summarised |
 | **Max rounds** | the most steps with tool calls for one message |
-| **Assist max rounds**, **Assist carry-over tokens** | the same limit for chats on an Assist model, and how much of a conversation is carried over to one in a single request (see [Two kinds of model](#two-kinds-of-model-optional)) |
+| **Assist max rounds**, **Assist carry-over tokens** | the same limit for chats on an Assist model, and how much of a conversation is carried over to one in a single request (see [Assist models in detail](#assist-models-in-detail)) |
 | **Rules**, **Instruction files** | what the model always follows |
 | **Docs folders** | your own reference docs |
 | **Embed tokens per minute** | the most sent to the embeddings model in a minute (**Pace**), 250,000 by default; `0` for no limit |
@@ -223,7 +251,7 @@ Under the box, the chat shows what it has **spent** (every request added up) and
 | **Shared embeddings folder** | a folder where PCs share docs embeddings, so the same docs aren't embedded by everyone (see [Your docs](#your-docs)) |
 | **Skills off** | the skills you've switched off (the switches in **Settings → Skills**) |
 | **Skills folders** | your skills (see [Skills](#skills)); a new one is saved in the first |
-| **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Two kinds of model](#two-kinds-of-model-optional)) |
+| **Tool models**, **Assist session block** | which models are Tool models, and where an Assist model's session comes (see [Assist models in detail](#assist-models-in-detail)) |
 | **Storage limit GB** | the most disk space Undo's backups may use, 5 GB by default; past it, the oldest go first |
 
 The API key is set with **Solder: Set API key**, or in the guided setup. It's never stored in settings.
