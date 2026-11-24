@@ -37,7 +37,7 @@ test("parser: curly quotes, aliases, camelCase names, the name/arguments and Ope
 });
 
 test("parser: problems are reported; ordinary code and JSON in an answer are never requests", () => {
-  assert.deepEqual(parseReply("Just an answer."), { calls: [], problem: "", unknown: "", found: false, visible: "Just an answer." });
+  assert.deepEqual(parseReply("Just an answer."), { calls: [], problem: "", unknown: "", found: false, visible: "Just an answer.", after: 0 });
   const oops = parseReply(request("{oops"));
   assert.ok(oops.found && !oops.calls.length && /JSON/.test(oops.problem));
   const unknown = parseReply(request('{"tool": "format_disk"}'));
@@ -47,6 +47,28 @@ test("parser: problems are reported; ordinary code and JSON in an answer are nev
   assert.equal(parseReply('Your package.json:\n\n```json\n{"name": "my-app", "version": "1.0.0"}\n```').found, false);
   // An unreadable example with prose after it is part of the explanation; one at the end is asked for again.
   assert.equal(parseReply('For example:\n\n```tool\n{oops\n```\n\nThat is how a request looks, roughly.').found, false);
+});
+
+test("parser: a request that can't be used, among ones that can, is never dropped without a word", () => {
+  const edit = (/** @type {string} */ file) => request(JSON.stringify({ tool: "edit_file", path: file, old_text: "a", new_text: "b" }));
+  const bad = request('{"tool": "edit_file", "path": "two.js", "old_text": "a"}'); // no new_text
+  const paths = (/** @type {any} */ parsed) => parsed.calls.map((/** @type {any} */ c) => c.args.path);
+  // In the middle, with a closing sentence after it: it was taken for an example and left out, so one.js and three.js
+  // ran with nothing said about two.js.
+  let parsed = parseReply(["Renaming it.", edit("one.js"), bad, edit("three.js"), "That covers all three files."].join("\n\n"));
+  assert.deepEqual([paths(parsed), parsed.problem, parsed.after], [["one.js"], "edit_file needs 'new_text'", 1]);
+  // In the middle, ending the reply: the ones before it run, and how many came after is known.
+  parsed = parseReply(["Renaming it.", edit("one.js"), bad, edit("three.js"), edit("four.js")].join("\n\n"));
+  assert.deepEqual([paths(parsed), parsed.after], [["one.js"], 2]);
+  // Last, with a sentence after it.
+  parsed = parseReply(["Renaming it.", edit("one.js"), edit("two.js"), bad, "All done."].join("\n\n"));
+  assert.deepEqual([paths(parsed), parsed.problem, parsed.after], [["one.js", "two.js"], "edit_file needs 'new_text'", 0]);
+  // A tool that doesn't exist, in the middle.
+  parsed = parseReply([edit("one.js"), request('{"tool": "patch_file", "path": "two.js"}'), edit("three.js")].join("\n\n"));
+  assert.deepEqual([paths(parsed), parsed.unknown, parsed.after], [["one.js"], "patch_file", 1]);
+  // An example in an explanation, in a reply with no real request, is still only text.
+  parsed = parseReply('You would write:\n\n```tool\n{"tool": "read_file"}\n```\n\nand my extension answers with its lines.');
+  assert.deepEqual([parsed.found, parsed.calls.length, parsed.problem], [false, 0, ""]);
 });
 
 test("parser: bare JSON at the end, a forgotten fence, several requests, a repeat, and a cut-off salvaged call", () => {

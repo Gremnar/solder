@@ -26,7 +26,9 @@ const CLOSING_FENCE = /\n[ \t]*`{2,}[ \t]*(?=\n|$)/g;
  * - So does any block, whatever its tag, that starts with {"tool": nothing but a request starts that way.
  * - Other plain or json blocks, and bare JSON ending the reply, count only when they really are a request for a
  *   known tool, so an answer that shows ordinary JSON (a package.json) is never taken for one.
- * - A block that can't be read, with more prose after it, is an example in an explanation: left as text.
+ * - A block that can't be read, with more prose after it, is an example in an explanation: left as text. Unless the
+ *   reply holds a request that can be read: then it's one of the reply's requests gone wrong, and is kept as that (left
+ *   as text, it was dropped without a word, and so were the requests after it).
  * @param {string} text
  */
 function findRequests(text) {
@@ -63,6 +65,8 @@ function findRequests(text) {
   const spans = found.map((r) => [r.start, requestEnd(text, r.start)]);
   return found.map((r, n) => ({ ...r, end: spans[n][1] })).filter((r, n) => {
     if (r.call) return true;
+    // Unreadable, among requests that can be read: a request that went wrong, not an example.
+    if (r.tagged && found.some((other) => other.call)) return true;
     // Unreadable: kept (to ask again) only when no prose follows outside the other requests.
     let after = text.slice(spans[n][1]);
     for (const [s, e] of spans.filter(([s]) => s >= spans[n][1]).reverse()) {
@@ -261,7 +265,8 @@ function toCall(value) {
  * A reply's requests: the readable ones before the first that can't be read (whose problem is returned), whether any
  * request was found, and the visible text (what comes before the first request).
  * @param {string} reply @param {{cutOff?: boolean}} [options] cut off at the length limit: a salvaged last call may be missing its end
- * @returns {{calls: {name: string, args: Record<string, any>, salvaged?: boolean}[], problem: string, unknown: string, found: boolean, visible: string}}
+ * @returns {{calls: {name: string, args: Record<string, any>, salvaged?: boolean}[], problem: string, unknown: string, found: boolean, visible: string, after: number}}
+ *   after: how many requests came after the one that couldn't be read (none of them run: a later one may rely on it)
  */
 function parseReply(reply, { cutOff = false } = {}) {
   const found = findRequests(String(reply || ""));
@@ -269,8 +274,9 @@ function parseReply(reply, { cutOff = false } = {}) {
   const calls = [];
   let problem = "";
   let unknown = "";
-  for (const r of found) {
-    if (!r.call) { problem = r.problem; unknown = /** @type {any} */ (r).unknown || ""; break; }
+  let after = 0;
+  for (const [index, r] of found.entries()) {
+    if (!r.call) { problem = r.problem || "it couldn't be read"; unknown = /** @type {any} */ (r).unknown || ""; after = found.length - index - 1; break; }
     calls.push(r.call);
   }
   if (cutOff) while (calls.length && calls[calls.length - 1].salvaged) calls.pop();
@@ -281,7 +287,7 @@ function parseReply(reply, { cutOff = false } = {}) {
     return !seen.has(k) && seen.add(k);
   });
   const visible = found.length ? String(reply).slice(0, found[0].start).trimEnd() : String(reply || "");
-  return { calls: unique, problem, unknown, found: found.length > 0, visible };
+  return { calls: unique, problem, unknown, found: found.length > 0, visible, after };
 }
 
 /**
@@ -354,9 +360,11 @@ function assistOutbound(chat, resultText, from = 0) {
       const batch = [];
       while (i < messages.length && messages[i].role === "tool") batch.push(messages[i++]);
       i--;
+      // Requests of the same reply that couldn't be used are said after the results, in place of the closing line.
+      const unread = batch[batch.length - 1].meta?.unread;
       const text = batch.map((t, n) => resultMessage(t.meta?.label || t.meta?.name || "that request",
-        assistText(resultText(t)), !!t.meta?.failed, n === batch.length - 1)).join("\n\n");
-      out.push({ role: "user", content: text });
+        assistText(resultText(t)), !!t.meta?.failed, n === batch.length - 1 && !unread)).join("\n\n");
+      out.push({ role: "user", content: unread ? `${text}\n\n${unread}` : text });
     }
   }
   // Two user messages in a row (a typed message right after results, a resume note): joined, as a turn can't be

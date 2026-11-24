@@ -138,7 +138,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "83ed4693dee438c5";
+const ASSIST_PINNED = "28c429841dd21420";
 
 function assistEverything() {
   return {
@@ -152,6 +152,7 @@ function assistEverything() {
     readOnly: ASSIST.setup({ workspace: "C:\\work", skillsFolder: "C:\\Skills", readOnly: true }),
     changed: ASSIST.setupChanged("SETUP"),
     results: [ASSIST.resultOk("read_file a.js"), ASSIST.resultFailed("read_file a.js"), ASSIST.resultClosing],
+    unread: [ASSIST.unread("PROBLEM", 0), ASSIST.unread("PROBLEM", 1), ASSIST.unread("PROBLEM", 3)],
     carry: [ASSIST.carryOverLead, ASSIST.carryOverLeftOut(1), ASSIST.carryOverLeftOut(4), ASSIST.carryOverEnd],
     repairs: [ASSIST.repair("PROBLEM"), ASSIST.unknownTool("x", ["a", "b"]), ASSIST.cutOff, ASSIST.gaveUp],
     swaps: ASSIST.swaps,

@@ -589,6 +589,9 @@ now; please go by this from now on:\n\n${setup})`,
   resultOk: (/** @type {string} */ label) => `Here's what my extension returned for ${label}:`,
   resultFailed: (/** @type {string} */ label) => `My extension tried ${label}, but it didn't work:`,
   resultClosing: "Send another tool request if you need more, otherwise go ahead and answer.",
+  /** After a reply's results: a later request of that reply couldn't be used, so it and the ones after it weren't run. */
+  unread: (/** @type {string} */ why, /** @type {number} */ after) => `Those are the only requests my extension ran. It couldn't use your next one (${why}), so it didn't run it` +
+    (after ? `, or the ${after === 1 ? "one" : after} after it` : "") + `. Please send ${after ? "them" : "it"} again.`,
   carryOverLead: "Here's our conversation so far, as my extension saved it, so you can pick up where we left off. \
 \"Me\" is me, including the results my extension sent you, and \"You\" is you.",
   carryOverLeftOut: (/** @type {number} */ count) => `(${count} earlier message${count === 1 ? " is" : "s are"} left out here.)`,

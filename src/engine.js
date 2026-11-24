@@ -317,6 +317,7 @@ class Engine {
       let reply;
       /** @type {Stored} */
       let assistant;
+      let unread = "";
       if (laneOf(model, settings) === "assist") {
         // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
         let step;
@@ -340,6 +341,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         if (step.repair) { repairs++; continue; }
         repairs = 0; // the allowance of asking again is for each request, not the whole turn
         ({ reply, assistant } = step);
+        unread = step.unread || "";
       } else {
         // Before every step, not just a new message, so a long task can't run far past the limit. Only
         // earlier turns are summarised: this one's calls carry thought signatures some models check.
@@ -387,7 +389,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         this.emit({ type: "done", chat: chat.id, limit: maxRounds });
         return;
       }
-      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal);
+      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal, unread);
       if (signal.aborted) throw new Cancelled();
     }
   }
@@ -398,7 +400,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
    * ordinary tool calls (stored as the Tool lane stores them), and the session it came back with. A session that
    * answers 502 has ended: the conversation is carried over once. A request that can't be read is asked for again.
    * @param {Chat} chat @param {string} model @param {any} settings @param {AbortSignal} signal @param {number} repairs
-   * @returns {Promise<{repair: true} | {repair?: false, reply: any, assistant: Stored}>}
+   * @returns {Promise<{repair: true} | {repair?: false, reply: any, assistant: Stored, unread?: string}>}
    */
   async _assistStep(chat, model, settings, signal, repairs) {
     // Nothing is trimmed on this lane: its tokens aren't billed, so there's nothing to save by cutting what the model
@@ -448,14 +450,19 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       this.emit({ type: "message", chat: chat.id });
       return { repair: true };
     }
-    return { reply: { content: parsed.visible, calls: assistant.tool_calls || [], finishReason: "", usage: reply.usage }, assistant };
+    // Requests after the ones that can run, which can't: one couldn't be used, and those after it may rely on it. The
+    // model is told with the results (it used to hear nothing, and reported the task done with only part of it made).
+    const unread = parsed.calls.length && parsed.problem
+      ? ASSIST.unread(reply.finishReason === "length" ? "your reply was cut off at the length limit before it ended" : parsed.problem, parsed.after) : "";
+    return { reply: { content: parsed.visible, calls: assistant.tool_calls || [], finishReason: "", usage: reply.usage }, assistant, unread };
   }
 
   /**
    * Run one reply's calls in order. Each gets its own tool message.
    * @param {Chat} chat @param {Stored} assistant @param {boolean} cutOff @param {number} roundsLeft @param {AbortSignal} signal
+   * @param {string} [unread] an Assist reply's requests after these that couldn't be used, as the model is told it
    */
-  async _batch(chat, assistant, cutOff, roundsLeft, signal) {
+  async _batch(chat, assistant, cutOff, roundsLeft, signal, unread = "") {
     const calls = assistant.tool_calls || [];
     const within = calls.map((_, index) => index < MAX_BATCH);
     const seen = new Set();
@@ -527,6 +534,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     if (added.some((m) => m.meta?.name === "read_file" && !m.meta.failed) && supersedeReads(chat)) await this._save(chat);
     // Notes ride on the last result: the step limit near, and anything you typed meanwhile.
     const last = added[added.length - 1];
+    if (last && unread) {
+      // Kept beside the result, not in it: the Assist rendering says it after the results (assistOutbound).
+      last.meta.unread = unread;
+      last.meta.summary += " · a later request couldn't be used, and wasn't run";
+      await this._save(chat);
+    }
     if (last) {
       const notes = [];
       if (roundsLeft <= WRAP_UP_ROUNDS && !signal.aborted) notes.push(TEXTS.wrapUp(roundsLeft)); // not on a step you stopped

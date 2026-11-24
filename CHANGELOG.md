@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: an Assist model's tool request that couldn't be used was dropped without a word, sometimes with the ones after it.** When a reply held several requests and one in the middle couldn't be used (an argument missing, a tool that doesn't exist, text that couldn't be read), the ones before it ran and the model was told nothing about the rest. With a sentence after the requests, the bad one was taken for an example and skipped while the later ones still ran. Either way the model could report a refactor done with only part of it made. Now the requests before it run, the one that couldn't be used and those after it don't, and the model is told so with the results: which one, why, how many came after, and to send them again. The step in the panel says a later request wasn't run.
+
 ## 0.3.9 (2026-11-23)
 
 - **Assist models: a reply that's cut off carries on by itself.** When an Assist model's reply stopped partway (the gateway's stream ended early, the connection dropped, it went quiet), Solder showed the error and waited for **Resume**, every time. It now does what Resume does, once, without asking: what had arrived stays in the chat, and the model is asked to carry on in the same session. The status line says the reply was cut off and is being carried on, and the chat shows the **Carry on** it sent. If the reply is cut off again straight away, the error is shown with **Resume** as before. A reply you stopped is never carried on, nor is one that failed for a reason that would only repeat.

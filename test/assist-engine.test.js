@@ -314,3 +314,30 @@ test("assist: every request in a reply runs (a refactor's fifteen or twenty edit
     } finally { gw.close(); }
   }
 });
+
+test("assist: a request in the middle that can't be used stops the ones after it, and the model is told so with the results", async () => {
+  const block = (/** @type {object} */ o) => "```tool\n" + JSON.stringify(o) + "\n```";
+  const edit = (/** @type {string} */ file) => block({ tool: "edit_file", path: file, old_text: "oldName", new_text: "newName" });
+  const first = ["Renaming it in all three.", edit("one.js"), block({ tool: "edit_file", path: "two.js", old_text: "oldName" }), edit("three.js"), "That covers all three files."].join("\n\n");
+  const { gw, engine, ran } = await setup({ script: (seen) => {
+    const last = seen[seen.length - 1].content;
+    if (last.startsWith("Give a short title")) return "A title";
+    if (seen.length === 1) return first;
+    // Told what didn't run, it sends those two again; told nothing, it would say it was done.
+    if (last.includes("It couldn't use your next one")) return ["Sending those again.", edit("two.js"), edit("three.js")].join("\n\n");
+    return "All three are renamed.";
+  } });
+  try {
+    const chat = Engine.newChat();
+    await engine.ask(chat, "Rename oldName to newName in one.js, two.js and three.js.");
+    assert.deepEqual(ran.map(([, args]) => args.path), ["one.js", "two.js", "three.js"], "each ran once, in the end");
+    const second = sent(gw)[1].payload.messages[0].content;
+    assert.match(second, /returned for edit_file one\.js/);
+    assert.match(second, /Those are the only requests my extension ran\. It couldn't use your next one \(edit_file needs 'new_text'\), so it didn't run it, or the one after it\. Please send them again\.$/);
+    assert.ok(!second.includes(ASSIST.resultClosing), "the usual closing line would say 'go ahead and answer'");
+    const result = chat.messages.find((m) => m.role === "tool");
+    assert.match(result.meta.summary, /a later request couldn't be used, and wasn't run/, "the step says so in the panel too");
+    assert.ok(!result.content.includes("It couldn't use"), "kept beside the result, not written into it");
+    assert.equal(chat.messages.at(-1).content, "All three are renamed.");
+  } finally { gw.close(); }
+});
