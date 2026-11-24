@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A finished turn says how long it worked.** Its row showed a time that was only how long the tools took to run, adding up to a second or two for a task that took ten minutes of the model's time. It now says **Worked for 10m 15s**: the whole turn, from your message to the answer, a Resume included and any time a card waited for your Allow left out. Chats from before this have no time on their rows.
+- **README:** a section near the top on Tool models and Assist models: an Assist model gets no `tools` array but still uses all of Solder's tools, how to tell which kind a model is, and how to set it.
+
 ## 0.3.10 (2026-11-24)
 
 - **A reply's edits are checked for problems once, together.** After an edit, Solder waits a moment for VS Code's language support and reports any new errors in the file. Several edits to one file already shared one check; edits to different files each waited for their own, so a reply that changed twenty files waited twenty times, and reported the errors a half-made change always has (a function given a new parameter before its callers are updated). Every file a reply edits is now checked at the end of its edits, all at once.

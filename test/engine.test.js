@@ -1134,3 +1134,39 @@ test("Stop while several looks run: each is answered, none is left without a res
   assert.ok(results.every((m) => m.meta.failed && /stopped|Not run/i.test(m.content)), results.map((m) => m.content.slice(0, 30)).join(" | "));
   assert.ok(host.ran.length <= 4, "no more were started than run at once");
 });
+
+test("a turn's working time is kept on its first message: a Resume adds to it, and time waiting on your approval doesn't count", async () => {
+  const slow = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const host = fakeHost();
+  host.runTool = async (name, args) => { host.ran.push([name, args]); await slow(60); return { output: "ok", summary: "done" }; };
+  const chat = Engine.newChat();
+  const e = engine(fakeClient([{ calls: [call("r1", "read_file", { path: "a.js" })] }, { content: "first answer" }]), host);
+  await e.ask(chat, "go");
+  const first = chat.messages[0].meta.worked;
+  assert.ok(first >= 55 && first < 2000, `worked ${first} ms`);
+  // Resume is the same turn: its time adds to the same total.
+  chat.messages.pop();
+  const again = engine(fakeClient([{ calls: [call("r2", "read_file", { path: "b.js" })] }, { content: "done" }]), host);
+  await again.resume(chat);
+  assert.ok(chat.messages[0].meta.worked >= first + 55, `${chat.messages[0].meta.worked} after ${first}`);
+  assert.equal(chat.messages.filter((m) => m.meta?.worked).length, 1, "kept once, on the turn's own message");
+  // A new message is a new turn, with its own time.
+  await engine(fakeClient([{ content: "quick" }]), host).ask(chat, "and this?");
+  const second = chat.messages.findLast((m) => m.role === "user" && !m.meta?.resume);
+  assert.ok((second.meta.worked || 0) < 500, "a quick turn's own time (none at all when it took under a millisecond)");
+
+  // Waiting on an approval card isn't working.
+  const asking = fakeHost({ approval: () => ({ decision: "allow" }) });
+  asking.needsApproval = () => "outside";
+  const waits = Engine.newChat();
+  const waiting = new Engine({ client: fakeClient([{ calls: [call("w", "write_file", { path: "C:/outside/x.txt", content: "x" })] }, { content: "ok" }]), host: asking, retryDelays: [0, 0],
+    now: () => new Date(2026, 10, 4, 14, 5), settings: () => ({ model: "m", compactAt: 100_000, maxRounds: 30 }),
+    onEvent: (event) => { if (event.type === "approval") setTimeout(() => waiting.decide(event.id, { decision: "allow" }), 300); } });
+  await waiting.ask(waits, "write it");
+  assert.ok((waits.messages[0].meta.worked || 0) < 250, `the 300 ms you took to answer wasn't counted: ${waits.messages[0].meta.worked} ms`);
+
+  // /compact on its own isn't a turn's work.
+  const before = chat.messages[0].meta.worked;
+  await engine(fakeClient([{ content: "SUMMARY" }]), host).compactNow(chat);
+  assert.equal(chat.messages[0].meta.worked, before);
+});

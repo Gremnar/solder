@@ -254,6 +254,19 @@ class Engine {
       chips: this.steers.flatMap((s) => s.chips) };
   }
 
+  /**
+   * Time a turn worked, added to its first message (`meta.worked`, in ms): a Resume or a carry-on is the same turn, so
+   * its time adds to the same total. The panel shows it on the turn's row ("Worked for 10m 15s").
+   * @param {Chat} chat @param {number} ms
+   */
+  async _worked(chat, ms) {
+    const at = taskStart(chat);
+    const first = chat.messages[at];
+    if (!first || first.role !== "user" || !(ms > 0)) return;
+    first.meta = { ...first.meta, worked: (Number(first.meta?.worked) || 0) + ms };
+    await this._save(chat).catch(() => {});
+  }
+
   /** @param {Chat} chat @param {(signal: AbortSignal) => Promise<void>} start */
   async _run(chat, start, loop = true) {
     if (this.busy) throw new Error("Solder is already working on a reply.");
@@ -262,6 +275,9 @@ class Engine {
     const controller = this.controller = new AbortController();
     this.emit({ type: "busy", chat: chat.id, busy: true });
     this.answerTokens = 0;
+    // How long this run works for, less the time it waits on you (an approval card): added to the turn's own record.
+    const began = Date.now();
+    this.waited = 0;
     let stopped = false;
     let failed = false;
     try {
@@ -282,6 +298,7 @@ class Engine {
           resumable: chat.messages.length > 0, exhausted, credits: /** @type {any} */ (error)?.credits || null });
       }
     } finally {
+      if (loop) await this._worked(chat, Date.now() - began - this.waited);
       this.busy = false;
       this.controller = null;
       this.approvals.clear();
@@ -628,10 +645,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     const reason = this.host.needsApproval(name, args);
     let note = "";
     if (reason) {
+      const asked = Date.now();
       const answer = await new Promise((resolve) => {
         this.approvals.set(id, resolve);
         this.emit({ type: "approval", chat: chat.id, id, name, args, reason, label });
       });
+      this.waited = (this.waited || 0) + (Date.now() - asked); // waiting on you isn't working
       this.emit({ type: "approval-done", chat: chat.id, id, decision: answer.decision });
       // Stop answers open cards with "decline": that's a stop, not the user saying no.
       if (signal.aborted) return { output: TEXTS.notRunStopped, summary: "Not run: " + label, failed: true };

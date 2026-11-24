@@ -1013,8 +1013,7 @@
   function foldHtml(item) {
     const key = state.chat.id + ":" + item.id;
     const open = openTurns.has(key);
-    const seconds = Math.round(item.ms / 1000);
-    const time = !seconds ? "" : seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const time = item.worked >= 1000 ? `Worked for ${workedFor(item.worked)}` : "";
     const facts = [`${item.steps} step${item.steps === 1 ? "" : "s"}`, item.changes ? `${item.changes} change${item.changes === 1 ? "" : "s"}` : "",
       item.failed ? `${item.failed} failed` : "", time].filter(Boolean).join(" · ");
     let inner = "";
@@ -1279,6 +1278,14 @@
   }
 
   /** A finished step's time: "1.4s", "12s", "1:05". @param {number} ms */
+  /** A turn's working time: "45s", "10m 15s", "1h 4m". @param {number} ms */
+  function workedFor(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  }
+
   function duration(ms) {
     const s = ms / 1000;
     return s < 10 ? s.toFixed(1) + "s" : s < 60 ? Math.round(s) + "s" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
@@ -2201,5 +2208,5 @@
   autosize();
   vscode.postMessage({ type: "ready" });
   // @ts-ignore: for the browser preview harness
-  window.__solder = { markdown, pasteAsChip, revealTake, changeLines, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
+  window.__solder = { markdown, pasteAsChip, revealTake, changeLines, workedFor, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
 })();

@@ -1943,7 +1943,10 @@ class SolderPanel {
       if (folded.length) {
         const changes = folded.filter((item) => item.change && !item.undone).length;
         items.push({ kind: "fold", id: "t" + at, items: inner, steps: folded.length, changes,
-          failed: folded.filter((item) => item.failed).length, ms: folded.reduce((sum, item) => sum + (item.ms || 0), 0),
+          failed: folded.filter((item) => item.failed).length,
+          // How long the turn worked, start to finish (Resumes included, waits for your approval left out). A chat from
+          // before this was kept has none: nothing is shown then (the steps' own times left out the model's).
+          worked: Number(this.chat.messages[at]?.meta?.worked) || 0,
           undoAll: changes >= 2 ? { at, count: changes } : null, reviewAll: changes >= 1 ? { at } : null });
       } else items.push(...inner);
       items.push(...segment.slice(tail));

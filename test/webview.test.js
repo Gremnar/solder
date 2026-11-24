@@ -167,3 +167,10 @@ test("an approval card's change: lines taken out and put in, with nothing in the
   assert.equal(panel.changeLines("", "new line"), '<span class="add">+ new line</span>', "nothing taken out: only what's put in");
   assert.equal(panel.changeLines("gone", ""), '<span class="del">− gone</span>');
 });
+
+test("a turn's working time reads as seconds, minutes and seconds, or hours and minutes", () => {
+  assert.equal(panel.workedFor(2400), "2s");
+  assert.equal(panel.workedFor(59_400), "59s");
+  assert.equal(panel.workedFor(615_000), "10m 15s");
+  assert.equal(panel.workedFor(3_840_000), "1h 4m");
+});

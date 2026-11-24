@@ -229,6 +229,9 @@ async function main() {
     // Each finished turn folds into one row; the row carries Undo all when two or more changes can be undone.
     const folds = () => panel.items().items.filter((i) => i.kind === "fold");
     let offers = folds().map((f) => f.undoAll).filter(Boolean);
+    // The row says how long the turn worked, from the time kept on the turn's own message; a turn with none says nothing.
+    panel.chat.messages[0].meta = { ...panel.chat.messages[0].meta, worked: 615_000 };
+    check("a finished turn's row carries how long it worked; one from before that was kept carries none", folds()[0].worked === 615_000 && folds()[1].worked === 0, folds().map((f) => f.worked));
     const shown = panel.items().items.map((i) => i.kind);
     check("a finished turn folds its steps into one row, between your message and the answer", JSON.stringify(shown) === JSON.stringify(["user", "fold", "answer", "user", "fold", "answer"])
       && folds()[0].steps === 3 && folds()[0].changes === 3 && folds()[0].items.every((i) => i.kind === "step"), shown);
