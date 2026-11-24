@@ -80,7 +80,7 @@ test("tool calls run in order, each answered by its id, thought signatures kept"
     [["tool", "a", "read_file ok"], ["tool", "b", "search ok"]]);
 });
 
-test("a failed edit stops the batch; a failed read doesn't", async () => {
+test("a failed edit stops the later changes to its file; a failed read stops nothing", async () => {
   const client = fakeClient([
     { calls: [call("1", "read_file", { path: "gone" }), call("2", "read_file", { path: "b" }),
       call("3", "edit_file", { path: "b", old_text: "x", new_text: "y" }), call("4", "edit_file", { path: "b", old_text: "z", new_text: "w" })] },
@@ -94,7 +94,44 @@ test("a failed edit stops the batch; a failed read doesn't", async () => {
   assert.deepEqual(host.ran.map((r) => r[0]), ["read_file", "read_file", "edit_file"]);
   const results = chat.messages.filter((m) => m.role === "tool");
   assert.equal(results.length, 4);
-  assert.equal(results[3].content, TEXTS.notRun);
+  assert.equal(results[3].content, TEXTS.notRunSameFile, "the second edit to the same file was written for the file as the first would have left it");
+});
+
+test("a change that fails: other files' changes still run; a move or a removal after it doesn't; a decline stops everything", async () => {
+  const edit = (id, file) => call(id, "edit_file", { path: file, old_text: "x", new_text: "y" });
+  const failing = (file) => ({ tools: { edit_file: (a) => a.path === file ? { output: "Error: old_text wasn't found in " + file, summary: "x", failed: true } : { output: "Edited.", summary: "Edited" },
+    write_file: (a) => a.path === file ? { output: "Error: it's a folder", summary: "x", failed: true } : { output: "Wrote.", summary: "Wrote" } } });
+  const run = async (calls, options) => {
+    const host = fakeHost(options);
+    const chat = Engine.newChat();
+    await engine(fakeClient([{ calls }, { content: "ok" }]), host).ask(chat, "go");
+    return { ran: host.ran.map(([name, args]) => `${name} ${args.path || args.from}`), said: Object.fromEntries(chat.messages.filter((m) => m.role === "tool").map((m) => [m.tool_call_id, m.content])) };
+  };
+  // The second of five misses: the other three files are still changed, and a read after it still runs.
+  let out = await run([edit("1", "a.js"), edit("2", "b.js"), edit("3", "c.js"), call("r", "read_file", { path: "b.js" }), edit("4", "B.JS"), edit("5", "d.js"), call("w", "write_file", { path: "./b.js", content: "all of it" })], failing("b.js"));
+  assert.deepEqual(out.ran, ["edit_file a.js", "edit_file b.js", "edit_file c.js", "read_file b.js", "edit_file d.js"]);
+  assert.equal(out.said["4"], TEXTS.notRunSameFile, "the same file, however it's spelt");
+  assert.equal(out.said.w, TEXTS.notRunSameFile, "a write over the file that the failed edit was for");
+  // Nothing is moved or removed after a change that failed, whichever file it was.
+  out = await run([edit("1", "a.js"), call("m", "move_item", { from: "old.js", to: "new.js" }), call("d", "remove_item", { path: "old.js" }), edit("2", "c.js")], failing("a.js"));
+  assert.deepEqual(out.ran, ["edit_file a.js", "edit_file c.js"]);
+  assert.deepEqual([out.said.m, out.said.d], [TEXTS.notRun, TEXTS.notRun]);
+  // A write that fails is the same as an edit that does.
+  out = await run([call("w", "write_file", { path: "a.js", content: "x" }), edit("1", "a.js"), edit("2", "c.js")], failing("a.js"));
+  assert.deepEqual(out.ran, ["write_file a.js", "edit_file c.js"]);
+  // A move that fails stops the rest, as it always did: what follows a move is usually about where things now are.
+  out = await run([call("m", "move_item", { from: "a.js", to: "lib/a.js" }), edit("1", "lib/a.js"), edit("2", "c.js")],
+    { tools: { move_item: () => ({ output: "Error: something is already there", summary: "x", failed: true }) } });
+  assert.deepEqual(out.ran, ["move_item a.js"]);
+  assert.deepEqual([out.said["1"], out.said["2"]], [TEXTS.notRun, TEXTS.notRun]);
+});
+
+test("a change you decline stops the rest of the reply, other files included", async () => {
+  const host = fakeHost({ approval: () => ({ decision: "decline" }) });
+  const chat = Engine.newChat();
+  await engine(fakeClient([{ calls: [call("w", "write_file", { path: "C:\outside\a.txt", content: "x" }), call("e", "edit_file", { path: "b.js", old_text: "x", new_text: "y" })] }, { content: "ok" }]), host).ask(chat, "go");
+  assert.deepEqual(host.ran, [], "neither ran");
+  assert.equal(chat.messages.find((m) => m.tool_call_id === "e").content, TEXTS.notRun);
 });
 
 test("unknown tools, bad arguments and repeats are answered, and the rest still run", async () => {
@@ -706,14 +743,14 @@ test("a reply's calls all run, reads and changes alike, up to a guard no task me
   await engine(fakeClient([{ calls: edits(52) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
   assert.equal(chat.messages.find((m) => m.tool_call_id === "e49").meta.failed, false, "the fiftieth ran");
   for (const id of ["e50", "e51"]) assert.match(chat.messages.find((m) => m.tool_call_id === id).content, /^Not run: Solder runs up to 50 calls from one reply\. Send it again/);
-  // A change that fails still stops what comes after it.
+  // A change that fails doesn't stop the changes to other files.
   const stops = fakeHost();
   const run3 = stops.runTool;
   stops.runTool = async (name, args, ctx) => args.path === "g2.js" ? { output: "Error: no match", summary: "failed", failed: true } : run3.call(stops, name, args, ctx);
   const halted = Engine.newChat();
   await engine(fakeClient([{ calls: edits(20) }, { content: "ok" }]), stops).ask(halted, "go");
-  assert.equal(halted.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 2, "the two before the failure ran");
-  assert.equal(halted.messages.filter((m) => m.role === "tool" && /^Not run/.test(m.content)).length, 17, "the seventeen after it didn't");
+  assert.equal(halted.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 19, "one of twenty missed, and the other nineteen files were still changed");
+  assert.equal(halted.messages.filter((m) => m.role === "tool" && /^Not run/.test(m.content)).length, 0);
 });
 
 test("argument problems: every missing one at once, and ones a tool doesn't take are named", async () => {
@@ -1055,7 +1092,7 @@ test("looks next to each other in a reply run a few at a time; their results sta
   assert.deepEqual(host.log.during["d.js"], ["c.js"], "which then ran side by side");
   assert.deepEqual(ids(chat), ["c-a.js", "c-b.js", "e1", "c-c.js", "c-d.js"]);
 
-  // A read that fails doesn't stop the ones beside it; a failed change stops the reads after it before they start.
+  // A read that fails doesn't stop the ones beside it; nor does a change that fails stop the reads after it.
   host = slowHost({}, new Set(["b.js"]));
   chat = Engine.newChat();
   await engine(fakeClient([{ calls: [read("a.js"), read("b.js"), read("c.js")] }, { content: "ok" }]), host).ask(chat, "go");
@@ -1064,7 +1101,7 @@ test("looks next to each other in a reply run a few at a time; their results sta
   host.runTool = ((inner) => async (name, args) => name === "edit_file" ? (host.ran.push([name, args]), { output: "Error: no match", summary: "failed", failed: true }) : inner(name, args))(host.runTool);
   chat = Engine.newChat();
   await engine(fakeClient([{ calls: [call("e1", "edit_file", { path: "a.js", old_text: "x", new_text: "y" }), read("c.js"), read("d.js")] }, { content: "ok" }]), host).ask(chat, "go");
-  assert.deepEqual(host.ran.map(([name]) => name), ["edit_file"], "nothing after the failed change was started");
+  assert.deepEqual(host.ran.map(([name]) => name), ["edit_file", "read_file", "read_file"], "the reads after a failed change still run");
 
   // The same read twice, and a call that has to be asked about, are never started ahead.
   host = slowHost();

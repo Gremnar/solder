@@ -17,7 +17,8 @@ node live/run.js --model <id> [--runs 3] [--only typo,rename] [--skip bugs12] [-
 - **The Assist lane:** `--tool-models <regex>` makes every model that doesn't match an Assist model (plain text, tool requests
   written in the reply). With no `--assist-block`, there are no sessions: every request carries the conversation over.
 - **The Assist lane's failures, made to happen:** `--cut N` stops the task's Nth reply partway (its stream ends with no finish), and
-  `--break N` takes the arguments out of the second request of the Nth reply that holds two or more. The run then shows whether
+  `--break N` takes the arguments out of the second request of the Nth reply that holds two or more. On either lane, `--miss N` makes the
+  task's Nth edit not find its text. The run then shows whether
   the task still got done: each line says how often a request was asked for again, a cut reply carried on from, and the
   model told of requests that didn't run.
 - **What a line and the table show:** tokens, requests, failed calls, and failed edits (`edit✗`: a first-try edit that missed). A line

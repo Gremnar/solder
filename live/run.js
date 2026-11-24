@@ -8,7 +8,7 @@
  *   node live/run.js --model <id> [--endpoint <url>] [--runs 3] [--only a,b] [--skip bugs12] [--parallel 4]
  *                    [--src <a copy of Solder's src>] [--label name] [--baseline label] [--effort low]
  *                    [--tool-models <regex>] [--assist-block <name>]   (the Assist lane: see live/README.md)
- *                    [--cut N] [--break N]   (the Assist lane's failures, made to happen: see live/README.md)
+ *                    [--cut N] [--break N] [--miss N]   (failures made to happen: see live/README.md)
  *
  * The key comes from SOLDER_LIVE_KEY (or "test"). Results go to live/results/<label>.jsonl (not in git).
  */
@@ -42,6 +42,8 @@ const twinModel = opt("twin", "");
 // whether the task still gets done, and what it cost.
 const cutAt = Number(opt("cut", "0"));
 const breakAt = Number(opt("break", "0"));
+// --miss N (either lane): the task's Nth edit_file doesn't find its text, as when the file isn't what the model thinks.
+const missAt = Number(opt("miss", "0"));
 const label = opt("label", `run-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 const baseline = opt("baseline");
 const only = opt("only") ? opt("only").split(",") : null;
@@ -81,6 +83,15 @@ async function once(scenario, run) {
     for (const [name, text] of Object.entries(scenario.skills)) fs.writeFileSync(path.join(skillsFolder, name + ".md"), String(text));
   }
   const { ws, host } = workspaceHost(root, S, typeof scenario.hooks === "function" ? scenario.hooks() : (scenario.hooks || {}), skillsFolder, !!scenario.readOnly);
+  if (missAt) {
+    // The Nth edit misses (said as Solder says it); every other call goes to the scenario's own stand-ins.
+    let edits = 0;
+    const own = ws.hooks.overrides?.edit_file;
+    ws.hooks.overrides = { ...(ws.hooks.overrides || {}), edit_file(/** @type {any} */ args) {
+      if (++edits === missAt) throw new S.tools.ToolError(S.prompt.RESULTS.notFound(this.shown(this.full(args.path)), 0, 0, 0, 0));
+      return own ? own.call(this, args) : this.tool("edit_file", args);
+    } };
+  }
   const client = new S.GatewayClient({ endpoint, apiKey: process.env.SOLDER_LIVE_KEY || "test" });
   let requests = 0;
   const reply = client.reply.bind(client);

@@ -30,9 +30,10 @@ it only when the request is about it.
 - Follow the project's instructions (AGENTS.md) below; the user's message wins if they conflict.
 - Make the smallest change that does the job, in the style of the code around it. Edits save at once (the \
 user can undo them), and you'll see any new problems they cause: fix what you broke before moving on.
-- Calls in one reply run in order and stop at the first that fails or is declined (a failed read doesn't \
-stop later reads). When you know several files or names you need, look at them in one reply (up to 8 reads), \
-not one per reply. Batch edits only when you know everything each one needs.
+- Calls in one reply run in order. When a change fails, the later changes to that same file are skipped, and \
+so is any move or removal after it; changes to other files still run. A call the user declines stops the rest. \
+When you know several files or names you need, look at them in one reply (up to 8 reads), not one per reply. \
+Batch edits only when you know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.
 - If a change could lose the user's work, or the request is unclear and reading the code can't settle \
@@ -186,6 +187,9 @@ function listed(items) {
 
 const TEXTS = {
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
+  /** A later change to a file whose earlier change in the same reply failed (changes to other files went ahead). */
+  notRunSameFile: "Not run: an earlier change to this file in the same reply failed, so this one was skipped. Get that \
+one right first, then send this one again.",
   notRunStopped: "Not run: the user stopped the reply before this call.",
   notRunFull: "Not run yet, only because this reply's results reached the size limit for one step. Call it again \
 in your next step, before you answer: nothing is wrong with it.",
@@ -507,9 +511,9 @@ request, like this:
 My extension runs it and sends you the result in my next message, and you can keep going like that for as many \
 steps as you need. When you say you'll do something, end that same reply with the request for it: I can't see a \
 step you only describe. You can put several requests in one reply, each in its own tool block, when you already know \
-everything each one needs. My extension runs them in order and stops at the \
-first one that fails or that I decline, so a later request can rely on the earlier ones having worked; a read that \
-fails doesn't stop the reads after it. Every result stays in our conversation, so keep outputs small: search before \
+everything each one needs. My extension runs them in order. If a change to a file fails, it skips the later \
+changes to that same file, and any move or removal after it, but still makes the changes to other files; if I \
+decline one, it stops there. A read that fails doesn't stop anything after it. Every result stays in our conversation, so keep outputs small: search before \
 reading, and for a big file you haven't seen, get its outline with symbols and read only the lines you need. To find \
 where a function, class or method is defined or used, use symbols rather than search. Read only what the task needs, \
 and never guess what a file says: read it. Make the smallest change that does the job, in the style of the code \

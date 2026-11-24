@@ -475,6 +475,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     const seen = new Set();
     /** @type {string | null} why the rest won't run */
     let skip = null;
+    // Files a change to which failed in this reply. A later change to the same file is skipped (it was written for
+    // the file as the failed one would have left it), and so is any move or removal (never done on the strength of a
+    // change that didn't happen). Changes to other files go ahead: stopping them all meant a miss at edit 3 of 20
+    // had the other 17 written out again, and on the Tool lane sent again with every step after.
+    /** @type {Set<string>} */
+    const failedFiles = new Set();
     /** @type {Stored[]} */
     const added = [];
     let batchChars = 0;
@@ -536,6 +542,10 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
       } else if (seen.has(fingerprint(name, parsed.args))) {
         result = { output: TEXTS.repeat, summary: "Not run again: " + label, failed: true };
+      } else if (failedFiles.size && (name === "move_item" || name === "remove_item")) {
+        result = { output: TEXTS.notRun, summary: "Not run: " + label, failed: true };
+      } else if ((name === "edit_file" || name === "write_file") && failedFiles.has(pathKey(parsed.args.path))) {
+        result = { output: TEXTS.notRunSameFile, summary: "Not run: " + label, failed: true };
       } else {
         seen.add(fingerprint(name, parsed.args));
         const more = !!editsTo[index] && editsTo.some((other, later) => later > index && within[later] && other === editsTo[index]);
@@ -547,7 +557,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         result = await work;
         // Arguments the tool doesn't take were left out: said once, so the next call can drop or rename them.
         if (parsed.ignored?.length) result = { ...result, output: result.output + "\n\n" + TEXTS.ignored(name, parsed.ignored) };
-        if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;
+        if (result.failed && !READ_ONLY.has(name) && !signal.aborted) {
+          // A no from you, or a move or removal that failed, stops everything after it. An edit or a write that
+          // failed stops only what was built on it.
+          if (/** @type {any} */ (result).declined || (name !== "edit_file" && name !== "write_file")) skip = TEXTS.notRun;
+          else failedFiles.add(pathKey(parsed.args.path));
+        }
         if (signal.aborted) skip = TEXTS.notRunStopped;
       }
       // `keep` (a folder's AGENTS.md, your note) isn't tool output: it survives the result being cut.
@@ -623,7 +638,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       if (answer.decision === "allow" && this._readOnlyNow(name)) return { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       if (answer.decision !== "allow") {
         return { output: TEXTS.declined + (note ? "\n\n" + TEXTS.userNote(note) : ""),
-          summary: "Declined: " + label + (note ? " · with your note" : ""), failed: true };
+          summary: "Declined: " + label + (note ? " · with your note" : ""), failed: true, declined: true };
       }
     }
     this.emit({ type: "running", chat: chat.id, id, label });
