@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Fix: an Assist model's tool request that couldn't be used was dropped without a word, sometimes with the ones after it.** When a reply held several requests and one in the middle couldn't be used (an argument missing, a tool that doesn't exist, text that couldn't be read), the ones before it ran and the model was told nothing about the rest. With a sentence after the requests, the bad one was taken for an example and skipped while the later ones still ran. Either way the model could report a refactor done with only part of it made. Now the requests before it run, the one that couldn't be used and those after it don't, and the model is told so with the results: which one, why, how many came after, and to send them again. The step in the panel says a later request wasn't run.
+- **Fix: an Assist model's tool request that couldn't be used was dropped without a word, sometimes with the ones after it.** When a reply held several requests and one in the middle couldn't be used (an argument missing, a tool that doesn't exist, text that couldn't be read, or the last one cut short at the length limit), the ones before it ran and the model was told nothing about the rest. With a sentence after the requests, the bad one was taken for an example and skipped while the later ones still ran. Either way the model could report a refactor done with only part of it made. Now the requests before it run, the one that couldn't be used and those after it don't, and the model is told so with the results: which one, why, how many came after, and to send them again. The step in the panel says a later request wasn't run.
 
 ## 0.3.9 (2026-11-23)
 

@@ -69,6 +69,11 @@ test("parser: a request that can't be used, among ones that can, is never droppe
   // An example in an explanation, in a reply with no real request, is still only text.
   parsed = parseReply('You would write:\n\n```tool\n{"tool": "read_file"}\n```\n\nand my extension answers with its lines.');
   assert.deepEqual([parsed.found, parsed.calls.length, parsed.problem], [false, 0, ""]);
+  // Cut off at the length limit partway through the last request: the one before it runs, and the cut one is said.
+  const tail = "```tool\n" + String.raw`{"tool": "write_file", "path": "two.ps1", "content": "Write-Host "hi"`;
+  parsed = parseReply(edit("one.js") + "\n\n" + tail, { cutOff: true });
+  assert.deepEqual([paths(parsed), parsed.problem, parsed.after], [["one.js"], "it was cut off before it ended", 0]);
+  assert.deepEqual(paths(parseReply(edit("one.js") + "\n\n" + edit("two.js"), { cutOff: true })), ["one.js", "two.js"], "whole requests in a cut-off reply still run");
 });
 
 test("parser: bare JSON at the end, a forgotten fence, several requests, a repeat, and a cut-off salvaged call", () => {

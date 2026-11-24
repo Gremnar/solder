@@ -279,7 +279,15 @@ function parseReply(reply, { cutOff = false } = {}) {
     if (!r.call) { problem = r.problem || "it couldn't be read"; unknown = /** @type {any} */ (r).unknown || ""; after = found.length - index - 1; break; }
     calls.push(r.call);
   }
-  if (cutOff) while (calls.length && calls[calls.length - 1].salvaged) calls.pop();
+  // Cut off at the length limit: a last call that had to be pieced together may be missing its end, so it isn't run.
+  // That's a request that couldn't be used, like any other: said, never dropped quietly.
+  if (cutOff) {
+    while (calls.length && calls[calls.length - 1].salvaged) {
+      calls.pop();
+      if (!problem) problem = "it was cut off before it ended";
+      else after++;
+    }
+  }
   // The same tool with the same arguments twice (written twice) runs once.
   const seen = new Set();
   const unique = calls.filter((c) => {
