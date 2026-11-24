@@ -1355,6 +1355,17 @@ class SolderPanel {
         { const chat = this.chat;
           if (!(await this.confirmSwitch(chat, String(message.id || "")))) { this.post(); return; }
           chat.model = message.id; await this.store.save(chat); this.post(); return; }
+      case "defaultModel": {
+        // From the model picker's right-click menu: the default for new chats, as Settings → Connection sets it.
+        const id = String(message.id || "");
+        if (policy.locked("model")) { vscode.window.showInformationMessage("Your organization sets the model Solder uses."); return; }
+        if (!this.models.some((m) => m.id === id)) return;
+        await solderSettings().update("model", id, vscode.ConfigurationTarget.Global);
+        const name = this.models.find((m) => m.id === id)?.name || id;
+        vscode.window.showInformationMessage(`Solder: ${name} is now the default model for new chats.`);
+        this.post();
+        return;
+      }
       case "effort":
         if (policy.locked("effort")) { vscode.window.showInformationMessage("Your organization sets the effort Solder uses."); return; }
         this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
@@ -1863,6 +1874,8 @@ class SolderPanel {
       assist: laneOf(current, settings) === "assist",
       modelsProblem: this.modelsProblem,
       model: current,
+      // The default for new chats (and chats that haven't picked a model): marked in the picker, and set from it.
+      defaultModel: String(settings.model || ""),
       effort: settings.effortLocked ? settings.effort : chat.effort || settings.effort,
       locks: { model: settings.modelLocked, effort: settings.effortLocked, endpoint: policy.locked("endpoint") },
       busy: this.engine.busy && !this.awayBusy(),

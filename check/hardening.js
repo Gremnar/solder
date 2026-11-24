@@ -385,6 +385,28 @@ async function main() {
       }
     }
 
+    // ---- the model picker's right-click menu: Set as default
+    {
+      const toldBefore = told.length;
+      const before = raw().inspect("model")?.globalValue;
+      panel.models = [{ id: "model-a", name: "Model A" }, { id: "model-b", name: "Model B" }];
+      try {
+        await panel.onMessage({ type: "defaultModel", id: "model-b" });
+        check("Set as default makes it the default for new chats, says so, and the picker marks it", raw().get("model") === "model-b"
+          && told.slice(toldBefore).some((text) => /Model B is now the default model for new chats/.test(text)) && posted.filter((m) => m.type === "state").at(-1)?.defaultModel === "model-b",
+          [raw().get("model"), told.slice(toldBefore)]);
+        await panel.onMessage({ type: "defaultModel", id: "not-offered" });
+        check("... a model the gateway doesn't offer isn't made the default", raw().get("model") === "model-b");
+        policy.apply(new Map([["model", "model-a"]]), "");
+        await panel.onMessage({ type: "defaultModel", id: "model-b" });
+        check("... and when your organization sets the model, it's refused, with why", raw().inspect("model")?.globalValue === "model-b"
+          && told.some((text) => /Your organization sets the model/.test(text)));
+      } finally {
+        policy.apply(new Map(), "");
+        await raw().update("model", before, vscode.ConfigurationTarget.Global);
+      }
+    }
+
     // ---- settings held to their ranges where they're used
     const ranges = panel.settings();
     check("the step limit and Compact at are within their ranges, whatever the setting says", ranges.maxRounds >= 1 && ranges.maxRounds <= 100 && ranges.compactAt >= 30_000 && ranges.compactAt <= 2_000_000, [ranges.maxRounds, ranges.compactAt]);

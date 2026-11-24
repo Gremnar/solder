@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Set the default model from the model picker.** Right-click a model in the picker beside Send (or press **Shift+F10** on it) for **Use in this chat** and **Set as default**. The default is what new chats start on, as **Settings → Connection** sets it, and it's marked *default* in the list. When your organization sets the model, there's nothing to change.
+
 ## 0.3.12 (2026-11-24)
 
 - **Solder asks before a long chat is moved to an Assist model that couldn't be sent all of it.** An Assist model that doesn't hold a chat yet (one you switch to, or the one offered when your allowance runs out) is sent the conversation in one message, up to **Assist carry-over tokens**: past that, the oldest part, your first request among it, was left out without a word. When that would happen, Solder now says how big the chat is and how much would go, and offers **Summarise, then switch**: the model the chat is on now writes a summary, and the new model is sent that and the recent turns. **Switch anyway** goes ahead as before. A chat that fits, or a switch to a Tool model (which is sent the whole chat, trimmed and summarised as ever), isn't asked about.

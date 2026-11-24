@@ -1245,7 +1245,7 @@
     const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button role="menuitemradio" aria-checked="${m.id === state.model}" tabindex="-1" data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
         `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Assist: doesn't use your allowance, and a message may take more steps. Each step is a few seconds slower, and there's no thinking level.">Assist</span>` : ""}</span>` +
-        `${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
+        `${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}${m.id === state.defaultModel ? `<span class="grey" title="New chats start on it. Right-click a model to change it.">default</span>` : ""}</button>`).join("")
       : `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No models listed.</div>`;
     if (models !== shownModels) { shownModels = models; $("model-menu").innerHTML = models; } // an open menu doesn't flicker
     // effort (Assist models take no thinking level)
@@ -1442,6 +1442,60 @@
     // Rename and delete ask in VS Code itself; fork opens the copy: the dropdown closes for those.
     if (action === "rename" || action === "delete" || action === "fork") closeMenus();
     vscode.postMessage({ type: "chatAction", action, id });
+  });
+
+  // ---- the right-click menu on a model in the model picker: use it in this chat, or make it the default ----
+  const modelActions = $("model-actions");
+  /** The model's row it was opened on (focus goes back to it). @type {HTMLElement | null} */
+  let modelFor = null;
+  /** @param {HTMLElement} row @param {number} x @param {number} y */
+  function openModelActions(row, x, y) {
+    modelFor = row;
+    const isDefault = row.dataset.model === state?.defaultModel;
+    modelActions.innerHTML = `<button role="menuitem" tabindex="-1" data-model-action="use">Use in this chat</button>` +
+      (isDefault ? `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">The default for new chats</div>`
+        : `<button role="menuitem" tabindex="-1" data-model-action="default" title="New chats start on it (and chats that haven't picked a model)">Set as default</button>`);
+    modelActions.classList.remove("hidden");
+    const width = modelActions.offsetWidth;
+    const height = modelActions.offsetHeight;
+    modelActions.style.left = Math.max(4, Math.min(x, window.innerWidth - width - 4)) + "px";
+    modelActions.style.top = Math.max(4, Math.min(y, window.innerHeight - height - 4)) + "px";
+    /** @type {HTMLElement | null} */ (modelActions.querySelector("button"))?.focus();
+  }
+  function closeModelActions(/** @type {boolean} */ refocus) {
+    if (modelActions.classList.contains("hidden")) return;
+    modelActions.classList.add("hidden");
+    if (refocus && modelFor && document.body.contains(modelFor)) modelFor.focus();
+  }
+  $("model-menu").addEventListener("contextmenu", (event) => {
+    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-model]"));
+    event.preventDefault();
+    if (row) openModelActions(row, event.clientX, event.clientY);
+  });
+  $("model-menu").addEventListener("keydown", (event) => {
+    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-model]"));
+    if (!row || !(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const box = row.getBoundingClientRect();
+    openModelActions(row, box.left + 24, box.top);
+  });
+  modelActions.addEventListener("keydown", (event) => {
+    const items = /** @type {HTMLElement[]} */ ([...modelActions.querySelectorAll("button")]);
+    const at = items.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeModelActions(true); return; }
+    if (event.key === "Tab") { event.preventDefault(); closeModelActions(true); return; }
+    const to = event.key === "ArrowDown" ? (at + 1) % items.length : event.key === "ArrowUp" ? (at <= 0 ? items.length - 1 : at - 1) : -1;
+    if (to >= 0 && items.length) { event.preventDefault(); items[to].focus(); }
+  });
+  modelActions.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const button = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest("[data-model-action]"));
+    if (!button || !modelFor) return;
+    const id = modelFor.dataset.model;
+    closeModelActions(false);
+    closeMenus();
+    vscode.postMessage(button.dataset.modelAction === "default" ? { type: "defaultModel", id } : { type: "model", id });
   });
 
   // ---- the right-click menu on a file's name in an answer: copy, copy as path, open, show in the file explorer ----
@@ -2124,6 +2178,7 @@
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
     if (!target.closest("#path-actions")) closePathActions(false);
+    if (!target.closest("#model-actions")) closeModelActions(false);
     const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-review-task],[data-preview],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
