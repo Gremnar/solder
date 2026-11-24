@@ -706,6 +706,20 @@ class WorkspaceTools {
       return { output: RESULTS.noMatches(query, args.glob || ""), summary: `Searched "${short(query)}" · no matches` };
     }
     let note = incomplete ? "\n\n" + RESULTS.searchIncomplete(SEARCH_MS / 1000) : "";
+    // With the lines around each match: read from the files as the editor has them (unsaved changes included).
+    const around = Math.min(5, Math.max(0, Math.round(Number(args.context_lines) || 0)));
+    if (around) {
+      const shown = withContext(lines.slice(0, MAX_SEARCH_LINES), (file) => {
+        try {
+          const full = this.resolve(file).full;
+          const open = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath.toLowerCase() === full.toLowerCase());
+          const text = open ? open.getText() : decodeText(fs.readFileSync(full));
+          return text === null ? null : text.split(/\r\n|\r|\n/);
+        } catch { return null; }
+      }, around, MAX_SEARCH_LINES);
+      return { output: shown + (count > MAX_SEARCH_LINES ? "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES) : "") + note,
+        summary: `Searched "${short(query)}" · ${count > MAX_SEARCH_LINES ? MAX_SEARCH_LINES + "+" : count} matches, with the lines around them` };
+    }
     if (count > MAX_SEARCH_LINES) {
       lines = lines.slice(0, MAX_SEARCH_LINES);
       note += "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES);
@@ -2432,6 +2446,51 @@ function planEdit(shown, text, args, eol) {
   return { old, found };
 }
 
+/**
+ * Search matches (path:line:text) with the lines around each: for every file, its stretches of lines (those around
+ * matches near each other joined into one), numbered as read_file numbers them. Up to `max` lines in all; the matches
+ * left over are counted. A file that can't be read keeps its bare matching lines.
+ * @param {string[]} matches @param {(file: string) => string[] | null} linesOf @param {number} around @param {number} max
+ */
+function withContext(matches, linesOf, around, max) {
+  /** @type {Map<string, {lines: number[], bare: string[]}>} */
+  const files = new Map();
+  for (const match of matches) {
+    const parts = /^(.*?):(\d+):/.exec(match);
+    if (!parts) continue;
+    const entry = files.get(parts[1]) ?? { lines: [], bare: [] };
+    entry.lines.push(Number(parts[2]));
+    entry.bare.push(match);
+    files.set(parts[1], entry);
+  }
+  /** @type {string[]} */
+  const out = [];
+  let used = 0;
+  let left = 0;
+  for (const [file, entry] of files) {
+    if (used >= max) { left += entry.lines.length; continue; }
+    let text = linesOf(file);
+    if (!text) { out.push(entry.bare.join("\n")); used += entry.bare.length; continue; }
+    if (text.length > 1 && text[text.length - 1] === "") text = text.slice(0, -1); // the line break that ends the file isn't a line
+    // Stretches: each match's lines, joined with the next when they touch or overlap.
+    /** @type {[number, number, number][]} first line, last line, matches in it */
+    const stretches = [];
+    for (const line of [...new Set(entry.lines)].sort((a, b) => a - b)) {
+      const from = Math.max(1, line - around);
+      const to = Math.min(text.length, line + around);
+      const last = stretches[stretches.length - 1];
+      if (last && from <= last[1] + 1) { last[1] = Math.max(last[1], to); last[2]++; } else stretches.push([from, to, 1]);
+    }
+    for (const [from, to, count] of stretches) {
+      if (used >= max) { left += count; continue; }
+      const shown = text.slice(from - 1, to).map((line, k) => `${from + k}\t${line.length > 300 ? line.slice(0, 300) + "…" : line}`);
+      out.push(RESULTS.searchAround(file, from, to) + "\n" + shown.join("\n"));
+      used += shown.length + 1;
+    }
+  }
+  return out.join("\n\n") + (left ? "\n\n" + RESULTS.searchAroundCapped(left) : "");
+}
+
 /** Text copied from read_file with its line numbers ("12\t…" on every line, counting up): without them, else null. */
 function withoutLineNumbers(/** @type {string} */ text, /** @type {string} */ eol) {
   const lines = text.split(eol);
@@ -2566,4 +2625,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, planEdit, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, planEdit, withContext, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

@@ -211,6 +211,12 @@ class Workspace {
       });
     }
     if (!hits.length) return { output: this.R.noMatches(query, args.glob || ""), summary: "no matches" };
+    // With the lines around each match, as Solder's own search gives them (when this src has it).
+    const around = Math.min(5, Math.max(0, Math.round(Number(args.context_lines) || 0)));
+    if (around && this.S.tools.withContext) {
+      const shown = this.S.tools.withContext(hits.slice(0, SEARCH_LINES), (/** @type {string} */ file) => fs.readFileSync(this.full(file), "utf8").split(/\r\n|\r|\n/), around, SEARCH_LINES);
+      return { output: shown + (hits.length > SEARCH_LINES ? "\n\n" + this.R.searchCapped(SEARCH_LINES) : ""), summary: `${hits.length} matches` };
+    }
     return { output: hits.slice(0, SEARCH_LINES).join("\n") + (hits.length > SEARCH_LINES ? "\n\n" + this.R.searchCapped(SEARCH_LINES) : ""), summary: `${hits.length} lines` };
   }
 

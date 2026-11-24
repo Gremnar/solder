@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "86ec39a9a6e8e36e";
+const PINNED = "01b5c3577e938840";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -28,7 +28,7 @@ const RESULT_SAMPLES = {
   skillText: [["python_scripts", "WHEN", "TEXT"], ["bare", "", "TEXT"]], noMatches: [["q", ""], ["q", "*.py"]],
   searchCapped: [[200]], noFiles: [["*.x"]], filesCapped: [[300]], manyMatches: [[3, "a.js", [4, 9, 12]]],
   notFound: [["a.js", 0, 0, 0, 0], ["a.js", 28, 34, 2, 3], ["a.js", 5, 9, 1, 1]], nearby: [[["src/a.js", "lib/a.js"], true], [["src/a.ts"], false]],
-  folderHas: [[["lib/", "a.js"], 2], [["a.js"], 150]], searchTimedOut: [[30]], searchIncomplete: [[30]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]], editedAll: [["a.js", 1, [4]], ["a.js", 14, [1, 2, 2, 9, 12, 13, 20, 21, 22, 30, 31, 40]]],
+  folderHas: [[["lib/", "a.js"], 2], [["a.js"], 150]], searchTimedOut: [[30]], searchIncomplete: [[30]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]], searchAround: [["src/a.js", 3, 9]], searchAroundCapped: [[1], [12]], editedAll: [["a.js", 1, [4]], ["a.js", 14, [1, 2, 2, 9, 12, 13, 20, 21, 22, 30, 31, 40]]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
   noProblems: [[""], ["a.js"]], alsoText: [["total"]], pastEnd: [["a.js", 18], ["b.js", 1]], changedOnDisk: [["a.js"]], notChecked: [["src/x.ts"]], notReported: [["src/x.ps1"]], notSaved: [["a.js"]], notWritable: [["a.js"]], sameContent: [["a.js"]], moveExists: [["b.js"]], moveUnsaved: [["a.js"]], moveMentions: [["old-helpers", ["src/app.js:1: require('./old-helpers')"]]], moved: [[false, "a.js", "lib/a.js", null], [true, "src", "backup/src", 12]], moreProblems: [[4]], removeNoTrash: [["big"]], removed: [["a.js", null], ["src", 1], ["src", 1200]],
 };
@@ -138,7 +138,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "4cfc7a91f11113a3";
+const ASSIST_PINNED = "a873704dc9df4c5e";
 
 function assistEverything() {
   return {

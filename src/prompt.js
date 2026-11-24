@@ -117,8 +117,9 @@ path:line: text, up to 200.", {
     query: { type: "string", description: "The text to find." },
     regex: { type: "boolean", description: "True to read query as a regular expression." },
     glob: { type: "string", description: "Only search files matching this, such as src/**/*.ts or *.py." },
+    context_lines: { type: "integer", description: "Also show this many lines before and after each match (1 to 5), numbered as read_file numbers them, when it's the code around a match you need rather than the whole file." },
     docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead: the best \
-passages for the query (a few key words, or a short question), in any order (regex and glob don't apply)." },
+passages for the query (a few key words, or a short question), in any order (regex, glob and context_lines don't apply)." },
   }, ["query"]],
   find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), \
 up to 300.", {
@@ -342,6 +343,9 @@ and unchanged. Follow it from there.`,
   noMatches: (/** @type {string} */ query, /** @type {string} */ glob) => `No matches for "${query}"${glob ? ` in ${glob}` : ""}. \
 If you were checking whether something already exists, it probably doesn't: carry on without it rather than \
 searching again with other words.`,
+  /** With context_lines: a file's stretch of lines around its matches, headed by where it is. */
+  searchAround: (/** @type {string} */ file, /** @type {number} */ from, /** @type {number} */ to) => `${file} (lines ${from}–${to}):`,
+  searchAroundCapped: (/** @type {number} */ left) => `(${left} more match${left === 1 ? "" : "es"} not shown: narrow the search, or ask for fewer lines around each.)`,
   searchCapped: (/** @type {number} */ limit) =>
     `(The first ${limit} matching lines; narrow the search with glob or a longer query.)`,
   badRegex: "That regular expression isn't valid.",

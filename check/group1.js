@@ -54,6 +54,14 @@ async function main() {
     check(`search glob ${glob}`, /g1\/Scripts\/Deploy\.ps1:3:/.test(r.output), r.output.slice(0, 200));
   }
 
+  // Search with the lines around each match: a stretch a place, numbered as read_file numbers them.
+  r = await tools.search({ query: "Get-Report -Days", glob: "g1/Scripts/*.ps1", context_lines: 1 }, ctx.signal);
+  log("around:", r.output);
+  check("search with context_lines shows the lines around the match, numbered", r.output === "g1/Scripts/Deploy.ps1 (lines 2–3):\n2\t. \"$PSScriptRoot\\lib\\Get-Report.ps1\"\n3\tGet-Report -Days 7", r.output);
+  r = await tools.search({ query: "Get-Report", glob: "g1/**", context_lines: 9 }, ctx.signal);
+  check("... at most five either side, each file under its own heading, and every match still there", /g1\/Scripts\/lib\/Get-Report\.ps1 \(lines 1–4\):\n1\tfunction Get-Report \{/.test(r.output)
+    && /g1\/notes\.txt \(lines 1–\d\):\n1\tGet-Report notes/.test(r.output) && /Deploy\.ps1 \(lines 1–3\):/.test(r.output), r.output);
+
   // Looks run side by side (the engine runs a reply's reads a few at a time): each gives what it gives by itself.
   {
     const looks = [["read_file", { path: "g1/Scripts/Deploy.ps1" }], ["read_file", { path: "g1/Scripts/lib/Get-Report.ps1" }], ["search", { query: "Get-Report", glob: "g1/**" }],

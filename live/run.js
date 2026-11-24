@@ -154,6 +154,7 @@ async function once(scenario, run) {
     summarisedBy: summarisedBy.length ? summarisedBy : undefined, compacted: !!chat.compaction,
     // First-try edits: how many edit_file calls there were, and how many of them failed.
     editCalls: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file").length, editFails: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file" && c.failed).length,
+    searches: ws.calls.filter((/** @type {any} */ c) => c.name === "search").length, searchesAround: ws.calls.filter((/** @type {any} */ c) => c.name === "search" && Number(c.args.context_lines) > 0).length,
     editsAll: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file" && (c.args.replace_all === true || c.args.replace_all === "true")).length,
     // The most calls one reply made, and the most changes among them (how far a model batches).
     maxCalls: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.length)),
@@ -173,7 +174,7 @@ async function once(scenario, run) {
   fs.rmSync(root, { recursive: true, force: true });
   if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +
-    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.editCalls ? `  edits ${row.editCalls - row.editFails}/${row.editCalls}` + (row.editsAll ? ` (${row.editsAll} every place)` : "") : "") + (row.maxChanges > 1 ? `  ${row.maxChanges} changes in a reply` : "") + (row.repairs ? `  asked again ${row.repairs}` : "") + (row.carriedOn ? `  carried on ${row.carriedOn}` : "") + (row.unread ? `  told of unrun requests ${row.unread}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
+    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.editCalls ? `  edits ${row.editCalls - row.editFails}/${row.editCalls}` + (row.editsAll ? ` (${row.editsAll} every place)` : "") : "") + (row.searchesAround ? `  ${row.searchesAround} of ${row.searches} searches with lines around` : "") + (row.reads ? `  ${row.reads} reads` : "") + (row.maxChanges > 1 ? `  ${row.maxChanges} changes in a reply` : "") + (row.repairs ? `  asked again ${row.repairs}` : "") + (row.carriedOn ? `  carried on ${row.carriedOn}` : "") + (row.unread ? `  told of unrun requests ${row.unread}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
   return row;
 }
 

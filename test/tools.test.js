@@ -654,3 +654,36 @@ test("an edit worked out: one place as ever, or with replace_all every place old
   assert.throws(() => planEdit("a.js", text, { old_text: "x", new_text: "x", replace_all: true }, "\n"), ToolError);
   assert.throws(() => planEdit("a.js", text, { old_text: "", new_text: "x", replace_all: true }, "\n"), ToolError);
 });
+
+test("search with the lines around each match: a stretch a place, numbered as read_file numbers them, near ones joined", () => {
+  const { withContext } = require("../src/tools.js");
+  const files = {
+    "src/a.js": Array.from({ length: 30 }, (_, i) => `line ${i + 1}` + (i + 1 === 5 || i + 1 === 7 || i + 1 === 20 ? " MATCH" : "")),
+    "C:\other\b.ps1": ["# top", "$x = MATCH", "# end"],
+  };
+  const linesOf = (/** @type {string} */ file) => /** @type {any} */ (files)[file] ?? null;
+  const matches = ["src/a.js:5:line 5 MATCH", "src/a.js:7:line 7 MATCH", "src/a.js:20:line 20 MATCH", "C:\other\b.ps1:2:$x = MATCH", "gone.txt:3:a MATCH here"];
+  const out = withContext(matches, linesOf, 2, 200);
+  const blocks = out.split("\n\n");
+  assert.equal(blocks.length, 4, out);
+  // Lines 5 and 7, two lines around each: one stretch, 3 to 9, each line with its number and a tab.
+  assert.equal(blocks[0], "src/a.js (lines 3–9):\n" + [3, 4, 5, 6, 7, 8, 9].map((n) => `${n}\tline ${n}` + (n === 5 || n === 7 ? " MATCH" : "")).join("\n"));
+  assert.ok(blocks[1].startsWith("src/a.js (lines 18–22):\n18\tline 18\n"));
+  // A full Windows path keeps its drive letter's colon; the file's ends are the stretch's limits.
+  assert.equal(blocks[2], "C:\other\b.ps1 (lines 1–3):\n1\t# top\n2\t$x = MATCH\n3\t# end");
+  // A file that can't be read keeps its bare matching line.
+  assert.equal(blocks[3], "gone.txt:3:a MATCH here");
+  // Up to so many lines in all: what's left over is counted, not dropped without a word.
+  const capped = withContext(matches, linesOf, 2, 8);
+  assert.ok(capped.startsWith("src/a.js (lines 3–9):"));
+  assert.match(capped, /\(3 more matches not shown: narrow the search, or ask for fewer lines around each\.\)$/);
+  assert.ok(!capped.includes("lines 18–22"));
+  // A very long line is cut, so a minified file can't fill the result.
+  const long = withContext(["m.js:1:x"], () => ["x".repeat(5000)], 1, 200);
+  assert.ok(long.length < 400 && long.endsWith("…"));
+  // What an edit can then be made from: old_text copied with these numbers is read without them (as from read_file).
+  const { planEdit } = require("../src/tools.js");
+  const text = files["src/a.js"].join("\n");
+  const plan = planEdit("src/a.js", text, { old_text: "5\tline 5 MATCH\n6\tline 6", new_text: "5\tline five\n6\tline 6" }, "\n");
+  assert.equal(text.slice(0, plan.found.start) + plan.found.replaced + text.slice(plan.found.start + plan.found.length), text.replace("line 5 MATCH", "line five"));
+});

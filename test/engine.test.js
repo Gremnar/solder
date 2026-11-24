@@ -825,7 +825,11 @@ test("where the tokens went: every request's prompt tokens shared out by kind, s
   assert.equal(now.signatures, JSON.stringify(signature).length);
 
   // b re-read lines of a that were still whole in the chat; e read a again after an edit (fair); c was new.
-  assert.deepEqual(repeatReads(chat), { reads: 4, again: 1, againTokens: 923, afterCut: 0 }); // 4,000 characters, at this chat's token ratio (0.92: the tools' definitions are part of it)
+  // 4,000 characters at this chat's token ratio (which goes by the size of what was sent, the tools' definitions included,
+  // so it isn't a number to write down here: it moved every time a tool's description did).
+  const again = repeatReads(chat);
+  assert.deepEqual({ ...again, againTokens: 0 }, { reads: 4, again: 1, againTokens: 0, afterCut: 0 });
+  assert.equal(again.againTokens, Math.round(1000 * (chat.tokenRatio || 1)));
   // (a copy cut because it was read again was whole when that happened: it still counts as a repeat.)
   delete chat.messages.find((m) => m.tool_call_id === "a").meta.superseded; // cut for space instead, before b read it again
   assert.deepEqual(repeatReads(chat), { reads: 4, again: 0, againTokens: 0, afterCut: 1 });
