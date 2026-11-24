@@ -535,8 +535,14 @@ const MESSAGE_LEAD = "Here's my message:";
 function assistSetup({ workspace, folders = [], os = "Windows", instructions = [], rules = "", docs = [], skills = [], skillsFolder = "", readOnly = false }) {
   if (readOnly) skillsFolder = "";
   const lines = Object.entries(TOOLS).filter(([name]) => !readOnly || READ_ONLY.has(name)).map(([name, [description, properties, required]]) => {
-    const args = Object.keys(properties).map((arg) => /** @type {string[]} */ (required).includes(arg) ? arg : `${arg} (optional)`);
-    return `- ${name}: ${assistText(description)}` + (args.length ? ` Arguments: ${args.join(", ")}` : "");
+    // Each argument as the Tool lane's definitions give it: its name, whether it's needed, what kind of value it
+    // takes and what it means. Names alone left the meaning to be guessed (what glob covers, what docs does).
+    const args = Object.entries(/** @type {Record<string, any>} */ (properties)).map(([arg, schema]) => {
+      const kind = schema.enum ? schema.enum.join(" or ") : schema.type === "boolean" ? "true or false" : schema.type === "integer" ? "a whole number" : "";
+      const notes = [/** @type {string[]} */ (required).includes(arg) ? "" : "optional", kind].filter(Boolean).join(", ");
+      return `  - ${arg}${notes ? ` (${notes})` : ""}: ${assistText(schema.description)}`;
+    });
+    return `- ${name}: ${assistText(description)}` + (args.length ? "\n" + args.join("\n") : "");
   });
   const where = folders.length > 1
     ? `My workspace folders are ${folders[0]} (the main one) and ${folders.slice(1).join(", ")}. Relative paths are \
@@ -580,6 +586,7 @@ request, or give me your answer.)"],
   ["Ask the user to save it first.", "Ask me to save it first."],
   ["Never overwrites; the user can undo it.", "Never overwrites; I can undo it."],
   ["The user is asked first, and can undo it.", "I'm asked first, and can undo it."],
+  ["True to search the user's docs folders (see Docs) instead", "True to search my docs folders (the ones I list below, when I have any) instead"],
 ];
 
 const ASSIST = {
