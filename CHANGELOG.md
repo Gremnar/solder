@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.10 (2026-11-24)
 
 - **A reply's edits are checked for problems once, together.** After an edit, Solder waits a moment for VS Code's language support and reports any new errors in the file. Several edits to one file already shared one check; edits to different files each waited for their own, so a reply that changed twenty files waited twenty times, and reported the errors a half-made change always has (a function given a new parameter before its callers are updated). Every file a reply edits is now checked at the end of its edits, all at once.
 - **A change that fails no longer stops the changes to other files.** When one call in a reply failed, every call after it was skipped. Now that a reply can carry twenty edits, a miss at the third meant the other seventeen were written out and sent again. A failed edit or write now stops only what was built on it: later changes to the same file, and any move or removal after it. Changes to other files go ahead, and so do reads. A change you decline still stops everything after it, and so does a move or a removal that fails. In live runs with one edit made to miss, tasks finished every time on both kinds of model (it was 14 of 16), for about a fifth fewer tokens on a Tool model.
