@@ -46,6 +46,9 @@ const breakAt = Number(opt("break", "0"));
 const missAt = Number(opt("miss", "0"));
 const label = opt("label", `run-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 const baseline = opt("baseline");
+// --chats: each run's chat is saved beside the results (live/results/<label>.<scenario>.<run>.chat.json), to see what
+// was kept, cut or summarised when a run goes wrong.
+const saveChats = argv.includes("--chats");
 const only = opt("only") ? opt("only").split(",") : null;
 const skip = opt("skip") ? opt("skip").split(",") : [];
 const resultsDir = path.join(__dirname, "results");
@@ -182,6 +185,7 @@ async function once(scenario, run) {
     raw: why ? chat.messages.filter((/** @type {any} */ m) => m.meta?.raw).slice(-4).map((/** @type {any} */ m) => String(m.meta.raw).slice(0, 700)) : undefined,
   };
   fs.appendFileSync(resultsFile, JSON.stringify(row) + "\n");
+  if (saveChats) fs.writeFileSync(path.join(resultsDir, `${label}.${scenario.name}.${run}.chat.json`), JSON.stringify(chat));
   fs.rmSync(root, { recursive: true, force: true });
   if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +

@@ -188,7 +188,11 @@ class Workspace {
       size += text.length + 1;
     }
     const partial = start > 1 || end < total;
-    return { output: (partial ? this.R.readPart(start, end, total) + "\n" : "") + out.join("\n"), summary: `Read ${shown}` };
+    // The summary says which lines came back, as Solder's own does: the engine goes by it to tell a read that covers an
+    // earlier one from a read of other lines. (Without it every read here counted as the whole file, so reading lines
+    // 400 to 900 cut the earlier copy of lines 1 to 617 as "read again".)
+    return { output: (partial ? this.R.readPart(start, end, total) + "\n" : "") + out.join("\n"),
+      summary: `Read ${shown}` + (partial ? ` · lines ${start}–${end} of ${total}` : ` · ${total} lines`) };
   }
 
   search(/** @type {any} */ args) {

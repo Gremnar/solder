@@ -54,6 +54,13 @@ async function main() {
     check(`search glob ${glob}`, /g1\/Scripts\/Deploy\.ps1:3:/.test(r.output), r.output.slice(0, 200));
   }
 
+  // A read's summary says which lines came back: the engine goes by it to tell a later read that covers this one
+  // (the older copy is then cut) from a read of other lines (it isn't).
+  r = await run("read_file", { path: "g1/Scripts/lib/Get-Report.ps1", start_line: 2, end_line: 3 });
+  check("a read of part of a file says which lines, in the words the engine looks for", /lines 2–3 of \d+$/.test(r.summary) && /^\(lines 2–3 of \d+/.test(r.output), r.summary);
+  r = await run("read_file", { path: "g1/notes.txt" });
+  check("... and a read of all of it says how many lines, with no range", /· \d+ lines?$/.test(r.summary) && !/lines \d+–\d+ of/.test(r.summary), r.summary);
+
   // Search with the lines around each match: a stretch a place, numbered as read_file numbers them.
   r = await tools.search({ query: "Get-Report -Days", glob: "g1/Scripts/*.ps1", context_lines: 1 }, ctx.signal);
   log("around:", r.output);
