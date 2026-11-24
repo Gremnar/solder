@@ -169,3 +169,18 @@ test("a carry-over leaves out the whole 'setup changed' note, even when the setu
   assert.equal(stripSetup(ASSIST.setupChanged(setup) + "\n\n" + message), message);
   assert.equal(stripSetup(ASSIST.setupChanged("plain") + "\n\n" + message), message, "the plain case, as before");
 });
+
+test("the requests being written, for the panel's progress line: the tool, the file, how much so far", () => {
+  const { draftingRequests } = require("../src/assist.js");
+  const edit = request(JSON.stringify({ tool: "edit_file", path: "src/one.js", old_text: "a", new_text: "b" }));
+  const writing = "```tool\n" + String.raw`{"tool": "write_file", "path": "C:\\Scripts\\new.ps1", "content": "# Notes\n` + "```powershell" + String.raw`\nGet-Date\n` + "```" + String.raw`\nand more`;
+  const calls = draftingRequests("Renaming it.\n\n" + edit + "\n\n" + writing);
+  assert.deepEqual(calls.map((c) => [c.name, c.path]), [["edit_file", "src/one.js"], ["write_file", "C:\\Scripts\\new.ps1"]]);
+  assert.ok(calls[1].chars > 40, "the one still coming counts what has arrived");
+  assert.deepEqual(draftingRequests("Only words so far, and some `code`."), []);
+  assert.deepEqual(draftingRequests("See:\n\n```powershell\nGet-Date\n```\n"), [], "ordinary code is no request");
+  assert.deepEqual(draftingRequests('Let me look.\n\n```tool\n{"to').map((c) => c.name), [""], "before its name has arrived, it's still a request being written");
+  // A path inside the text being written isn't taken for the file the request is about.
+  const inner = draftingRequests(request(String.raw`{"tool": "write_file", "content": "{\"path\": \"other.js\"}", "path": "real.js"}`));
+  assert.equal(inner[0].path, "");
+});

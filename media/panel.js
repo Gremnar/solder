@@ -447,7 +447,7 @@
         `<div class="hint">Read only (read-only mode): Solder reads, searches and explains your code, but can't create, edit, move or delete files. It's how Solder starts; it never goes back to it by itself.</div>`),
       docs: section("",
         `<div class="docs-head"><span id="docs-status" class="status-pill${status.busy ? " busy" : ""}">${escape(status.text)}</span>` +
-        (s.docs.length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
+        (s.docs.length || (s.orgDocs || []).length ? `<button class="link" data-sact="reindex">Index again</button>` : "") + `</div>` +
         orgDocsHtml(s) +
         (s.docsLocked ? `<div class="hint">Your organization sets the docs folders.</div>`
           : `<div class="docs">${docs}</div><button class="link-button" data-sact="addDocs">Add a folder…</button>`) +
@@ -587,15 +587,15 @@
   }
 
   /** "Set by your organization", for a field the policy enforces. @param {string} field */
-  /** Settings' Default model choices: Tool models first (recommended), Assist models after (the fallback), when both are offered. @param {any} s */
+  /** Settings' Default model choices: Tool models, then Assist models, each under its own heading when both are offered. @param {any} s */
   function modelOptions(s) {
     const option = (/** @type {any} */ m) => `<option value="${escape(m.id)}"${m.id === s.model ? " selected" : ""}>${escape(m.name)}${m.name !== m.id ? ` (${escape(m.id)})` : ""}</option>`;
     const assist = new Set((s.kinds || []).filter((/** @type {any} */ k) => k.assist).map((/** @type {any} */ k) => k.id));
     const tools = s.models.filter((/** @type {any} */ m) => !assist.has(m.id));
     const assists = s.models.filter((/** @type {any} */ m) => assist.has(m.id));
     if (!tools.length || !assists.length) return s.models.map(option).join("");
-    return `<optgroup label="Recommended: Tool models">${tools.map(option).join("")}</optgroup>` +
-      `<optgroup label="Fallback: Assist models">${assists.map(option).join("")}</optgroup>`;
+    return `<optgroup label="Tool models">${tools.map(option).join("")}</optgroup>` +
+      `<optgroup label="Assist models (no allowance used)">${assists.map(option).join("")}</optgroup>`;
   }
 
   function orgMark(field) {
@@ -804,8 +804,8 @@
       const option = (/** @type {any} */ m, /** @type {number} */ i) =>
         `<button class="option${m.id === chosen ? " on" : ""}" role="radio" aria-checked="${m.id === chosen}" tabindex="${m.id === chosen || (!any && i === 0) ? 0 : -1}" data-pick-model="${escape(m.id)}">` +
         `<span class="radio" aria-hidden="true"></span><span>${escape(m.name)}</span>${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`;
-      // Both kinds on offer: the Tool models first (recommended), the Assist models folded away below (the fallback),
-      // with what tells them apart. One kind only: just the list.
+      // Both kinds on offer: the Tool models, then the Assist models (folded until one is chosen), with what tells
+      // them apart, said as it is: neither is the lesser choice. One kind only: just the list.
       const tools = s.models.filter((/** @type {any} */ m) => !m.assist);
       const assists = s.models.filter((/** @type {any} */ m) => m.assist);
       const both = tools.length > 0 && assists.length > 0;
@@ -815,16 +815,16 @@
           `<div class="hint" id="setup-hint">The models couldn't be listed, so type the id your gateway uses.</div>`
         : !both ? `<div class="pick" role="radiogroup" aria-labelledby="setup-title" aria-describedby="setup-intro">${s.models.map(option).join("")}</div>`
         : `<div class="pick" role="radiogroup" aria-labelledby="setup-title" aria-describedby="setup-intro">` +
-          `<div class="pick-head">Recommended: Tool models</div>${tools.map(option).join("")}` +
-          `<details class="fallback"${fallbackOpen ? " open" : ""}><summary>Fallback: Assist models (${assists.length})</summary>${assists.map((m, i) => option(m, tools.length + i)).join("")}</details></div>` +
+          `<div class="pick-head">Tool models</div>${tools.map(option).join("")}` +
+          `<details class="fallback"${fallbackOpen ? " open" : ""}><summary>Assist models (${assists.length}): no allowance used</summary>${assists.map((m, i) => option(m, tools.length + i)).join("")}</details></div>` +
           `<details class="compare" open><summary>Tool or Assist: what's the difference?</summary><table>` +
           `<thead><tr><th></th><th>Tool</th><th>Assist</th></tr></thead><tbody>` +
           [["Works by", "Using Solder's tools directly", "Writing requests as text for Solder to run"],
-            ["Speed", "Faster", "A few seconds more a step"],
-            ["Big tasks", "Most reliable", "May stall, or need a nudge"],
+            ["Each step", "Faster", "A few seconds more"],
+            ["A long task", "30 steps a message; older results are trimmed to save tokens", "60 steps a message; nothing is trimmed"],
             ["Effort", "Low to High", "None"],
             ["Your allowance", "Uses it", "Doesn't use it"],
-            ["Use it", "Every day", "When your allowance runs out: Solder offers to switch"]]
+            ["Good for", "Quick, exact changes", "Long work, and when your allowance is low"]]
             .map(([what, tool, assist]) => `<tr><th scope="row">${what}</th><td>${tool}</td><td>${assist}</td></tr>`).join("") +
           `</tbody></table></details>`;
     } else if (s.step === "docs") {
@@ -1232,7 +1232,7 @@
     $("model-button").title = locks.model ? "Set by your organization" : "Model";
     const models = state.models.length
       ? state.models.map((/** @type {any} */ m) => `<button role="menuitemradio" aria-checked="${m.id === state.model}" tabindex="-1" data-model="${escape(m.id)}" class="${m.id === state.model ? "active" : ""}">` +
-        `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Assist (fallback): doesn't use your allowance, but slower (a few seconds more per step) and less reliable on big tasks, with no thinking level. For when your allowance runs out: Solder offers to switch.">Assist</span>` : ""}</span>` +
+        `<span>${escape(m.name)}${m.assist ? ` <span class="tag" title="Assist: doesn't use your allowance, and a message may take more steps. Each step is a few seconds slower, and there's no thinking level.">Assist</span>` : ""}</span>` +
         `${m.name !== m.id ? `<span class="grey">${escape(m.id)}</span>` : ""}</button>`).join("")
       : `<div class="empty" role="menuitem" aria-disabled="true" tabindex="-1">No models listed.</div>`;
     if (models !== shownModels) { shownModels = models; $("model-menu").innerHTML = models; } // an open menu doesn't flicker
@@ -1727,6 +1727,21 @@
   const reveal = { received: "", shown: "", buffer: "", /** @type {{text: string, born: number}[]} */ spans: [],
     /** @type {any} */ timer: null, /** @type {any} */ pending: null };
 
+  /**
+   * How many characters appear this tick. A word at a time while they arrive at a reading pace; a backlog is drawn
+   * down by a share of itself, so however much came at once the screen is a second or two behind at most (a fixed 18 a
+   * tick left a long answer appearing for half a minute after it had finished). Once the reply is done and the next
+   * state is waiting (`pending`: the finished answer, an approval, an error, with their buttons), what's left
+   * appears within about half a second. With reduced motion, at once.
+   * @param {number} length what's waiting to appear @param {boolean} pending @param {boolean} calm
+   */
+  function revealTake(length, pending, calm) {
+    if (calm) return length;
+    if (pending) return Math.max(40, Math.ceil(length / 4));
+    if (length <= 360) return 1;
+    return Math.max(Math.min(18, Math.ceil(length / 30)), Math.ceil((length - 900) / 20));
+  }
+
   function resetReveal() {
     if (reveal.timer) clearTimeout(reveal.timer);
     Object.assign(reveal, { received: "", shown: "", buffer: "", spans: [], timer: null, pending: null });
@@ -1747,8 +1762,7 @@
     reveal.timer = null;
     const now = performance.now();
     if (reveal.buffer) {
-      const backlog = reveal.pending ? 120 : 360;
-      let take = reveal.buffer.length > backlog ? Math.min(18, Math.ceil(reveal.buffer.length / 30)) : 1;
+      let take = Math.min(reveal.buffer.length, revealTake(reveal.buffer.length, !!reveal.pending, window.matchMedia("(prefers-reduced-motion: reduce)").matches));
       const space = reveal.buffer.indexOf(" ", Math.max(1, take));
       if (space !== -1 && space - take <= 14) take = space + 1;
       else if (space === -1 && reveal.buffer.length <= 14) take = reveal.buffer.length;
@@ -2172,5 +2186,5 @@
   autosize();
   vscode.postMessage({ type: "ready" });
   // @ts-ignore: for the browser preview harness
-  window.__solder = { markdown, pasteAsChip, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
+  window.__solder = { markdown, pasteAsChip, revealTake, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
 })();

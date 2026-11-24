@@ -314,6 +314,34 @@ function visibleText(text, streaming = false) {
   return cuts.length ? out.trimEnd() : out;
 }
 
+/**
+ * While a reply streams: the tool requests written so far, as the Tool lane reports calls being written (the tool, how
+ * much of it there is, the file it's about), for the panel's "Writing … so far". The last one may still be coming.
+ * A reply's requests aren't shown as they're written, so without this a long write looked like nothing was happening.
+ * @param {string} text @returns {{name: string, chars: number, path: string}[]}
+ */
+function draftingRequests(text) {
+  const s = String(text || "");
+  /** @type {{name: string, chars: number, path: string}[]} */
+  const out = [];
+  let inside = -1;
+  for (const match of s.matchAll(FENCE)) {
+    const start = /** @type {number} */ (match.index);
+    if (start < inside) continue;
+    const from = start + match[0].length;
+    const body = s.slice(from, from + 600);
+    if (!(match[1].toLowerCase().startsWith("tool") || SURELY_TOOL.test(body))) continue;
+    inside = requestEnd(s, start);
+    const name = /["'“”]?(?:tool|tool_name|name|function|action)["'“”]?\s*:\s*["'“”]?([A-Za-z_-]+)/.exec(body)?.[1] || "";
+    // The file it's about, when that's said before any long text (which may hold a "path" of its own).
+    const long = body.search(/"(?:content|new_text|old_text)"\s*:/);
+    const found = /"(?:path|file_path|file|to)"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body);
+    const file = found && (long === -1 || found.index < long) ? found[1].replace(/\\\\/g, "\\") : "";
+    out.push({ name: canonical(name), chars: inside - from, path: file });
+  }
+  return out;
+}
+
 // ================================================================ rendering a stored chat as Assist turns
 
 /** The longest run of backticks in text, plus one (at least three), so output can't close its own fence. @param {string} text */
@@ -535,5 +563,5 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-module.exports = { findRequests, parseReply, visibleText, decode, salvage, canonical, fence, resultMessage, requestBlock,
+module.exports = { findRequests, parseReply, visibleText, draftingRequests, ALIASES, decode, salvage, canonical, fence, resultMessage, requestBlock,
   assistOutbound, carryOver, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };

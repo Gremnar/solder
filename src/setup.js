@@ -103,14 +103,15 @@ class SetupWizard {
           if (filter) { try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); } catch { /* shown in settings */ } }
           /** @type {Record<string, string>} */
           const names = config.get("modelNames", {}) || {};
-          // Each model's kind: Tool models first (recommended), Assist models after them (the fallback).
+          // Each model's kind: Tool models first, Assist models after them.
           const kinds = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
           view.models = ids.map((id) => ({ id, name: names[id] || id, assist: laneOf(id, kinds) === "assist" }))
             .sort((a, b) => Number(a.assist) - Number(b.assist));
           // The choice made for you is a Tool model: an Assist model only if you pick one (or there's nothing else).
           const tools = view.models.filter((/** @type {any} */ m) => !m.assist);
           // Of those, the best by its name (not a lite or mini one; the highest version), so nobody starts on the weakest.
-          if (!view.model || !ids.includes(view.model) || (tools.length && !tools.some((/** @type {any} */ m) => m.id === view.model))) {
+          // A model you already chose stays chosen, whichever kind it is (an Assist model used to be swapped for a Tool one).
+          if (!view.model || !ids.includes(view.model)) {
             view.model = bestModel((tools.length ? tools : view.models).map((/** @type {any} */ m) => m.id)) || view.model;
           }
           this.go(after("key"));

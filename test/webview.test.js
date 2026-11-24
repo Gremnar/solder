@@ -133,3 +133,26 @@ test("a code block ends only at a line of its own marks alone: a fence line insi
   assert.match(markdown("~~~\na\n~~~~\nb"), /<code>a<\/code><\/pre><p>b<\/p>/, "more marks than opened it closes it too");
   assert.match(markdown("````\n```\ninner\n```\n````"), /<code>```\ninner\n```<\/code>/, "fewer marks don't");
 });
+
+test("words appear at a reading pace, but the screen is never far behind: a backlog drains in seconds, and at once when the reply is done", () => {
+  const take = panel.revealTake;
+  const TICK = 30;
+  /** How long a backlog takes to appear, in ms, when nothing more arrives. */
+  const drain = (/** @type {number} */ length, /** @type {boolean} */ pending) => {
+    let ticks = 0;
+    while (length > 0 && ticks < 100_000) { length -= Math.min(length, take(length, pending, false)); ticks++; }
+    return ticks * TICK;
+  };
+  assert.equal(take(200, false, false), 1, "a little waiting: one word at a time");
+  assert.equal(take(600, false, false), 18, "a modest backlog: the pace it always had");
+  // 21,000 characters at once (a long answer, or code): it took 35 seconds to appear. Now it's within reach of the
+  // stream in a few seconds, and the last 360 characters keep the reading pace.
+  let left = 21_000;
+  let ticks = 0;
+  while (left > 900) { left -= take(left, false, false); ticks++; }
+  assert.ok(ticks * TICK <= 3500, `caught up in ${ticks * TICK} ms`);
+  // The reply has finished (its buttons are waiting to be shown): what's left appears in well under a second.
+  assert.ok(drain(21_000, true) <= 900, `a finished reply's backlog took ${drain(21_000, true)} ms`);
+  assert.ok(drain(400, true) <= 330, `a short tail took ${drain(400, true)} ms`);
+  assert.equal(take(5000, false, true), 5000, "with reduced motion, all of it at once");
+});

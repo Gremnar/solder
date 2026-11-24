@@ -341,3 +341,15 @@ test("assist: a request in the middle that can't be used stops the ones after it
     assert.equal(chat.messages.at(-1).content, "All three are renamed.");
   } finally { gw.close(); }
 });
+
+test("assist: while a reply's requests are being written, the panel is told which one and how far (they aren't shown as text)", async () => {
+  const { gw, engine, events } = await setup();
+  try {
+    await engine.ask(Engine.newChat(), "What's in a.js?");
+    const drafting = events.filter((e) => e.type === "drafting");
+    assert.ok(drafting.length >= 1, "said at least once for the reply that asks for a.js");
+    assert.ok(drafting.every((e) => Array.isArray(e.calls) && e.calls.length === 1 && typeof e.calls[0].chars === "number"));
+    const shown = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+    assert.ok(!shown.includes("```") && !shown.includes("read_file"), "and the request itself still isn't shown");
+  } finally { gw.close(); }
+});

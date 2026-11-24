@@ -16,7 +16,7 @@
 const { Cancelled, sessionId } = require("./gateway.js");
 const { READ_ONLY, TEXTS, TOOLS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
-const { sessionPlan, holdSession, parseReply, visibleText } = require("./assist.js");
+const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES } = require("./assist.js");
 
 /** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
 const MAX_REPAIRS = 2;
@@ -629,6 +629,11 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
           // An Assist reply streams its tool requests as text: only the words before them are shown.
           const now = visibleText(shown, true);
           if (now.length > visible.length && now.startsWith(visible)) { this.emit({ type: "delta", chat: chat.id, text: now.slice(visible.length) }); visible = now; }
+          // The requests themselves aren't shown: the panel says which one is being written, and how far it's got.
+          if (shown.length > visible.length && Date.now() - told >= DRAFTING_EVERY_MS) {
+            const calls = draftingRequests(shown);
+            if (calls.length) { told = Date.now(); this.emit({ type: "drafting", chat: chat.id, calls }); }
+          }
         }, onCalls: (/** @type {{name: string, chars: number, path: string}[]} */ calls) => {
           // A tool call being written (a long file can take minutes): the panel says so, a few times a second at most.
           if (side || Date.now() - told < DRAFTING_EVERY_MS) return;
@@ -1208,10 +1213,20 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
     if (cutOff && !(text && text.trim())) return { args: {}, problem: TEXTS.cutOff };
     args = text && text.trim() ? JSON.parse(text) : {};
   } catch {
-    return { args: {}, problem: cutOff ? TEXTS.cutOff : TEXTS.badArguments };
+    if (cutOff) return { args: {}, problem: TEXTS.cutOff };
+    // The slips an Assist reply is forgiven are forgiven here too: a trailing comma, a Windows path's single
+    // backslashes, a real line break inside a string, curly quotes. Refused, each cost a billed step to send again.
+    try { args = decode(text); } catch { return { args: {}, problem: TEXTS.badArguments }; }
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) return { args: {}, problem: TEXTS.badArguments };
   const [, properties, required] = definition;
+  // Another agent's name for an argument (file_path for path, old_string for old_text), when the tool's own isn't
+  // given and that name isn't one of the tool's: taken as the tool's, as the Assist lane takes it.
+  for (const arg of Object.keys(properties)) {
+    if (arg in args) continue;
+    const alias = (/** @type {Record<string, string[]>} */ (ALIASES)[arg] || []).find((other) => other in args && !Object.hasOwn(/** @type {any} */ (properties), other));
+    if (alias) { args[arg] = args[alias]; delete args[alias]; }
+  }
   // Every missing argument at once, and any the tool doesn't take (old_string for old_text): one retry, not several.
   const ignored = Object.keys(args).filter((arg) => !Object.hasOwn(/** @type {any} */ (properties), arg));
   const absent = required.filter((arg) => args[arg] === undefined || args[arg] === null

@@ -1043,7 +1043,12 @@ class SolderPanel {
     const settings = this.settings();
     if (settings.modelLocked) return null;
     const chat = event.chat === this.chat.id ? this.chat : this.runChat;
-    const twin = assistTwin(String(chat?.model || settings.model || ""), settings, this.models.map((m) => m.id));
+    const ids = this.models.map((m) => m.id);
+    const current = String(chat?.model || settings.model || "");
+    // The same model's Assist version when there is one; else the best Assist model on offer, by its name (a gateway's
+    // names don't always pair up, and with no offer at all the only way on was to wait for the allowance).
+    const twin = assistTwin(current, settings, ids)
+      || (laneOf(current, settings) === "tool" ? bestModel(ids.filter((id) => laneOf(id, settings) === "assist")) : "");
     return twin ? { model: twin, name: this.models.find((m) => m.id === twin)?.name || twin } : null;
   }
 
@@ -1912,8 +1917,11 @@ class SolderPanel {
   updateStatusBar() {
     const tokens = this.chat.usage.tokens;
     const left = this.credits ? ` · ${compact(this.credits.remaining)} left` : "";
-    this.statusBar.text = `$(symbol-misc) ${compact(tokens)}${left}`;
+    // An Assist model's tokens aren't counted against the allowance: shown apart, so a chat on one doesn't read as 0.
+    const unbilled = Number(this.chat.usage.assistTokens) || 0;
+    this.statusBar.text = `$(symbol-misc) ${!tokens && unbilled ? `${compact(unbilled)} unbilled` : compact(tokens)}${left}`;
     this.statusBar.tooltip = `Solder: this chat has used ${tokens.toLocaleString()} tokens` +
+      (unbilled ? ` of your allowance, and ${unbilled.toLocaleString()} on Assist models (not counted against it)` : "") +
       (this.answerTokens ? `, the latest answer ${this.answerTokens.toLocaleString()}` : "") +
       (this.credits ? `.\n${this.credits.remaining.toLocaleString()} of ${this.credits.limit.toLocaleString()} left (${this.credits.bucket})` +
         (this.credits.resetSeconds ? `, resets in about ${Math.round(this.credits.resetSeconds / 3600)} h` : "") : "") + ".";

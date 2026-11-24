@@ -720,16 +720,46 @@ test("argument problems: every missing one at once, and ones a tool doesn't take
   const chat = Engine.newChat();
   const host = fakeHost();
   const client = fakeClient([
-    { calls: [call("x1", "edit_file", { file_path: "a.js", old_string: "a", new_string: "b" }), call("x2", "read_file", { path: "a.js", offset: 3 })] },
+    { calls: [call("x1", "edit_file", { target_file: "a.js", before: "a", after: "b" }), call("x2", "read_file", { path: "a.js", offset: 3 })] },
     { calls: [call("x3", "read_file", { path: "a.js", offset: 3, limit: 9 })] },
     { content: "ok" },
   ]);
   await engine(client, host).ask(chat, "go");
   const text = (id) => chat.messages.find((m) => m.tool_call_id === id).content;
-  assert.equal(text("x1"), "edit_file needs path, old_text and new_text; it wasn't run. It doesn't take file_path, old_string and new_string.");
+  assert.equal(text("x1"), "edit_file needs path, old_text and new_text; it wasn't run. It doesn't take target_file, before and after.");
   assert.match(text("x3"), /read_file ok\n\n\(read_file doesn't take offset and limit, so they were left out\.\)$/);
   assert.match(text("x2"), /\(read_file doesn't take offset, so it was left out\.\)$/);
   assert.deepEqual(host.ran.map(([name]) => name), ["read_file", "read_file"], "the edit didn't run");
+});
+
+test("a call's small slips are forgiven on the Tool lane as on the Assist lane: other agents' argument names, a trailing comma, a Windows path", async () => {
+  const chat = Engine.newChat();
+  const host = fakeHost();
+  const client = fakeClient([
+    { calls: [
+      call("a1", "edit_file", { file_path: "a.js", old_string: "a", new_string: "b" }),
+      { id: "a2", name: "read_file", arguments: '{"path": "src/app.js", "start_line": 3,}' },
+      { id: "a3", name: "read_file", arguments: String.raw`{"path": "C:\Scripts\Deploy\win.ps1"}` },
+      { id: "a4", name: "write_file", arguments: '{"path": "notes.txt", "content": "line one\nline two"}' },
+      call("a5", "search", { query: "oldName", pattern: "*.js" }),
+      call("a6", "edit_file", { path: "b.js", file_path: "ignored.js", old_text: "a", new_text: "b" }),
+    ] },
+    { calls: [{ id: "a7", name: "read_file", arguments: '{"path": ' }] },
+    { content: "ok" },
+  ]);
+  await engine(client, host).ask(chat, "go");
+  const ran = Object.fromEntries(host.ran.map(([name, args], n) => [`a${n + 1}`, [name, args]]));
+  assert.deepEqual(ran.a1, ["edit_file", { path: "a.js", old_text: "a", new_text: "b" }]);
+  assert.deepEqual(ran.a2, ["read_file", { path: "src/app.js", start_line: 3 }], "a trailing comma");
+  assert.deepEqual(ran.a3, ["read_file", { path: "C:\\Scripts\\Deploy\\win.ps1" }], "a Windows path with single backslashes");
+  assert.deepEqual(ran.a4, ["write_file", { path: "notes.txt", content: "line one\nline two" }], "a real line break inside a string");
+  assert.deepEqual(ran.a5, ["search", { query: "oldName", glob: "*.js" }], "an alias goes to the argument that's missing");
+  assert.equal(ran.a6[1].path, "b.js", "the tool's own name wins when both are given");
+  assert.match(chat.messages.find((m) => m.tool_call_id === "a6").content, /doesn't take file_path, so it was left out/);
+  assert.equal(host.ran.length, 6);
+  assert.equal(chat.messages.find((m) => m.tool_call_id === "a7").meta.failed, true, "what can't be read at all is still refused");
+  // What's sent back to the model is the call as it wrote it (a provider may check it against its own record).
+  assert.equal(chat.messages.find((m) => m.tool_calls)?.tool_calls[1].function.arguments, '{"path": "src/app.js", "start_line": 3,}');
 });
 
 test("a failed summary isn't asked for again before every step of the same task", async () => {
