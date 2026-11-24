@@ -485,7 +485,9 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     const added = [];
     let batchChars = 0;
     const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
-    // Several edits to one file in a reply: its problems are checked once, after the last of them.
+    // Several edits in a reply: their files' problems are checked once, together, after the last of them. (One file's
+    // check waits a moment for its language server; one after each edit made twenty edits twenty waits, and reported
+    // the errors a half-made change always has.)
     const group = calls[0]?.id || "";
     const editsTo = calls.map((other) => other.function.name === "edit_file" ? pathKey(argumentsOf(other).path) : "");
     const parsedAll = calls.map((call, index) => parseArguments(call.function.name, call.function.arguments, cutOff && index === calls.length - 1));
@@ -548,7 +550,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         result = { output: TEXTS.notRunSameFile, summary: "Not run: " + label, failed: true };
       } else {
         seen.add(fingerprint(name, parsed.args));
-        const more = !!editsTo[index] && editsTo.some((other, later) => later > index && within[later] && other === editsTo[index]);
+        const more = !!editsTo[index] && editsTo.filter((other, at) => other && within[at]).length > 1;
         // This one first (they start in the order asked), then the looks that follow it, to run beside it.
         const started = ahead.get(index);
         const work = started ?? this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);

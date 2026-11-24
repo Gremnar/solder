@@ -701,7 +701,7 @@ test("/fork copies the chat to carry on in: its own id and title, the same histo
   assert.equal(Engine.fork(copy).title, "Fix the cart (fork)", "a fork of a fork isn't (fork) (fork)");
 });
 
-test("several edits to one file in a reply: the problems check waits for the last; one that's left waiting is settled", async () => {
+test("several edits in a reply: every file's problems check waits for the end of them, and goes with its last edit that ran", async () => {
   const seen = [];
   const host = fakeHost();
   host.runTool = async (name, args, ctx) => {
@@ -709,7 +709,8 @@ test("several edits to one file in a reply: the problems check waits for the las
     if (args.old_text === "bad") return { output: "Error: old_text wasn't found", summary: "x", failed: true };
     return { output: `${name} ok`, summary: "Edited" };
   };
-  host.settleEdits = async (group) => group === "e1" ? [{ path: "src/a.js", text: "\nNew problems in src/a.js", summary: " · 1 new problem" }] : [];
+  host.settleEdits = async (group) => group === "e1" ? [{ path: "src/a.js", text: "\nNew problems in src/a.js", summary: " · 1 new problem" },
+    { path: "src/b.js", text: "\nNew problems in src/b.js", summary: " · 2 new problems" }] : [];
   const edit = (id, p, old) => call(id, "edit_file", { path: p, old_text: old, new_text: "y" });
   const client = fakeClient([
     { calls: [edit("e1", "src/a.js", "1"), edit("e2", "src\\A.js", "2"), edit("e3", "src/b.js", "3"), edit("e4", "./src/a.js", "bad")] },
@@ -719,11 +720,20 @@ test("several edits to one file in a reply: the problems check waits for the las
   await engine(client, host).ask(chat, "edit");
   assert.deepEqual(seen.map(([, p, hint]) => [p, hint]), [
     ["src/a.js", { group: "e1", more: true }], ["src\\A.js", { group: "e1", more: true }],
-    ["src/b.js", { group: "e1", more: false }], ["./src/a.js", { group: "e1", more: false }]]);
-  // e4 failed: a.js's waiting check goes with its last edit that ran (e2)
+    ["src/b.js", { group: "e1", more: true }], ["./src/a.js", { group: "e1", more: true }]]);
+  // e4 failed: a.js's waiting check goes with its last edit that ran (e2); b.js's goes with its own.
   const e2 = chat.messages.find((m) => m.tool_call_id === "e2");
   assert.match(e2.content, /New problems in src\/a\.js$/);
   assert.equal(e2.meta.summary, "Edited · 1 new problem");
+  const e3 = chat.messages.find((m) => m.tool_call_id === "e3");
+  assert.match(e3.content, /New problems in src\/b\.js$/);
+  assert.equal(e3.meta.summary, "Edited · 2 new problems");
+  assert.ok(!/New problems/.test(chat.messages.find((m) => m.tool_call_id === "e1").content), "said once a file, not after each of its edits");
+
+  // An edit by itself in a reply is checked at once, as ever.
+  seen.length = 0;
+  await engine(fakeClient([{ calls: [edit("s1", "src/a.js", "1"), call("r", "read_file", { path: "src/a.js" })] }, { content: "ok" }]), host).ask(Engine.newChat(), "edit");
+  assert.deepEqual(seen[0][2], { group: "s1", more: false });
 });
 
 test("a reply's calls all run, reads and changes alike, up to a guard no task meets (50)", async () => {

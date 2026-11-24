@@ -1287,14 +1287,11 @@ class WorkspaceTools {
    * @param {string} group @returns {Promise<{path: string, text: string, summary: string}[]>}
    */
   async settleEdits(group) {
-    const out = [];
-    for (const [key, waiting] of [...this._pendingProblems]) {
-      if (waiting.group !== group) continue;
-      this._pendingProblems.delete(key);
-      const problems = await this.newProblems(waiting.file, waiting.before);
-      if (problems.text) out.push({ path: waiting.given, ...problems });
-    }
-    return out;
+    // Every file's check at once: each waits on its own language server, not on the others.
+    const waiting = [...this._pendingProblems].filter(([, pending]) => pending.group === group);
+    for (const [key] of waiting) this._pendingProblems.delete(key);
+    const found = await Promise.all(waiting.map(async ([, pending]) => ({ path: pending.given, ...(await this.newProblems(pending.file, pending.before)) })));
+    return found.filter((problems) => problems.text);
   }
 
   /** The file's errors that weren't there before the change (VS Code's language servers need a moment). */

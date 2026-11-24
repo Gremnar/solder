@@ -104,4 +104,23 @@ async function main() {
   log("C3:", t1.output, "|", t2.output, "|", left);
   check("C3: settled after the failed later edit", left.length === 1 && /missing/.test(left[0].text), JSON.stringify(left));
   check("C3: nothing left over", (await tools.settleEdits("g3")).length === 0);
+
+  // D. Edits to several files in one reply: none waits for its own check; all are checked together at the end, and a
+  // break one file's edit fixes in another is never reported.
+  const other = path.join(ws, "tax.ts");
+  fs.writeFileSync(file, start);
+  fs.writeFileSync(other, "import { total } from \"./calc\";\nexport function withTax(items: number[]): number {\n    return total(items) * 1.2;\n}\n");
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(other), { preview: false });
+  await tools.problems({ path: "tax.ts" });
+  await new Promise((res) => setTimeout(res, 1500));
+  began = Date.now();
+  // calc.ts gains a parameter that tax.ts doesn't pass yet (an error in tax.ts), then tax.ts passes it; a third edit leaves a real error.
+  const d1 = await tools.run("edit_file", { path: "calc.ts", old_text: "export function total(items: number[]): number {", new_text: "export function total(items: number[], rate: number): number {" }, { chat, signal: AbortSignal.timeout(30000), edit: { group: "g4", more: true } });
+  const d2 = await tools.run("edit_file", { path: "tax.ts", old_text: "    return total(items) * 1.2;", new_text: "    return total(items, 1.2) * nope;" }, { chat, signal: AbortSignal.timeout(30000), edit: { group: "g4", more: true } });
+  const waited = Date.now() - began;
+  const both = await tools.settleEdits("g4");
+  log("D:", d1.output, "|", d2.output, "|", JSON.stringify(both), `(edits ${waited} ms, all ${Date.now() - began} ms)`);
+  check("D: neither edit waited for its own check or reported anything", d1.output.split("\n").length === 1 && d2.output.split("\n").length === 1 && waited < 2000, `${waited} ms`);
+  check("D: the files are checked together at the end: the error that's left is found, in its file", both.length === 1 && both[0].path === "tax.ts" && /nope/.test(both[0].text), JSON.stringify(both));
+  check("D: ... and the break the second edit fixed (a missing argument) isn't reported", !/Expected 2 arguments/.test(JSON.stringify(both)), JSON.stringify(both));
 }
