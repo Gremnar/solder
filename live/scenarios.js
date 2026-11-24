@@ -696,4 +696,146 @@ SCENARIOS.push({
   },
 });
 
+// ---------------------------------------------------------------- PowerShell, as the people who use Solder write it --
+// CRLF line endings, here-strings, $ and backticks and both kinds of quote: the text an Assist model has to carry inside
+// a JSON request, and a Tool model inside a call's arguments. Checked on disk; nothing is run.
+
+const crlf = (/** @type {string[]} */ lines) => lines.join("\r\n") + "\r\n";
+/** What's wrong with a file's line endings, or "". @param {string} text @param {string} name */
+const endings = (text, name) => /[^\r]\n/.test(text) || /^\n/.test(text) ? name + " lost its CRLF line endings" : "";
+
+const DISK_REPORT = crlf([
+  "# Reports the drives that are running out of room.",
+  "param(",
+  "    [int]$WarnBelowPercent = 15,",
+  "    [string]$MailTo = \"ops@example.com\"",
+  ")",
+  "",
+  "function Get-LowDrive {",
+  "    param([int]$Threshold)",
+  "    Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DriveType = 3\" | ForEach-Object {",
+  "        $free = [math]::Round(($_.FreeSpace / $_.Size) * 100, 1)",
+  "        if ($free -gt $Threshold) {",
+  "            [pscustomobject]@{ Drive = $_.DeviceID; FreePercent = $free; Label = \"$($_.VolumeName)\" }",
+  "        }",
+  "    }",
+  "}",
+  "",
+  "$low = Get-LowDrive -Threshold $WarnBelowPercent",
+  "$body = @\"",
+  "Drives below $WarnBelowPercent% free on $env:COMPUTERNAME:",
+  "$($low | ForEach-Object { \"  $($_.Drive) `\"$($_.Label)`\" at $($_.FreePercent)%\" } | Out-String)",
+  "\"@",
+  "if ($low) { Write-Output $body } else { Write-Output 'All drives are fine.' }",
+]);
+
+SCENARIOS.push({
+  name: "ps-fix",
+  about: "a one-line logic fix in a PowerShell script with a here-string, quotes and backticks around it; CRLF kept",
+  setup: (w) => w("Scripts/Get-DiskReport.ps1", DISK_REPORT),
+  task: "Scripts/Get-DiskReport.ps1 is meant to report drives that are LOW on free space, but it reports the ones with plenty instead. Fix it.",
+  check: ({ read }) => {
+    const text = read("Scripts/Get-DiskReport.ps1");
+    if (!/if \(\$free -l[te] \$Threshold\)/.test(text)) return "the comparison isn't fixed: " + (/if \(\$free[^\n]*/.exec(text) || [""])[0];
+    const before = DISK_REPORT.split("\r\n");
+    const after = text.split("\r\n");
+    const missing = before.filter((line) => !/if \(\$free/.test(line)).filter((line) => !after.includes(line));
+    if (missing.length) return "changed more than the comparison: " + JSON.stringify(missing[0]).slice(0, 120);
+    return endings(text, "Get-DiskReport.ps1");
+  },
+});
+
+const UPTIME = crlf([
+  "function Get-Uptime {",
+  "    param(",
+  "        [Parameter(Mandatory)][string]$ComputerName,",
+  "        [switch]$AsText",
+  "    )",
+  "    if (-not (Test-Connection -ComputerName $ComputerName -Count 1 -Quiet)) {",
+  "        throw \"Can't reach $ComputerName\"",
+  "    }",
+  "    $boot = (Get-CimInstance -ClassName Win32_OperatingSystem -ComputerName $ComputerName).LastBootUpTime",
+  "    $span = (Get-Date) - $boot",
+  "    if ($AsText) { \"{0} has been up {1:n1} days\" -f $ComputerName, $span.TotalDays } else { $span }",
+  "}",
+]);
+const NIGHTLY = crlf([
+  ". \"$PSScriptRoot\\lib\\Get-Uptime.ps1\"",
+  "",
+  "$servers = Get-Content \"$PSScriptRoot\\servers.txt\"",
+  "foreach ($name in $servers) {",
+  "    try {",
+  "        $up = Get-Uptime -ComputerName $name",
+  "        if ($up.TotalDays -gt 30) { Write-Warning \"$name hasn't restarted in $([int]$up.TotalDays) days\" }",
+  "    } catch {",
+  "        Write-Warning \"Skipped ${name}: $($_.Exception.Message)\"",
+  "    }",
+  "}",
+]);
+const SHOW = crlf([
+  ". \"$PSScriptRoot\\lib\\Get-Uptime.ps1\"",
+  "param([string[]]$ComputerName = @($env:COMPUTERNAME))",
+  "$ComputerName | ForEach-Object { Get-Uptime -ComputerName $_ -AsText }",
+]);
+
+SCENARIOS.push({
+  name: "ps-refactor",
+  about: "rename a PowerShell function's parameter in its definition and its callers; a cmdlet's own parameter of that name stays",
+  setup: (w) => {
+    w("Scripts/lib/Get-Uptime.ps1", UPTIME);
+    w("Scripts/Nightly-Check.ps1", NIGHTLY);
+    w("Scripts/Show-Uptime.ps1", SHOW);
+    w("Scripts/servers.txt", "app01\r\napp02\r\n");
+  },
+  task: "In Scripts/lib/Get-Uptime.ps1, rename Get-Uptime's parameter ComputerName to Server (the variable inside the function too), and update every call to Get-Uptime in the other scripts. Test-Connection and Get-CimInstance are Windows' own commands: their -ComputerName parameter keeps its name. Show-Uptime.ps1's own parameter stays as it is.",
+  check: ({ read }) => {
+    const lib = read("Scripts/lib/Get-Uptime.ps1");
+    const nightly = read("Scripts/Nightly-Check.ps1");
+    const show = read("Scripts/Show-Uptime.ps1");
+    if (!/\[string\]\$Server\b/.test(lib)) return "the parameter isn't $Server";
+    if (/\$ComputerName\b/.test(lib)) return "$ComputerName is still used inside Get-Uptime";
+    if (!/Test-Connection -ComputerName \$Server\b/.test(lib) || !/Get-CimInstance[^\r\n]*-ComputerName \$Server\b/.test(lib)) return "Windows' own -ComputerName was renamed, or isn't given $Server";
+    if (!/Get-Uptime -Server \$name\b/.test(nightly)) return "Nightly-Check.ps1 doesn't call Get-Uptime -Server";
+    if (!/Get-Uptime -Server \$_ -AsText/.test(show)) return "Show-Uptime.ps1 doesn't call Get-Uptime -Server";
+    if (!/param\(\[string\[\]\]\$ComputerName = /.test(show) || !/^\$ComputerName \| ForEach-Object/m.test(show)) return "Show-Uptime.ps1's own parameter was renamed";
+    if (!nightly.includes("Write-Warning \"Skipped ${name}: $($_.Exception.Message)\"")) return "Nightly-Check.ps1 lost a line it should have kept";
+    return endings(lib, "Get-Uptime.ps1") || endings(nightly, "Nightly-Check.ps1") || endings(show, "Show-Uptime.ps1");
+  },
+});
+
+// ---------------------------------------------------------------- a refactor that is many edits --
+
+const RETRY_FILES = /** @type {Record<string, string>} */ ({
+  "src/config.js": "const defaults = { maxRetries: 3, timeoutMs: 2000 };\nfunction load(overrides = {}) {\n  const config = { ...defaults, ...overrides };\n  if (config.maxRetries < 0) throw new Error(\"maxRetries can't be negative\");\n  return config;\n}\nmodule.exports = { load, defaults };\n",
+  "src/http.js": "function attempts(config) {\n  return config.maxRetries + 1;\n}\nfunction describe(config) {\n  return \"up to \" + config.maxRetries + \" retries, \" + config.timeoutMs + \" ms each\";\n}\nmodule.exports = { attempts, describe };\n",
+  "src/backoff.js": "function delays(config) {\n  const out = [];\n  for (let i = 0; i < config.maxRetries; i++) out.push(100 * 2 ** i);\n  return out;\n}\nmodule.exports = { delays };\n",
+  "src/queue.js": "function shouldRetry(job, config) {\n  return job.failures <= config.maxRetries;\n}\nfunction left(job, config) {\n  return Math.max(0, config.maxRetries - job.failures);\n}\nmodule.exports = { shouldRetry, left };\n",
+  "src/report.js": "function line(config) {\n  const { maxRetries, timeoutMs } = config;\n  return \"retries=\" + maxRetries + \" timeout=\" + timeoutMs;\n}\nmodule.exports = { line };\n",
+  "src/validate.js": "function problems(config) {\n  const out = [];\n  if (!Number.isInteger(config.maxRetries)) out.push(\"maxRetries must be a whole number\");\n  if (config.maxRetries > 10) out.push(\"maxRetries is at most 10\");\n  return out;\n}\nmodule.exports = { problems };\n",
+  "src/cli.js": "function parse(argv) {\n  const config = {};\n  const at = argv.indexOf(\"--max-retries\");\n  if (at >= 0) config.maxRetries = Number(argv[at + 1]);\n  return config;\n}\nmodule.exports = { parse };\n",
+  "src/index.js": "const { load } = require(\"./config\");\nconst { attempts } = require(\"./http\");\nconst { delays } = require(\"./backoff\");\nfunction plan(overrides) {\n  const config = load(overrides);\n  return { tries: attempts(config), waits: delays(config), maxRetries: config.maxRetries };\n}\nmodule.exports = { plan };\n",
+});
+
+SCENARIOS.push({
+  name: "refactor-20",
+  about: "one name used in about twenty places across eight files: all of it renamed, in as few steps as the edits allow",
+  setup: (w) => { for (const [name, text] of Object.entries(RETRY_FILES)) w(name, text); },
+  task: "Rename the setting maxRetries to retryLimit everywhere under src: the property, the destructured name, the messages that mention it, and the key in what plan() returns. The command-line flag --max-retries keeps its name.",
+  check: ({ read, load }) => {
+    const all = Object.keys(RETRY_FILES).map((name) => read(name)).join("\n");
+    if (/maxRetries/.test(all)) return "maxRetries is still there: " + (/[^\n]*maxRetries[^\n]*/.exec(all) || [""])[0].trim().slice(0, 100);
+    if (!/--max-retries/.test(read("src/cli.js"))) return "the command-line flag was renamed";
+    try {
+      const made = load("src/index.js").plan({ retryLimit: 2 });
+      if (made.tries !== 3 || JSON.stringify(made.waits) !== "[100,200]" || made.retryLimit !== 2) return "plan() is wrong: " + JSON.stringify(made);
+      if (load("src/queue.js").left({ failures: 1 }, { retryLimit: 3 }) !== 2) return "queue.left";
+      if (load("src/report.js").line({ retryLimit: 4, timeoutMs: 9 }) !== "retries=4 timeout=9") return "report.line";
+      if (load("src/validate.js").problems({ retryLimit: 11 }).length !== 1) return "validate.problems";
+      if (load("src/cli.js").parse(["--max-retries", "5"]).retryLimit !== 5) return "cli.parse";
+      if (load("src/http.js").describe({ retryLimit: 2, timeoutMs: 5 }) !== "up to 2 retries, 5 ms each") return "http.describe";
+    } catch (e) { return "doesn't run: " + /** @type {any} */ (e).message; }
+    return "";
+  },
+});
+
 module.exports = { SCENARIOS };

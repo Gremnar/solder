@@ -1133,7 +1133,13 @@ class WorkspaceTools {
       this._pendingProblems.delete(key);
       problems = await this.newProblems(file, before);
     }
-    return this._edited(file, document, text, backup, removed, added, start, shiftNote, problems);
+    const result = this._edited(file, document, text, backup, removed, added, start, shiftNote, problems);
+    // Every place at once (replace_all): how many, and where, in place of the one range.
+    if (found.places) {
+      result.output = RESULTS.editedAll(file.shown, found.places.length, found.places.slice(0, 12)) + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : "");
+      result.summary = `Edited ${file.shown} · ${found.places.length} place${found.places.length === 1 ? "" : "s"}` + problems.summary;
+    }
+    return result;
   }
 
   /**
@@ -1149,22 +1155,7 @@ class WorkspaceTools {
     await freshen(document, file);
     const text = document.getText();
     const eol = document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
-    const old = toEol(String(args.old_text), eol);
-    const replacement = toEol(String(args.new_text), eol);
-    if (!old) throw new ToolError(RESULTS.emptyOldText);
-    if (old === replacement) throw new ToolError(RESULTS.sameText);
-    // Exactly, then forgiving trailing spaces, then a uniform indentation shift. Failing those, old_text copied
-    // with read_file's line numbers ("12\t…") is tried without them.
-    let found = locate(file.shown, text, old, replacement, eol);
-    const plain = withoutLineNumbers(old, eol);
-    if (!found) {
-      const plainNew = plain === null ? null : numberedLines(replacement, eol);
-      if (plain !== null && plainNew === false) throw new ToolError(RESULTS.numberedNewText);
-      const again = plain === null ? null : locate(file.shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);
-      if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
-    }
-    if (!found) throw notFound(file.shown, text, plain ?? old, eol);
-    return { file, document, text, eol, old, found };
+    return { file, document, text, eol, ...planEdit(file.shown, text, args, eol) };
   }
 
   /** An edit's result, once it's made. */
@@ -2406,6 +2397,41 @@ function locate(/** @type {string} */ shown, /** @type {string} */ text, /** @ty
   return { start: moved.start, length: grow(moved.start, moved.length), replaced: shifted, note: " " + RESULTS.reindented(...describeShift(moved.shift)) };
 }
 
+/**
+ * An edit worked out against a file's text: where it goes and what goes there, or the ToolError the model is given.
+ * One place (old_text once: exactly, then forgiving trailing spaces, then a uniform indentation shift; failing those,
+ * old_text copied with read_file's line numbers is tried without them), or with replace_all every place old_text
+ * appears, exactly as written (no forgiving there: a loose match in many places is how the wrong text gets changed).
+ * The real tool, its preview and the live suite's stand-in all use this, so they can't disagree.
+ * @param {string} shown the file, as the model names it @param {string} text @param {any} args old_text, new_text, replace_all
+ * @param {string} eol @returns {{old: string, found: {start: number, length: number, replaced: string, note: string, places?: number[]}}}
+ */
+function planEdit(shown, text, args, eol) {
+  const old = toEol(String(args.old_text), eol);
+  const replacement = toEol(String(args.new_text), eol);
+  if (!old) throw new ToolError(RESULTS.emptyOldText);
+  if (old === replacement) throw new ToolError(RESULTS.sameText);
+  if (args.replace_all === true || args.replace_all === "true") {
+    // Each place in turn, none overlapping the one before (as the replacing below takes them).
+    const at = [];
+    for (let index = text.indexOf(old); index >= 0; index = text.indexOf(old, index + old.length)) at.push(index);
+    if (!at.length) throw notFound(shown, text, withoutLineNumbers(old, eol) ?? old, eol);
+    // One stretch of the file, from the first place to the end of the last, with each place replaced in it.
+    const end = at[at.length - 1] + old.length;
+    return { old, found: { start: at[0], length: end - at[0], replaced: text.slice(at[0], end).split(old).join(replacement), note: "", places: at.map((index) => lineOf(text, index)) } };
+  }
+  let found = locate(shown, text, old, replacement, eol);
+  const plain = withoutLineNumbers(old, eol);
+  if (!found) {
+    const plainNew = plain === null ? null : numberedLines(replacement, eol);
+    if (plain !== null && plainNew === false) throw new ToolError(RESULTS.numberedNewText);
+    const again = plain === null ? null : locate(shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);
+    if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
+  }
+  if (!found) throw notFound(shown, text, plain ?? old, eol);
+  return { old, found };
+}
+
 /** Text copied from read_file with its line numbers ("12\t…" on every line, counting up): without them, else null. */
 function withoutLineNumbers(/** @type {string} */ text, /** @type {string} */ eol) {
   const lines = text.split(eol);
@@ -2540,4 +2566,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, planEdit, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

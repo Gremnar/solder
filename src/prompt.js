@@ -130,10 +130,13 @@ or folder. Unsaved editor changes aren't included.", {
     path: { type: "string", description: `Just this file or folder: ${RELATIVE}.` },
   }, []],
   edit_file: ["Replaces one exact piece of text in a file and saves it. old_text must appear exactly once: \
-include enough surrounding lines to make it unique. Returns any new problems in the file.", {
+include enough surrounding lines to make it unique. To change every place a name or a value appears in the file, \
+set replace_all instead of sending one edit for each. Returns any new problems in the file.", {
     path: { type: "string", description: `The file: ${RELATIVE}.` },
     old_text: { type: "string", description: "The exact text to replace, appearing once in the file." },
     new_text: { type: "string", description: "The text to put in its place." },
+    replace_all: { type: "boolean", description: "True to replace every place old_text appears in the file, exactly as \
+written (so make it long enough not to match inside other words)." },
   }, ["path", "old_text", "new_text"]],
   write_file: ["Writes a whole file (creating it, and its folders, if needed) and saves it. For a change to \
 part of an existing file, use edit_file. Returns any new problems in the file.", {
@@ -366,6 +369,9 @@ isn't an answer either way: narrow it with a glob or a more specific query.`,
 matches than these: narrow it with a glob to be sure.)`,
   reindented: (/** @type {string} */ amount, /** @type {boolean} */ less) => `old_text was indented ${amount} ${less ? "less" : "more"} than the file there, so it was matched with that difference and new_text was shifted the same way.`,
   notApplied: (/** @type {string} */ file) => `VS Code didn't apply the change to ${file}.`,
+  /** A replace_all: how many places, and the lines they're on (the first few). */
+  editedAll: (/** @type {string} */ file, /** @type {number} */ count, /** @type {number[]} */ lines) =>
+    `Edited ${file}: replaced old_text in ${count} place${count === 1 ? "" : "s"} (line${count === 1 ? "" : "s"} ${lines.join(", ")}${count > lines.length ? ", …" : ""}).`,
   edited: (/** @type {string} */ file, /** @type {number} */ removed, /** @type {number} */ added, /** @type {number} */ from) =>
     `Edited ${file}: replaced ${removed} line${removed === 1 ? "" : "s"} with ${added}, from line ${from}.`,
   written: (/** @type {boolean} */ existed, /** @type {string} */ file, /** @type {number} */ lines) =>

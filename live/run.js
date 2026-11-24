@@ -8,6 +8,7 @@
  *   node live/run.js --model <id> [--endpoint <url>] [--runs 3] [--only a,b] [--skip bugs12] [--parallel 4]
  *                    [--src <a copy of Solder's src>] [--label name] [--baseline label] [--effort low]
  *                    [--tool-models <regex>] [--assist-block <name>]   (the Assist lane: see live/README.md)
+ *                    [--cut N] [--break N]   (the Assist lane's failures, made to happen: see live/README.md)
  *
  * The key comes from SOLDER_LIVE_KEY (or "test"). Results go to live/results/<label>.jsonl (not in git).
  */
@@ -36,6 +37,11 @@ const toolModels = opt("tool-models", "");
 const assistBlock = opt("assist-block", "");
 // --twin: the Assist twin that writes summaries and titles for the model under test (as Solder's panel finds it).
 const twinModel = opt("twin", "");
+// Faults, on the Assist lane: --cut N stops the task's Nth reply partway (the stream ends with no finish); --break N
+// takes a needed argument out of the second request of the Nth reply that holds two or more. What's measured is
+// whether the task still gets done, and what it cost.
+const cutAt = Number(opt("cut", "0"));
+const breakAt = Number(opt("break", "0"));
 const label = opt("label", `run-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 const baseline = opt("baseline");
 const only = opt("only") ? opt("only").split(",") : null;
@@ -81,13 +87,34 @@ async function once(scenario, run) {
   // The task's own requests (with tools): not the chat's title, which goes out on its own afterwards.
   /** @type {string[]} */
   const summarisedBy = [];
+  let several = 0;
   client.reply = async (/** @type {any} */ req) => {
     if (S.prompt.TEXTS.compactionTranscript && String(req.messages?.at(-1)?.content || "").startsWith(S.prompt.TEXTS.compactionTranscript)) summarisedBy.push(req.model);
-    if (!String(req.messages?.at(-1)?.content || "").startsWith("Give a short title")) requests++;
-    return reply(req);
+    const title = String(req.messages?.at(-1)?.content || "").startsWith("Give a short title");
+    if (!title) requests++;
+    if (title || !req.assist || (!cutAt && !breakAt)) return reply(req);
+    // The reply is taken whole first (nothing shown yet), then the fault is made of it.
+    const out = await reply({ ...req, onText: () => {} });
+    if (cutAt && requests === cutAt) {
+      const half = out.content.slice(0, Math.ceil(out.content.length / 2));
+      req.onText?.(half);
+      throw Object.assign(new S.GatewayError("The gateway's stream ended before it finished. What came through has been kept.", { transient: true, uncertain: true }), { partial: half });
+    }
+    const blocks = [...out.content.matchAll(/```tool\s*\n([\s\S]*?)\n```/g)];
+    if (breakAt && blocks.length >= 2 && ++several === breakAt) {
+      try {
+        // A request the engine can't use: every argument it needs but the path is taken out.
+        const second = JSON.parse(blocks[1][1]);
+        for (const key of ["old_text", "new_text", "content", "to", "from", "query", "glob"]) delete second[key];
+        if (second.tool === "read_file" || second.tool === "symbols" || second.tool === "problems") delete second.path;
+        out.content = out.content.replace(blocks[1][0], () => "```tool\n" + JSON.stringify(second) + "\n```");
+      } catch { /* a request that already can't be read is fault enough */ }
+    }
+    req.onText?.(out.content);
+    return out;
   };
   let failure = "";
-  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: scenario.compactAt || 100_000, ...(twinModel ? { assistTwinOf: () => twinModel } : {}), maxRounds: scenario.maxRounds || 40, toolModels, assistSessionBlock: assistBlock,
+  const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: scenario.compactAt || 100_000, ...(twinModel ? { assistTwinOf: () => twinModel } : {}), maxRounds: scenario.maxRounds || 40, assistMaxRounds: scenario.maxRounds || 60, toolModels, assistSessionBlock: assistBlock,
     readOnly: !!scenario.readOnly }),
     // The engine reports a failed reply as an event, not a throw: a run that ended on one is an error (a 429, say),
     // not a model that got the task wrong.
@@ -125,7 +152,15 @@ async function once(scenario, run) {
     maxReads: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => c.function.name === "read_file").length)),
     planned: !!plan, planLeft: plan ? plan.steps.filter((/** @type {any} */ s) => s.state !== "done").length : 0,
     summarisedBy: summarisedBy.length ? summarisedBy : undefined, compacted: !!chat.compaction,
-    nudges: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
+    // First-try edits: how many edit_file calls there were, and how many of them failed.
+    editCalls: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file").length, editFails: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file" && c.failed).length,
+    editsAll: ws.calls.filter((/** @type {any} */ c) => c.name === "edit_file" && (c.args.replace_all === true || c.args.replace_all === "true")).length,
+    // The most calls one reply made, and the most changes among them (how far a model batches).
+    maxCalls: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.length)),
+    maxChanges: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => !S.prompt.READ_ONLY.has(c.function.name)).length)),
+    // The Assist lane's recoveries: a request asked for again, a cut-off reply carried on from, later requests said not to have run.
+    repairs: chat.messages.filter((/** @type {any} */ m) => m.meta?.repair).length, carriedOn: chat.messages.filter((/** @type {any} */ m) => m.meta?.auto).length,
+    unread: chat.messages.filter((/** @type {any} */ m) => m.meta?.unread).length,
     // Reads of lines already read in the same task: still in the chat (avoidable), or after the first was cut.
     rereads: S.repeatReads ? S.repeatReads(chat).again : undefined, rereadsAfterCut: S.repeatReads ? S.repeatReads(chat).afterCut : undefined,
     skillsRead: skillsFolder ? ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && path.resolve(root, String(c.args.path || "")).startsWith(skillsFolder))
@@ -138,7 +173,7 @@ async function once(scenario, run) {
   fs.rmSync(root, { recursive: true, force: true });
   if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +
-    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.nudges ? `  nudged ${row.nudges}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
+    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.editCalls ? `  edits ${row.editCalls - row.editFails}/${row.editCalls}` + (row.editsAll ? ` (${row.editsAll} every place)` : "") : "") + (row.maxChanges > 1 ? `  ${row.maxChanges} changes in a reply` : "") + (row.repairs ? `  asked again ${row.repairs}` : "") + (row.carriedOn ? `  carried on ${row.carriedOn}` : "") + (row.unread ? `  told of unrun requests ${row.unread}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
   return row;
 }
 
@@ -147,13 +182,13 @@ function table(rows, base) {
   const by = (/** @type {any[]} */ list, /** @type {string} */ name) => list.filter((r) => r.scenario === name);
   const mean = (/** @type {any[]} */ list, /** @type {string} */ key) => list.length ? list.reduce((s, r) => s + r[key], 0) / list.length : NaN;
   const k = (/** @type {number} */ n) => Number.isNaN(n) ? "    -" : (n / 1000).toFixed(0).padStart(5) + "k";
-  const lines = [`\n${"scenario".padEnd(18)} ${"pass".padStart(7)} ${"tokens".padStart(7)} ${"req".padStart(5)} ${"fail".padStart(5)} ${"nudge".padStart(5)}` + (base.length ? `   | base pass  tokens   req` : "")];
+  const lines = [`\n${"scenario".padEnd(18)} ${"pass".padStart(7)} ${"tokens".padStart(7)} ${"req".padStart(5)} ${"fail".padStart(5)} ${"edit✗".padStart(5)}` + (base.length ? `   | base pass  tokens   req` : "")];
   let total = 0;
   for (const scenario of chosen) {
     const mine = by(rows, scenario.name);
     const theirs = by(base, scenario.name);
     total += mine.reduce((s, r) => s + r.tokens, 0);
-    lines.push(`${scenario.name.padEnd(18)} ${(mine.filter((r) => r.ok).length + "/" + mine.length).padStart(7)} ${k(mean(mine, "tokens"))} ${mean(mine, "requests").toFixed(1).padStart(5)} ${mean(mine, "failed").toFixed(1).padStart(5)} ${mean(mine, "nudges").toFixed(1).padStart(5)}` +
+    lines.push(`${scenario.name.padEnd(18)} ${(mine.filter((r) => r.ok).length + "/" + mine.length).padStart(7)} ${k(mean(mine, "tokens"))} ${mean(mine, "requests").toFixed(1).padStart(5)} ${mean(mine, "failed").toFixed(1).padStart(5)} ${mean(mine, "editFails").toFixed(1).padStart(5)}` +
       (theirs.length ? `   | ${(theirs.filter((r) => r.ok).length + "/" + theirs.length).padStart(9)} ${k(mean(theirs, "tokens"))} ${mean(theirs, "requests").toFixed(1).padStart(5)}` : ""));
   }
   const passed = rows.filter((r) => r.ok).length;

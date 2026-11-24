@@ -237,7 +237,8 @@ class Workspace {
     const T = this.S.tools;
     if (!old) throw new T.ToolError(this.R.emptyOldText);
     if (old === replacement) throw new T.ToolError(this.R.sameText);
-    let found = T.locate(shown, raw, old, replacement, eol);
+    // Solder's own working-out of an edit, when this src has it in one place (replace_all included).
+    let found = T.planEdit ? T.planEdit(shown, raw, args, eol).found : T.locate(shown, raw, old, replacement, eol);
     if (!found) {
       const plain = T.withoutLineNumbers(old, eol);
       const newPlain = plain === null ? null : T.withoutLineNumbers(replacement, eol) !== null ? true : replacement.split(eol).some((l) => /^\d+\t/.test(l)) ? false : null;
@@ -253,7 +254,8 @@ class Workspace {
     const lineAt = raw.slice(0, found.start).split(eol).length;
     const removed = old.split(eol).length - (old.endsWith(eol) ? 1 : 0);
     const added = found.replaced ? found.replaced.split(eol).length - (found.replaced.endsWith(eol) ? 1 : 0) : 0;
-    return { output: this.R.edited(shown, removed, added, lineAt) + found.note + this.newProblems(full, shown, before), summary: `Edited ${shown}` };
+    const said = found.places ? this.R.editedAll(shown, found.places.length, found.places.slice(0, 12)) : this.R.edited(shown, removed, added, lineAt) + found.note;
+    return { output: said + this.newProblems(full, shown, before), summary: `Edited ${shown}` };
   }
 
   writeFile(/** @type {any} */ args) {

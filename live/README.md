@@ -16,6 +16,12 @@ node live/run.js --model <id> [--runs 3] [--only typo,rename] [--skip bugs12] [-
 - **Results:** `live/results/<label>.jsonl`, one line per run (not in git).
 - **The Assist lane:** `--tool-models <regex>` makes every model that doesn't match an Assist model (plain text, tool requests
   written in the reply). With no `--assist-block`, there are no sessions: every request carries the conversation over.
+- **The Assist lane's failures, made to happen:** `--cut N` stops the task's Nth reply partway (its stream ends with no finish), and
+  `--break N` takes the arguments out of the second request of the Nth reply that holds two or more. The run then shows whether
+  the task still got done: each line says how often a request was asked for again, a cut reply carried on from, and the
+  model told of requests that didn't run.
+- **What a line and the table show:** tokens, requests, failed calls, and failed edits (`edit✗`: a first-try edit that missed). A line
+  also says how many of the edits landed, and the most changes one reply made.
 - **Cost:** a light scenario is 5–40k tokens a run; `bugs12` is about half a million. Skip it with `--skip bugs12`.
 
 - **More than one message:** a scenario's `then` lists follow-up messages sent in the same chat. `task` and each `then` may be a

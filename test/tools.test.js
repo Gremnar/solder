@@ -622,3 +622,35 @@ test("an instruction file is read only when it's the workspace's own: a link out
     fs.rmSync(top, { recursive: true, force: true });
   }
 });
+
+test("an edit worked out: one place as ever, or with replace_all every place old_text appears, exactly as written", () => {
+  const { planEdit, ToolError } = require("../src/tools.js");
+  const text = "const maxRetries = 3;\nif (maxRetries > 2) retry(maxRetries);\n// maxRetriesLeft is another name\n";
+  const apply = (/** @type {string} */ t, /** @type {any} */ found) => t.slice(0, found.start) + found.replaced + t.slice(found.start + found.length);
+  // One place, as before: more than one is refused, with where they are.
+  assert.throws(() => planEdit("a.js", text, { old_text: "maxRetries", new_text: "retryLimit" }, "\n"), (e) => e instanceof ToolError && /appears 4 times/.test(e.message));
+  let plan = planEdit("a.js", text, { old_text: "maxRetries = 3", new_text: "maxRetries = 5" }, "\n");
+  assert.equal(apply(text, plan.found), text.replace("= 3", "= 5"));
+  assert.equal(plan.found.places, undefined);
+  // Every place.
+  plan = planEdit("a.js", text, { old_text: "maxRetries", new_text: "retryLimit", replace_all: true }, "\n");
+  assert.equal(apply(text, plan.found), text.replaceAll("maxRetries", "retryLimit"));
+  assert.deepEqual(plan.found.places, [1, 2, 2, 3], "the line of each place");
+  // Longer text keeps a name inside another word out of it.
+  plan = planEdit("a.js", text, { old_text: "maxRetries)", new_text: "retryLimit)", replace_all: "true" }, "\n");
+  assert.equal(apply(text, plan.found), "const maxRetries = 3;\nif (maxRetries > 2) retry(retryLimit);\n// maxRetriesLeft is another name\n");
+  assert.deepEqual(plan.found.places, [2]);
+  // Exactly as written: no forgiving of trailing spaces or indentation, and nowhere is a miss, with the file's lines.
+  assert.throws(() => planEdit("a.js", text, { old_text: "MaxRetries", new_text: "x", replace_all: true }, "\n"), (e) => e instanceof ToolError && /wasn't found/.test(e.message));
+  // Places that would overlap are taken one after another, never twice over the same text.
+  plan = planEdit("a.txt", "aaaa bb aaa", { old_text: "aa", new_text: "b", replace_all: true }, "\n");
+  assert.equal(apply("aaaa bb aaa", plan.found), "bb bb ba");
+  assert.equal(plan.found.places?.length, 3);
+  // Windows line endings: old_text and new_text are given the file's, in every place.
+  const win = "a = 1\r\nb = 2\r\n\r\na = 1\r\nb = 2\r\n";
+  plan = planEdit("a.ps1", win, { old_text: "a = 1\nb = 2", new_text: "a = 1\nb = 3", replace_all: true }, "\r\n");
+  assert.equal(apply(win, plan.found), "a = 1\r\nb = 3\r\n\r\na = 1\r\nb = 3\r\n");
+  // The same text for old and new, or no old text, is refused either way.
+  assert.throws(() => planEdit("a.js", text, { old_text: "x", new_text: "x", replace_all: true }, "\n"), ToolError);
+  assert.throws(() => planEdit("a.js", text, { old_text: "", new_text: "x", replace_all: true }, "\n"), ToolError);
+});
