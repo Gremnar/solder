@@ -42,14 +42,14 @@ const MAX_RESULT_CHARS = 40_000;
 const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
-/** One reply's calls that run, reads and changes alike. A lower limit for changes (it was 5) only cost a step: models send up to this many edits when they know them all, and the ones over it had to be sent again. */
-const MAX_BATCH = 8;
 /**
- * On the Assist lane, a reply's calls all run: its tokens aren't billed, so a big refactor sent as fifteen or twenty
- * edits costs nothing to take whole, and refusing the ones past the eighth only cost a step each time. This is a guard
- * against a reply gone wrong (the same request written over and over), not a limit a task meets.
+ * One reply's calls all run, on either lane: this is a guard against a reply gone wrong (the same call written over
+ * and over), not a limit a task meets. There was a limit (8, and 5 for changes before that), and it only cost steps:
+ * for a refactor a model sends fifteen or twenty edits it already knows, and the ones past the limit were refused and
+ * sent again, with the whole chat sent once more each time. What a reply's reads may bring back together is still
+ * held to MAX_BATCH_RESULT_CHARS, and a change that fails still stops the calls after it.
  */
-const ASSIST_MAX_BATCH = 50;
+const MAX_BATCH = 50;
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -387,7 +387,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         this.emit({ type: "done", chat: chat.id, limit: maxRounds });
         return;
       }
-      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal, assistant.meta?.lane === "assist" ? ASSIST_MAX_BATCH : MAX_BATCH);
+      await this._batch(chat, assistant, reply.finishReason === "length", maxRounds - rounds, signal);
       if (signal.aborted) throw new Cancelled();
     }
   }
@@ -454,11 +454,10 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
   /**
    * Run one reply's calls in order. Each gets its own tool message.
    * @param {Chat} chat @param {Stored} assistant @param {boolean} cutOff @param {number} roundsLeft @param {AbortSignal} signal
-   * @param {number} [limit] how many of the reply's calls run (the lane's)
    */
-  async _batch(chat, assistant, cutOff, roundsLeft, signal, limit = MAX_BATCH) {
+  async _batch(chat, assistant, cutOff, roundsLeft, signal) {
     const calls = assistant.tool_calls || [];
-    const within = calls.map((_, index) => index < limit);
+    const within = calls.map((_, index) => index < MAX_BATCH);
     const seen = new Set();
     /** @type {string | null} why the rest won't run */
     let skip = null;
@@ -480,7 +479,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       if (skip) {
         result = { output: skip, summary: "Not run: " + label, failed: true };
       } else if (!within[index]) {
-        result = { output: TEXTS.notRunBatch(limit), summary: "Not run: " + label, failed: true };
+        result = { output: TEXTS.notRunBatch(MAX_BATCH), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
         result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {

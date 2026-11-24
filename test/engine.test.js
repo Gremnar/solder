@@ -689,7 +689,7 @@ test("several edits to one file in a reply: the problems check waits for the las
   assert.equal(e2.meta.summary, "Edited · 1 new problem");
 });
 
-test("the batch limit: up to 8 calls from one reply, reads and changes alike", async () => {
+test("a reply's calls all run, reads and changes alike, up to a guard no task meets (50)", async () => {
   const reads = (n, from = 0) => Array.from({ length: n }, (_, i) => call(`r${from + i}`, "read_file", { path: `f${from + i}.js` }));
   const edits = (n) => Array.from({ length: n }, (_, i) => call(`e${i}`, "edit_file", { path: `g${i}.js`, old_text: "a", new_text: "b" }));
   const run = async (calls) => {
@@ -697,16 +697,23 @@ test("the batch limit: up to 8 calls from one reply, reads and changes alike", a
     await engine(fakeClient([{ calls }, { content: "ok" }]), host).ask(Engine.newChat(), "go");
     return host.ran.length;
   };
-  assert.equal(await run(reads(8)), 8);
-  assert.equal(await run(reads(9)), 8);
-  assert.equal(await run(edits(8)), 8, "eight edits a model knows all of run in one step");
-  assert.equal(await run(edits(9)), 8);
-  assert.equal(await run([...reads(3), ...edits(5)]), 8);
-  assert.equal(await run([...reads(3), ...edits(5), ...reads(1, 10)]), 8, "reads and changes share the eight");
+  assert.equal(await run(reads(12)), 12);
+  assert.equal(await run(edits(20)), 20, "a refactor's twenty edits run in one step");
+  assert.equal(await run([...reads(6), ...edits(15), ...reads(4, 10)]), 25, "mixed, in the order sent");
+  assert.equal(await run(edits(50)), 50);
+  assert.equal(await run(edits(53)), 50, "past the guard, the rest are refused");
   const chat = Engine.newChat();
-  await engine(fakeClient([{ calls: edits(10) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
-  assert.equal(chat.messages.find((m) => m.tool_call_id === "e7").meta.failed, false, "the eighth ran");
-  for (const id of ["e8", "e9"]) assert.match(chat.messages.find((m) => m.tool_call_id === id).content, /^Not run: Solder runs up to 8 calls from one reply\. Send it again/);
+  await engine(fakeClient([{ calls: edits(52) }, { content: "ok" }]), fakeHost()).ask(chat, "go");
+  assert.equal(chat.messages.find((m) => m.tool_call_id === "e49").meta.failed, false, "the fiftieth ran");
+  for (const id of ["e50", "e51"]) assert.match(chat.messages.find((m) => m.tool_call_id === id).content, /^Not run: Solder runs up to 50 calls from one reply\. Send it again/);
+  // A change that fails still stops what comes after it.
+  const stops = fakeHost();
+  const run3 = stops.runTool;
+  stops.runTool = async (name, args, ctx) => args.path === "g2.js" ? { output: "Error: no match", summary: "failed", failed: true } : run3.call(stops, name, args, ctx);
+  const halted = Engine.newChat();
+  await engine(fakeClient([{ calls: edits(20) }, { content: "ok" }]), stops).ask(halted, "go");
+  assert.equal(halted.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 2, "the two before the failure ran");
+  assert.equal(halted.messages.filter((m) => m.role === "tool" && /^Not run/.test(m.content)).length, 17, "the seventeen after it didn't");
 });
 
 test("argument problems: every missing one at once, and ones a tool doesn't take are named", async () => {

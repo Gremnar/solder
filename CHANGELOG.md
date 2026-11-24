@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **Assist models: a reply that's cut off carries on by itself.** When an Assist model's reply stopped partway (the gateway's stream ended early, the connection dropped, it went quiet), Solder showed the error and waited for **Resume**, every time. It now does what Resume does, once, without asking: what had arrived stays in the chat, and the model is asked to carry on in the same session. The status line says the reply was cut off and is being carried on, and the chat shows the **Carry on** it sent. If the reply is cut off again straight away, the error is shown with **Resume** as before. A reply you stopped is never carried on, nor is one that failed for a reason that would only repeat.
-- **Assist models: every tool request in a reply runs.** A reply's requests were run up to 8 and the rest refused, to be sent again. An Assist model's tokens aren't billed, and for a big refactor these models send fifteen or twenty edits at once, so the limit only cost steps. All of them now run, in order (up to 50, a guard against a reply gone wrong). A change that fails still stops the ones after it. A Tool model's reply runs 8 as before.
+- **Every call in a reply runs.** A reply's calls were run up to 8 and the rest refused, to be sent again. For a big refactor a model sends fifteen or twenty edits at once, so the limit only cost steps, and on a Tool model the whole chat sent once more with each. All of them now run, in order, on Tool and Assist models alike (up to 50, a guard against a reply gone wrong). A change that fails still stops the ones after it, and what one reply's reads may bring back together is held to the same size as before.
 
 ## 0.3.8 (2026-11-23)
 
