@@ -15,6 +15,7 @@ const { spawn } = require("node:child_process");
 const { RESULTS, TEXTS } = require("./prompt.js");
 const { DocsIndex, EmbedBudget, EmbedCache, meaningFloor, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
+const { describe } = require("./review.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -1498,6 +1499,44 @@ class WorkspaceTools {
     await vscode.commands.executeCommand("vscode.diff", before, now, `${change.shown} (before ↔ after Solder's step)`, { preview: true });
   }
 
+  /**
+   * A turn's changes in one place: VS Code's changes editor with a diff a file, each from before the turn's first
+   * change to it ↔ the file now (one file: a plain diff). What has no diff to show (a move that changed nothing, a
+   * folder, a copy from before that's no longer kept) is returned as lines to say.
+   * @param {import("./review.js").Entry[]} entries @param {string} title
+   * @returns {Promise<{opened: number, notes: string[]}>}
+   */
+  async reviewAll(entries, title) {
+    /** @type {[vscode.Uri, vscode.Uri, vscode.Uri][]} */
+    const resources = [];
+    /** @type {string[]} */
+    const notes = [];
+    for (const entry of entries) {
+      const file = vscode.Uri.file(entry.path);
+      const there = fs.existsSync(entry.path);
+      const kept = !!entry.before && fs.existsSync(entry.before);
+      if (entry.folder) { notes.push(describe(entry)); continue; }
+      if (entry.kind === "moved") { notes.push(describe(entry) + " (nothing in it changed)"); continue; }
+      if (entry.kind === "removed") {
+        if (kept) resources.push([file, vscode.Uri.file(/** @type {string} */ (entry.before)), emptyDocument(entry.path)]);
+        else notes.push(describe(entry) + " (no copy of it was kept)");
+        continue;
+      }
+      if (!there) { notes.push(`${entry.shown} isn't there any more`); continue; }
+      if (entry.kind === "added") { resources.push([file, emptyDocument(entry.path), file]); continue; }
+      if (kept) resources.push([file, vscode.Uri.file(/** @type {string} */ (entry.before)), file]);
+      else notes.push(describe(entry) + " (the copy from before it isn't kept any more)");
+      if (entry.from) notes.push(describe({ ...entry, kind: "moved" }));
+    }
+    if (resources.length === 1) {
+      const [file, before, after] = resources[0];
+      await vscode.commands.executeCommand("vscode.diff", before, after, `${this.shown(file.fsPath)} (before ↔ after this task)`, { preview: true });
+    } else if (resources.length) {
+      await vscode.commands.executeCommand("vscode.changes", title, resources);
+    }
+    return { opened: resources.length, notes };
+  }
+
   async mustBeFile(/** @type {any} */ file) {
     let stat;
     try { stat = await vscode.workspace.fs.stat(file.uri); } catch { throw new ToolError(RESULTS.missing(file.shown), await this.nearby(file)); }
@@ -1909,6 +1948,36 @@ function removeEmpty(from, top) {
     try { if (fs.readdirSync(at).length) return; fs.rmdirSync(at); } catch { return; }
     if (at.toLowerCase() === top.toLowerCase()) return;
   }
+}
+
+/**
+ * Read-only documents Solder shows beside a file in a diff: an empty one (the "before" of a new file, the "after" of a
+ * removed one), and a change as it would be, before you allow it. Registered the first time one is needed.
+ */
+const PREVIEW_SCHEME = "solder-preview";
+/** @type {Map<string, string>} by the document's path part */
+const previews = new Map();
+let previewsRegistered = false;
+let previewCount = 0;
+
+/** A read-only document holding `text`, named after `file` (so it's coloured as that kind of file). @param {string} file @param {string} text */
+function previewDocument(file, text) {
+  if (!previewsRegistered) {
+    previewsRegistered = true;
+    vscode.workspace.registerTextDocumentContentProvider(PREVIEW_SCHEME, { provideTextDocumentContent: (uri) => previews.get(uri.path) ?? "" });
+  }
+  const key = `/${text ? `p${++previewCount}` : "empty"}/${path.basename(file)}`;
+  if (text) {
+    previews.set(key, text);
+    // A few are kept (a diff tab left open still shows its text); older ones go.
+    for (const old of [...previews.keys()].slice(0, Math.max(0, previews.size - 40))) previews.delete(old);
+  }
+  return vscode.Uri.from({ scheme: PREVIEW_SCHEME, path: key });
+}
+
+/** An empty read-only document, named after `file`. @param {string} file */
+function emptyDocument(file) {
+  return previewDocument(file, "");
 }
 
 /** Where a change can make programs run: git's settings, hooks and filters, and VS Code's tasks and settings. */

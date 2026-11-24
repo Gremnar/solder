@@ -201,7 +201,7 @@
 
   /** What identifies an element across a redraw, most specific first. */
   const FOCUS_KEYS = ["data-step", "data-chip", "data-stab", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
-    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-turn", "data-unsteer", "data-model", "data-open", "id"];
+    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-review-task", "data-turn", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
    * Runs a redraw of root; if it replaced the focused element, focus goes to its new copy (or to fallback).
@@ -276,6 +276,7 @@
     check: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M4.2 8.4 6.9 11l4.9-5.8"/></svg>`,
     cross: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5 5l6 6M11 5l-6 6"/></svg>`,
     undo: `<svg viewBox="0 0 16 16" aria-hidden="true"><path pathLength="1" d="M5.5 6.5h4a2.6 2.6 0 0 1 0 5.2H7.5M7.6 4.4 5.5 6.5l2.1 2.1"/></svg>`,
+    review: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h4.2v9H3zM8.8 3.5H13v9H8.8zM4.6 6.5h1M4.6 9h1M10.2 6.5h1.4M10.9 5.8v1.4"/></svg>`,
     more: `<svg class="more" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg>`,
     clock: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 5v3l2 1.3M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0Z"/></svg>`,
     alert: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.8v3.6M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/><circle cx="8" cy="11" r="0.85"/></svg>`,
@@ -1006,7 +1007,8 @@
 
   /**
    * A finished turn's steps as one row: how many, how many changed something, how long; click to see them (Review and
-   * Undo work as ever inside). Undo all sits on the row when two or more changes can still be undone. @param {any} item
+   * Undo work as ever inside). Review sits on the row when the turn changed anything (one diff a file, from before the
+   * turn to now), and Undo all when two or more changes can still be undone. @param {any} item
    */
   function foldHtml(item) {
     const key = state.chat.id + ":" + item.id;
@@ -1029,6 +1031,7 @@
     }
     return `<div class="turn-fold${open ? " open" : ""}"><div class="fold-row">` +
       `<button class="fold-head" data-turn="${escape(item.id)}" aria-expanded="${open}">${ICONS.more}<span>${escape(facts)}</span></button>` +
+      (item.reviewAll ? `<button class="fold-undo" data-review-task="${item.reviewAll.at}" title="See everything this turn changed: one diff a file, from before the turn to now">${ICONS.review}Review${item.changes > 1 ? " all" : ""}</button>` : "") +
       (item.undoAll ? `<button class="fold-undo" data-undo-task="${item.undoAll.at}" title="Put back every file this turn changed">${ICONS.undo}Undo all ${item.undoAll.count}</button>` : "") +
       `</div>${open ? `<div class="fold-body">${inner}</div>` : ""}</div>`;
   }
@@ -2102,7 +2105,7 @@
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
     if (!target.closest("#path-actions")) closePathActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-review-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -2113,6 +2116,7 @@
       return;
     }
     if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
+    if (d.reviewTask) { vscode.postMessage({ type: "reviewTask", at: Number(d.reviewTask) }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
     if (d.openAttachment) { vscode.postMessage({ type: "openAttachment", id: d.openAttachment }); return; }
     if (d.removeAttachment) { vscode.postMessage({ type: "removeAttachment", id: d.removeAttachment }); input.focus(); return; }

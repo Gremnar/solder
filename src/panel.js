@@ -16,6 +16,7 @@ const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
 const { ChatStore, adoptChats } = require("./store.js");
 const { SavedKey, gatewayOf } = require("./key.js");
+const { netChanges } = require("./review.js");
 const { WorkspaceTools, plainNames, ownFile } = require("./tools.js");
 const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
@@ -108,9 +109,9 @@ const KEY = "solder.apiKey";
 const PASTE_UNASKED = "Paste, and don't ask again in this chat";
 /** Messages from the panel that act on the open chat: it's brought up to date first (see syncChat). */
 const ON_THE_CHAT = new Set(["send", "starter", "command", "chatAction", "switch-and-resume", "resume", "rename", "editMessage", "deleteMessage",
-  "delete", "model", "effort", "undo", "undoTask", "review", "attach", "attachPaste"]);
+  "delete", "model", "effort", "undo", "undoTask", "review", "reviewTask", "attach", "attachPaste"]);
 /** Of those, the ones that name a message or a step by its place in the chat. */
-const BY_PLACE = new Set(["editMessage", "deleteMessage", "undo", "undoTask", "review"]);
+const BY_PLACE = new Set(["editMessage", "deleteMessage", "undo", "undoTask", "review", "reviewTask"]);
 const MAX_SELECTION_CHARS = 12_000;
 const SHOWN_OUTPUT_CHARS = 6_000;
 
@@ -1315,6 +1316,7 @@ class SolderPanel {
         this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
       case "undo": return this.undo(message.id);
       case "undoTask": return this.undoTask(Number(message.at));
+      case "reviewTask": return this.reviewTask(Number(message.at));
       case "review": {
         const change = this.change(message.id);
         if (change) await this.tools.review(change);
@@ -1723,6 +1725,28 @@ class SolderPanel {
     if (problem) vscode.window.showWarningMessage(`Solder undid ${done} of ${changed.length} changes, then stopped: ${problem}`);
   }
 
+  /**
+   * Review everything a task changed, in one place: a diff a file, each from before the task's first change to it to
+   * the file as it is now (so what you or a later task changed since shows too). Changes already undone are left out.
+   * @param {number} start the index of the message that began the task
+   */
+  async reviewTask(start) {
+    const first = this.chat.messages[start];
+    if (!first || first.role !== "user") return;
+    const changes = this.taskMessages(start).filter((/** @type {any} */ m) => m.role === "tool" && m.meta?.change && !m.meta.undone).map((/** @type {any} */ m) => m.meta.change);
+    const entries = netChanges(changes);
+    if (!entries.length) { vscode.window.showInformationMessage("Solder: this task left nothing changed."); return; }
+    try {
+      const { opened, notes } = await this.tools.reviewAll(entries, `Solder: ${this.chat.title} (before ↔ now)`);
+      if (notes.length) {
+        const shown = notes.slice(0, 8).join("; ") + (notes.length > 8 ? `; and ${notes.length - 8} more` : "");
+        vscode.window.showInformationMessage(opened ? `Solder: also in this task: ${shown}.` : `Solder: nothing to show side by side. ${shown}.`);
+      }
+    } catch (error) {
+      vscode.window.showWarningMessage(`Solder: couldn't open the changes. ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** @param {string} file @param {number} [line] */
   async openFile(file, line) {
     if (!this.awayBusy()) this.useChat(this.chat); // the running task keeps its folder
@@ -1907,7 +1931,7 @@ class SolderPanel {
         const changes = folded.filter((item) => item.change && !item.undone).length;
         items.push({ kind: "fold", id: "t" + at, items: inner, steps: folded.length, changes,
           failed: folded.filter((item) => item.failed).length, ms: folded.reduce((sum, item) => sum + (item.ms || 0), 0),
-          undoAll: changes >= 2 ? { at, count: changes } : null });
+          undoAll: changes >= 2 ? { at, count: changes } : null, reviewAll: changes >= 1 ? { at } : null });
       } else items.push(...inner);
       items.push(...segment.slice(tail));
     }

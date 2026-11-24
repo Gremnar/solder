@@ -234,6 +234,34 @@ async function main() {
       && folds()[0].steps === 3 && folds()[0].changes === 3 && folds()[0].items.every((i) => i.kind === "step"), shown);
     check("each turn that changed two or more things has Undo all", JSON.stringify(offers) === JSON.stringify([{ at: 0, count: 3 }, { at: 8, count: 2 }])
       && fs.readFileSync(path.join(wsRoot, "ua1.txt"), "utf8") === "ONE and more\n" && fs.existsSync(path.join(wsRoot, "ua3.txt")), offers);
+    // Review all: the turn's changes in one place, one diff a file, each from before the turn's first change to now.
+    {
+      const opened = [];
+      const back = stub(own.commands, "executeCommand", async (id, ...rest) => { if (id === "vscode.changes" || id === "vscode.diff") { opened.push([id, ...rest]); return; } return vscode.commands.executeCommand(id, ...rest); });
+      try {
+        check("a turn that changed anything has Review on its row", JSON.stringify(folds().map((f) => f.reviewAll)) === JSON.stringify([{ at: 0 }, { at: 8 }]), folds().map((f) => f.reviewAll));
+        await panel.onMessage({ type: "reviewTask", at: 0 });
+        const [id, title, resources] = opened[0] || [];
+        const names = (resources || []).map(([file, before, after]) => [path.basename(file.fsPath), before.scheme, after.scheme]);
+        const first = (resources || [])[0];
+        check("Review all opens the changes editor: two edits to one file are one diff from before the first, and a new file is against nothing", id === "vscode.changes" && /before ↔ now/.test(title)
+          && JSON.stringify(names) === JSON.stringify([["ua1.txt", "file", "file"], ["ua3.txt", "solder-preview", "file"]])
+          && fs.readFileSync(first[1].fsPath, "utf8") === "one\n" && first[2].fsPath.toLowerCase() === path.join(wsRoot, "ua1.txt").toLowerCase(), [id, title, names]);
+        const empty = await vscode.workspace.openTextDocument(resources[1][1]);
+        check("... the 'before' of a new file is an empty read-only document", empty.getText() === "" && empty.uri.scheme === "solder-preview");
+        opened.length = 0;
+        await panel.onMessage({ type: "reviewTask", at: 8 });
+        check("a turn that changed one file opens a plain diff of it", opened.length === 1 && opened[0][0] === "vscode.diff" && fs.readFileSync(opened[0][1].fsPath, "utf8") === "two\n"
+          && /ua2\.txt \(before ↔ after this task\)/.test(opened[0][3]), opened[0]?.[3]);
+      } finally { back(); }
+      // And for real: VS Code takes the list as given (its shape isn't ours to choose).
+      let problem = "";
+      try { await panel.onMessage({ type: "reviewTask", at: 0 }); } catch (error) { problem = String(error && error.message || error); }
+      await sleep(400);
+      const tab = vscode.window.tabGroups.all.flatMap((group) => group.tabs).find((t) => /before ↔ now/.test(t.label));
+      check("... and VS Code's changes editor opens with it", !problem && !!tab && !told.some((text) => /couldn't open the changes/.test(text)), [problem, tab?.label, told.slice(-2)]);
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    }
     await panel.onMessage({ type: "undoTask", at: 0 });
     offers = folds().map((f) => f.undoAll).filter(Boolean);
     check("Undo all asks, then puts every file back (two edits to one file, and a new file gone)", fs.readFileSync(path.join(wsRoot, "ua1.txt"), "utf8") === "one\n"
