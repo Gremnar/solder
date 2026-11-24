@@ -212,6 +212,8 @@ What an Assist model is, and how to tell Solder which models are, is at the top:
 - **Carry-over:** when a whole conversation has to go to an Assist model in one request (a chat switched to one, a session that ended, or a gateway that keeps none), Solder sends as much of it as **Assist carry-over tokens** allows (200,000), newest first. Set it well inside what your Assist models can hold.
 - **Sessions:** if your gateway keeps Assist conversations in a session, set **Assist session block** to the name of the object its responses carry it in. Solder then sends only each new message.
 - **Switching:** a chat can move between the two at any point. If your Tool models' daily allowance runs out mid-task, Solder offers to switch the chat to the Assist version of the same model and carry on.
+- **Switching a long chat to an Assist model:** when the conversation is bigger than **Assist carry-over tokens**, so the new model would be sent only its newest part, Solder asks first. **Summarise, then switch** has the model the chat is on now write a summary of it (as `/compact` does), and the new model is sent that and the recent turns; **Switch anyway** sends the newest part only. A chat that fits, or a switch to a Tool model, isn't asked about.
+- **What the footer counts:** on an Assist model it shows the tokens the chat has taken (**free**: every request's own, the conversation the model's session held included) and the conversation the model holds now (**in context**). A gateway that keeps the session reports only each new message, so these are Solder's own estimates when they're larger.
 
 ## Instructions it follows
 

@@ -184,3 +184,30 @@ test("the requests being written, for the panel's progress line: the tool, the f
   const inner = draftingRequests(request(String.raw`{"tool": "write_file", "content": "{\"path\": \"other.js\"}", "path": "real.js"}`));
   assert.equal(inner[0].path, "");
 });
+
+test("a switch to another Assist model: whether the conversation it would be carried over in would leave its start out", () => {
+  const { wouldLeaveOut } = require("../src/assist.js");
+  const resultText = (/** @type {any} */ m) => m.content;
+  const chat = { messages: /** @type {any[]} */ ([]), compaction: null, assist: /** @type {any} */ (null) };
+  for (let turn = 0; turn < 30; turn++) {
+    chat.messages.push({ role: "user", content: `request ${turn} ` + "x".repeat(200) }, { role: "assistant", content: `answer ${turn} ` + "y".repeat(3800) });
+  }
+  const context = { workspace: "C:\work" };
+  // About 30,000 tokens of conversation: under the default 200,000, nothing is left out.
+  assert.equal(wouldLeaveOut(chat, "model-b", {}, context, resultText), null);
+  // Under a 10,000-token carry-over, the oldest go: said how many, and that the first request is among them.
+  const left = wouldLeaveOut(chat, "model-b", { assistCarryTokens: 10_000 }, context, resultText);
+  assert.ok(left && left.left > 30 && left.left < 60, JSON.stringify(left));
+  assert.ok(left.tokens > 28_000 && left.tokens < 36_000, `about the conversation's size: ${left.tokens}`);
+  assert.equal(left.budget, 10_000);
+  assert.equal(left.first, true);
+  // The same model, whose session holds the chat already: nothing is carried over.
+  chat.assist = { fields: { session: "s1", token: "t1" }, model: "model-b", held: chat.messages.length };
+  assert.equal(wouldLeaveOut(chat, "model-b", { assistSessionBlock: "test_session", assistCarryTokens: 10_000 }, context, resultText), null);
+  assert.ok(wouldLeaveOut(chat, "model-c", { assistSessionBlock: "test_session", assistCarryTokens: 10_000 }, context, resultText), "another model starts with nothing");
+  // After a summary, the left-out part is in it: the start isn't lost (and here it all fits).
+  chat.compaction = /** @type {any} */ ({ summary: "SUMMARY", through: 56 });
+  const after = wouldLeaveOut(chat, "model-c", { assistCarryTokens: 10_000 }, context, resultText);
+  assert.equal(after, null);
+  assert.equal(wouldLeaveOut({ messages: [], compaction: null }, "model-b", {}, context, resultText), null, "an empty chat has nothing to lose");
+});

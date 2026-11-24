@@ -77,6 +77,11 @@ test("assist: a fresh start with the introduction once, then only each new messa
     assert.match(chat.messages.at(-1).content, /I remember 5 messages/, "the gateway had the whole conversation");
     assert.equal(chat.usage.tokens, 0, "Assist replies aren't counted against the allowance");
     assert.ok(chat.usage.assistTokens > 0);
+    // The count is what the model took in: the conversation its session holds, not only the new message (the fake
+    // gateway, like a real one that keeps sessions, reports 7 prompt tokens whatever was held).
+    assert.ok(chat.usage.assistContext > 300, `the session holds the introduction, a read and its answer: ${chat.usage.assistContext}`);
+    assert.ok(chat.usage.assistTokens > chat.usage.assistContext, "every request's held conversation counted, not the last one's alone");
+    assert.ok(chat.usage.assistTokens > 4 * 12, `far more than the gateway's 12 a request: ${chat.usage.assistTokens}`);
   } finally { gw.close(); }
 });
 
@@ -351,5 +356,20 @@ test("assist: while a reply's requests are being written, the panel is told whic
     assert.ok(drafting.every((e) => Array.isArray(e.calls) && e.calls.length === 1 && typeof e.calls[0].chars === "number"));
     const shown = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
     assert.ok(!shown.includes("```") && !shown.includes("read_file"), "and the request itself still isn't shown");
+  } finally { gw.close(); }
+});
+
+test("assist: a switch is checked for what it would leave out; a Tool model, or one that fits, leaves out nothing", async () => {
+  const { gw, engine } = await setup();
+  try {
+  const chat = Engine.newChat();
+  for (let turn = 0; turn < 40; turn++) chat.messages.push({ role: "user", content: "q".repeat(300) }, { role: "assistant", content: "a".repeat(8000) });
+  assert.equal(await engine.leftOutBySwitch(chat, "model-a-tools"), null, "a Tool model is sent the whole chat, trimmed and summarised as ever");
+  const left = await engine.leftOutBySwitch(chat, "model-b");
+  assert.equal(left, null, "about 83,000 tokens: within the default 200,000");
+  engine.settings = () => ({ model: "model-a", compactAt: 100_000, maxRounds: 10, toolModels: "-tools$", assistSessionBlock: "test_session", assistCarryTokens: 20_000 });
+  const cut = await engine.leftOutBySwitch(chat, "model-b");
+  assert.ok(cut && cut.left > 50 && cut.first, JSON.stringify(cut));
+  assert.equal(await engine.leftOutBySwitch(Engine.newChat(), "model-b"), null);
   } finally { gw.close(); }
 });

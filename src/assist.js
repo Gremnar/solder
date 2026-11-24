@@ -445,16 +445,7 @@ const DATED = /^\([A-Z][a-z]+day, \d{1,2} [A-Z][a-z]+ \d{4}, \d{2}:\d{2}\)/;
  */
 function carryOver(setup, rendered, budget) {
   const newest = rendered[rendered.length - 1];
-  const history = rendered.slice(0, -1).map((m) => (m.role === "user" ? "Me" : "You") + ":\n" + stripSetup(m.content).trim());
-  let used = setup.length + ASSIST.carryOverLead.length + ASSIST.carryOverEnd.length + stripSetup(newest.content).length + 200;
-  /** @type {string[]} */
-  const kept = [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (used + history[i].length + 2 > budget) break;
-    kept.unshift(history[i]);
-    used += history[i].length + 2;
-  }
-  const left = history.length - kept.length;
+  const { history, kept, left } = carryFit(setup, rendered, budget);
   if (!history.length) return [setup, ASSIST.messageLead, stripSetup(newest.content)].join("\n\n");
   return [setup, ASSIST.carryOverLead, ...(left ? [ASSIST.carryOverLeftOut(left)] : []), ...kept, ASSIST.carryOverEnd, stripSetup(newest.content)].join("\n\n");
 }
@@ -520,6 +511,47 @@ function sessionPlan(chat, model, settings, context, resultText) {
   return { kind: "carry_over", messages: [{ role: "user", content: carryOver(setup, rendered, carryBudget(settings)) }], session: null, setup, single: null };
 }
 
+/**
+ * How a conversation fits a carry-over: every earlier message as it's written out (history), the newest of them that
+ * fit the budget (kept), how many are left out, and how long the whole would be (chars), all of it kept.
+ * @param {string} setup @param {{role: string, content: string}[]} rendered @param {number} budget characters
+ */
+function carryFit(setup, rendered, budget) {
+  const newest = rendered[rendered.length - 1];
+  const history = rendered.slice(0, -1).map((m) => (m.role === "user" ? "Me" : "You") + ":\n" + stripSetup(m.content).trim());
+  const base = setup.length + ASSIST.carryOverLead.length + ASSIST.carryOverEnd.length + stripSetup(newest?.content ?? "").length + 200;
+  let used = base;
+  /** @type {string[]} */
+  const kept = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (used + history[i].length + 2 > budget) break;
+    kept.unshift(history[i]);
+    used += history[i].length + 2;
+  }
+  return { history, kept, left: history.length - kept.length, chars: base + history.reduce((sum, text) => sum + text.length + 2, 0) };
+}
+
+/**
+ * Whether a chat would lose its start if it went to this Assist model now: the conversation as it would be carried
+ * over (a session belongs to the model that holds it, so another model starts with nothing), against the carry-over
+ * budget. Null when nothing would be left out: it fits, or that model's session already holds the chat.
+ * @param {any} chat @param {string} model @param {{assistSessionBlock?: string, assistCarryTokens?: number}} settings
+ * @param {any} context the setup's facts @param {(message: any) => string} resultText
+ * @returns {{tokens: number, budget: number, left: number, first: boolean} | null} first: the chat's first message is
+ *   among those left out (no summary stands in for it)
+ */
+function wouldLeaveOut(chat, model, settings, context, resultText) {
+  const record = chat.assist;
+  if (String(settings.assistSessionBlock || "").trim() && record?.fields && !record.lost && record.model === model) return null;
+  // What would go: the conversation, then your next message (not typed yet: it's the small part).
+  const rendered = [...assistOutbound(chat, resultText), { role: "user", content: "" }];
+  if (rendered.length < 2) return null;
+  const budget = carryBudget(/** @type {any} */ (settings));
+  const fit = carryFit(ASSIST.setup(context), rendered, budget);
+  if (!fit.left) return null;
+  return { tokens: Math.ceil(fit.chars / 4), budget: Math.floor(budget / 4), left: fit.left, first: !chat.compaction };
+}
+
 /** What a carry-over holds when the setting doesn't say: tokens, at about four characters each. */
 const CARRY_TOKENS = 200_000;
 
@@ -564,4 +596,4 @@ function stableJson(value) {
 }
 
 module.exports = { findRequests, parseReply, visibleText, draftingRequests, ALIASES, decode, salvage, canonical, fence, resultMessage, requestBlock,
-  assistOutbound, carryOver, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };
+  assistOutbound, carryOver, carryFit, wouldLeaveOut, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };

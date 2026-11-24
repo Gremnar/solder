@@ -1269,7 +1269,9 @@
       footer.push(`<span title="Spent: tokens over all this chat's requests. In context: what each step sends now; older turns are summarised past ${Number(state.chat.compactAt).toLocaleString()}.">` +
         [state.chat.tokens ? `${compact(state.chat.tokens)} spent` : "", state.chat.context ? `${compact(state.chat.context)} in context` : ""].filter(Boolean).join(" · ") + `</span>`);
     }
-    if (state.chat.freeTokens) footer.push(`<span title="Tokens on Assist models, which don't use the allowance">${compact(state.chat.freeTokens)} free</span>`);
+    // On an Assist model: what it has taken in over the chat (free), and the conversation its session holds now.
+    if (state.chat.freeTokens) footer.push(`<span title="Free: tokens on Assist models over all this chat's requests, the conversation each one held included. They don't use the allowance.${state.assist ? " In context: the conversation the model holds now; a switch to another model sends it in one message, up to Assist carry-over tokens." : ""}">` +
+      [`${compact(state.chat.freeTokens)} free`, state.assist && state.chat.assistContext ? `${compact(state.chat.assistContext)} in context` : ""].filter(Boolean).join(" · ") + `</span>`);
     const share = state.credits && state.credits.limit ? Math.max(0, Math.min(1, state.credits.remaining / state.credits.limit)) : 0;
     if (state.credits) footer.push(`<span class="left" title="${state.credits.remaining.toLocaleString()} of ${state.credits.limit.toLocaleString()} left">` +
       `${state.credits.limit ? `<span class="meter${share < 0.15 ? " low" : ""}"></span>` : ""}${compact(state.credits.remaining)} left</span>`);

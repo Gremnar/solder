@@ -336,6 +336,55 @@ async function main() {
         [fs.existsSync(file), two.chat.id === shared.id, told]);
     }
 
+    // ---- a long chat moved to an Assist model that would be sent only part of it: asked first, a summary offered
+    {
+      const warnings = [];
+      let reply;
+      const ask = stub(own.window, "showWarningMessage", async (text, options, ...buttons) => { warnings.push({ text: String(text), detail: options?.detail || "", buttons }); return reply; });
+      const realCompact = panel.engine.compactNow;
+      const compacted = [];
+      panel.engine.compactNow = async (chat) => { compacted.push(chat.id); chat.compaction = { summary: "SUMMARY", through: chat.messages.length }; return "done"; };
+      await raw().update("toolModels", "-tools$", vscode.ConfigurationTarget.Global);
+      await raw().update("assistCarryTokens", 20000, vscode.ConfigurationTarget.Global);
+      panel.models = [{ id: "model-a-tools", name: "Model A" }, { id: "model-b", name: "Model B" }, { id: "model-c", name: "Model C" }];
+      try {
+        const long = Engine.newChat();
+        long.model = "model-b";
+        for (let turn = 0; turn < 40; turn++) long.messages.push({ role: "user", content: "q".repeat(300) }, { role: "assistant", content: "a".repeat(8000) });
+        panel.chat = long;
+        reply = undefined;
+        await panel.onMessage({ type: "model", id: "model-c" });
+        check("a long chat moved to another Assist model: asked first, with how much would go and that the first request would be left out",
+          warnings.length === 1 && /about 8\dk tokens\. Model C would be sent only the newest 20k/.test(warnings[0].text) && /your first request in this chat among them/.test(warnings[0].detail)
+          && JSON.stringify(warnings[0].buttons) === JSON.stringify(["Summarise, then switch", "Switch anyway"]), warnings[0]);
+        check("... and closing the question leaves the chat on its model", long.model === "model-b" && !compacted.length, long.model);
+        reply = "Summarise, then switch";
+        await panel.onMessage({ type: "model", id: "model-c" });
+        check("Summarise, then switch: the chat is summarised by the model it's on, then switched", compacted.length === 1 && long.model === "model-c", [compacted, long.model]);
+        reply = undefined;
+        warnings.length = 0;
+        long.compaction = null;
+        await panel.onMessage({ type: "model", id: "model-a-tools" });
+        check("a Tool model isn't asked about: it's sent the whole chat, trimmed and summarised as ever", warnings.length === 0 && long.model === "model-a-tools");
+        long.model = "model-b";
+        reply = "Switch anyway";
+        await panel.onMessage({ type: "model", id: "model-c" });
+        check("Switch anyway switches, unsummarised", long.model === "model-c" && !long.compaction && compacted.length === 1);
+        const small = Engine.newChat();
+        small.model = "model-b";
+        small.messages.push({ role: "user", content: "hello" }, { role: "assistant", content: "hi" });
+        panel.chat = small;
+        warnings.length = 0;
+        await panel.onMessage({ type: "model", id: "model-c" });
+        check("a chat that fits is switched without a question", warnings.length === 0 && small.model === "model-c");
+      } finally {
+        ask();
+        panel.engine.compactNow = realCompact;
+        await raw().update("toolModels", undefined, vscode.ConfigurationTarget.Global);
+        await raw().update("assistCarryTokens", undefined, vscode.ConfigurationTarget.Global);
+      }
+    }
+
     // ---- settings held to their ranges where they're used
     const ranges = panel.settings();
     check("the step limit and Compact at are within their ranges, whatever the setting says", ranges.maxRounds >= 1 && ranges.maxRounds <= 100 && ranges.compactAt >= 30_000 && ranges.compactAt <= 2_000_000, [ranges.maxRounds, ranges.compactAt]);

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Solder asks before a long chat is moved to an Assist model that couldn't be sent all of it.** An Assist model that doesn't hold a chat yet (one you switch to, or the one offered when your allowance runs out) is sent the conversation in one message, up to **Assist carry-over tokens**: past that, the oldest part, your first request among it, was left out without a word. When that would happen, Solder now says how big the chat is and how much would go, and offers **Summarise, then switch**: the model the chat is on now writes a summary, and the new model is sent that and the recent turns. **Switch anyway** goes ahead as before. A chat that fits, or a switch to a Tool model (which is sent the whole chat, trimmed and summarised as ever), isn't asked about.
+- **Fix: an Assist chat's token count was far too low.** The footer's **free** count added up what the gateway reported, and a gateway that keeps the conversation in a session counts only each new message, not the conversation the model holds. Each request now counts the conversation the session held as well (Solder's own estimate, where it's larger than the gateway's). The footer also shows how big the conversation the model holds is now (**in context**), which is what a switch to another model has to carry over.
+
 ## 0.3.11 (2026-11-24)
 
 - **A finished turn says how long it worked.** Its row showed a time that was only how long the tools took to run, adding up to a second or two for a task that took ten minutes of the model's time. It now says **Worked for 10m 15s**: the whole turn, from your message to the answer, a Resume included and any time a card waited for your Allow left out. Chats from before this have no time on their rows.

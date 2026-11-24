@@ -1191,6 +1191,39 @@ class SolderPanel {
     return how;
   }
 
+  /**
+   * Before a chat moves to another model: when that's an Assist model that would be sent only the newest part of a long
+   * conversation (its start, your first request among it, left out), ask first, and offer to summarise it with the
+   * model it's on now. True to go ahead with the switch; false to leave the chat as it is.
+   * @param {any} chat @param {string} target
+   */
+  async confirmSwitch(chat, target) {
+    const settings = this.settings();
+    const current = String(chat.model || settings.model || "");
+    if (!target || target === current) return true;
+    let left;
+    try { left = await this.engine.leftOutBySwitch(chat, target); } catch { return true; }
+    if (!left) return true;
+    const name = this.models.find((m) => m.id === target)?.name || target;
+    const SUMMARISE = "Summarise, then switch";
+    const pick = await vscode.window.showWarningMessage(
+      `This chat is about ${compact(left.tokens)} tokens. ${name} would be sent only the newest ${compact(left.budget)} of it.`,
+      { modal: true, detail: `${left.left.toLocaleString()} earlier message${left.left === 1 ? "" : "s"} would be left out` +
+        (left.first ? ", your first request in this chat among them" : "") + `. A summary keeps what matters from them: the model this chat is on now ` +
+        `writes it, then ${name} is sent the summary and the recent turns. (Assist carry-over tokens, in Settings → Advanced, sets how much is sent.)` },
+      ...(this.engine.busy ? [] : [SUMMARISE]), "Switch anyway"); // a summary waits its turn while Solder works in another chat
+    if (pick === "Switch anyway") return true;
+    if (pick !== SUMMARISE) return false;
+    this.error = null;
+    this.compactProblem = "";
+    const result = await this.engine.compactNow(chat);
+    if (result === "done" || result === "nothing") return true;
+    vscode.window.showWarningMessage(`Couldn't summarise this chat${this.compactProblem ? ` (${this.compactProblem})` : ""}, so it's still on ${current || "its model"}. ` +
+      `Switch again to go ahead without a summary.`);
+    this.post();
+    return false;
+  }
+
   /** @param {any} message */
   async onMessage(message) {
     if (ON_THE_CHAT.has(message.type)) {
@@ -1216,6 +1249,7 @@ class SolderPanel {
         if (this.engine.busy || policy.locked("model")) return;
         const target = String(message.model || "");
         if (!this.models.some((m) => m.id === target)) return;
+        if (!(await this.confirmSwitch(this.chat, target))) { this.post(); return; }
         this.chat.model = target;
         await this.store.save(this.chat);
         this.error = null; this.useChat(this.chat); this.engine.resume(this.chat); return;
@@ -1318,7 +1352,9 @@ class SolderPanel {
       case "model":
         if (policy.locked("model")) { vscode.window.showInformationMessage("Your organization sets the model Solder uses."); return; }
         if (this.engine.busy && this.runId === this.chat.id) { vscode.window.showInformationMessage("Solder can switch models once this reply is done, or press Stop first."); return; }
-        this.chat.model = message.id; await this.store.save(this.chat); this.post(); return;
+        { const chat = this.chat;
+          if (!(await this.confirmSwitch(chat, String(message.id || "")))) { this.post(); return; }
+          chat.model = message.id; await this.store.save(chat); this.post(); return; }
       case "effort":
         if (policy.locked("effort")) { vscode.window.showInformationMessage("Your organization sets the effort Solder uses."); return; }
         this.chat.effort = message.level; await this.store.save(this.chat); this.post(); return;
@@ -1811,7 +1847,7 @@ class SolderPanel {
     const current = (settings.modelLocked ? settings.model : chat.model || settings.model) || "";
     this.view.webview.postMessage({
       type: "state",
-      chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0,
+      chat: { id: chat.id, title: chat.title, ...this.items(), tokens: chat.usage.tokens, freeTokens: chat.usage.assistTokens || 0, assistContext: /** @type {any} */ (chat.usage).assistContext || 0,
         context: /** @type {any} */ (chat.usage).context || 0, compactAt: this.settings().compactAt },
       // The title's dropdown: your projects' chats (whichever window they were started in), each marked with its
       // project, and this window's chats that are in none. The panel groups them.

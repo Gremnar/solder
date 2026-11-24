@@ -16,7 +16,7 @@
 const { Cancelled, sessionId } = require("./gateway.js");
 const { READ_ONLY, TEXTS, TOOLS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
-const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES } = require("./assist.js");
+const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut } = require("./assist.js");
 
 /** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
 const MAX_REPAIRS = 2;
@@ -267,6 +267,19 @@ class Engine {
     await this._save(chat).catch(() => {});
   }
 
+  /**
+   * Whether moving this chat to that model would leave the start of the conversation out: an Assist model that
+   * doesn't hold it yet is sent it in one message, up to the carry-over budget. Null when nothing would be lost (a Tool
+   * model is sent the whole chat, trimmed and summarised as ever). For the panel, to offer a summary first.
+   * @param {Chat} chat @param {string} model
+   */
+  async leftOutBySwitch(chat, model) {
+    const settings = this.settings();
+    if (!model || laneOf(model, settings) !== "assist" || !chat.messages.length) return null;
+    const context = (await this.host.assistContext?.(chat)) || { workspace: "" };
+    return wouldLeaveOut(chat, model, settings, context, resultText);
+  }
+
   /** @param {Chat} chat @param {(signal: AbortSignal) => Promise<void>} start */
   async _run(chat, start, loop = true) {
     if (this.busy) throw new Error("Solder is already working on a reply.");
@@ -449,7 +462,17 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     if (plan.single && (plan.kind === "fresh" || plan.messages[0].content !== (plan.single.meta?.sent ?? plan.single.content))) {
       plan.single.meta = { ...plan.single.meta, sent: plan.messages[0].content };
     }
-    this._spend(chat, reply.usage, reply.credits, true);
+    // What the model really took in: the conversation its session holds as well as what was sent. A gateway that keeps
+    // the session counts only the new message, so its count alone made a long Assist chat look nearly free of tokens.
+    // Solder's own estimate is used when it's the larger: the session's size before (usage.assistContext, from the last
+    // request) and what went now. A fresh start or a carry-over holds only what went.
+    const u = /** @type {any} */ (chat.usage);
+    const sent = plan.messages.reduce((sum, m) => sum + estimate(m.content), 0);
+    const held = plan.kind === "stateful" ? (Number.isFinite(u.assistContext) ? u.assistContext : estimateMessages(chat.messages)) : 0;
+    const prompt = Math.max(reply.usage?.prompt_tokens || 0, held + sent);
+    const completion = Math.max(reply.usage?.completion_tokens || 0, estimate(reply.content));
+    u.assistContext = prompt + completion;
+    this._spend(chat, { prompt_tokens: prompt, completion_tokens: completion }, reply.credits, true);
     const parsed = parseReply(reply.content, { cutOff: reply.finishReason === "length" });
     this.emit({ type: "reply", chat: chat.id, model, ms: reply.ms ?? 0, prompt: reply.usage?.prompt_tokens || 0,
       completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: parsed.calls.length });
