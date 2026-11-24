@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.11 (2026-11-24)
 
 - **A finished turn says how long it worked.** Its row showed a time that was only how long the tools took to run, adding up to a second or two for a task that took ten minutes of the model's time. It now says **Worked for 10m 15s**: the whole turn, from your message to the answer, a Resume included and any time a card waited for your Allow left out. Chats from before this have no time on their rows.
 - **README:** a section near the top on Tool models and Assist models: an Assist model gets no `tools` array but still uses all of Solder's tools, how to tell which kind a model is, and how to set it.
