@@ -1003,3 +1003,83 @@ test("a file read again in a task: the older copy is cut to a line that points a
   await engine(fakeClient([{ calls: [call("1", "read_file", { path: "c.js" })] }, { calls: [call("2", "read_file", { path: "./c.js" })] }, { content: "Done." }]), big).ask(capped, "read c twice");
   assert.equal(!!capped.messages.find((m) => m.tool_call_id === "1").meta.superseded, false);
 });
+
+test("looks next to each other in a reply run a few at a time; their results stay in the order asked, and a change waits its turn", async () => {
+  /** A host whose tools take a while, and which records what ran beside what. */
+  const slowHost = (/** @type {Record<string, number>} */ delays = {}, /** @type {Set<string>} */ failing = new Set()) => {
+    const host = fakeHost();
+    let running = 0;
+    const log = { most: 0, order: /** @type {string[]} */ ([]), during: /** @type {Record<string, string[]>} */ ({}) };
+    const active = new Set();
+    host.runTool = async (name, args) => {
+      const id = String(args.path || args.query || args.glob || name);
+      host.ran.push([name, args]);
+      log.order.push("start " + id);
+      log.during[id] = [...active];
+      active.add(id);
+      running++;
+      log.most = Math.max(log.most, running);
+      await new Promise((resolve) => setTimeout(resolve, delays[id] ?? 20));
+      running--;
+      active.delete(id);
+      log.order.push("end " + id);
+      return failing.has(id) ? { output: "Error: gone", summary: "failed", failed: true } : { output: `${id} ok`, summary: `${name} done` };
+    };
+    return Object.assign(host, { log });
+  };
+  const read = (/** @type {string} */ file) => call("c-" + file, "read_file", { path: file });
+  const ids = (/** @type {any} */ chat) => chat.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id);
+
+  // Eight reads: four at a time, never more; the first asked takes longest, and is still answered first.
+  let host = slowHost({ "f0.js": 60 });
+  let chat = Engine.newChat();
+  await engine(fakeClient([{ calls: Array.from({ length: 8 }, (_, i) => read(`f${i}.js`)) }, { content: "ok" }]), host).ask(chat, "go");
+  assert.equal(host.log.most, 4);
+  assert.deepEqual(host.log.order.slice(0, 4), ["start f0.js", "start f1.js", "start f2.js", "start f3.js"], "started in the order asked");
+  assert.deepEqual(ids(chat), Array.from({ length: 8 }, (_, i) => `c-f${i}.js`), "answered in the order asked");
+  assert.equal(chat.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 8);
+
+  // A change between reads: nothing after it starts until it's done, and it doesn't start until the reads before it are.
+  host = slowHost();
+  chat = Engine.newChat();
+  await engine(fakeClient([{ calls: [read("a.js"), read("b.js"), call("e1", "edit_file", { path: "a.js", old_text: "x", new_text: "y" }), read("c.js"), read("d.js")] }, { content: "ok" }]), host).ask(chat, "go");
+  const order = host.log.order;
+  assert.ok(order.indexOf("end b.js") < order.indexOf("start a.js", 1) || order.filter((line) => line === "start a.js").length === 2);
+  const editStart = order.lastIndexOf("start a.js");
+  assert.ok(order.indexOf("end a.js") < editStart && order.indexOf("end b.js") < editStart, "the edit waited for the reads before it");
+  assert.ok(order.lastIndexOf("end a.js") < order.indexOf("start c.js"), "and the reads after it waited for the edit");
+  assert.deepEqual(host.log.during["d.js"], ["c.js"], "which then ran side by side");
+  assert.deepEqual(ids(chat), ["c-a.js", "c-b.js", "e1", "c-c.js", "c-d.js"]);
+
+  // A read that fails doesn't stop the ones beside it; a failed change stops the reads after it before they start.
+  host = slowHost({}, new Set(["b.js"]));
+  chat = Engine.newChat();
+  await engine(fakeClient([{ calls: [read("a.js"), read("b.js"), read("c.js")] }, { content: "ok" }]), host).ask(chat, "go");
+  assert.deepEqual(chat.messages.filter((m) => m.role === "tool").map((m) => m.meta.failed), [false, true, false]);
+  host = slowHost();
+  host.runTool = ((inner) => async (name, args) => name === "edit_file" ? (host.ran.push([name, args]), { output: "Error: no match", summary: "failed", failed: true }) : inner(name, args))(host.runTool);
+  chat = Engine.newChat();
+  await engine(fakeClient([{ calls: [call("e1", "edit_file", { path: "a.js", old_text: "x", new_text: "y" }), read("c.js"), read("d.js")] }, { content: "ok" }]), host).ask(chat, "go");
+  assert.deepEqual(host.ran.map(([name]) => name), ["edit_file"], "nothing after the failed change was started");
+
+  // The same read twice, and a call that has to be asked about, are never started ahead.
+  host = slowHost();
+  chat = Engine.newChat();
+  await engine(fakeClient([{ calls: [read("a.js"), read("a.js"), read("b.js"), call("p1", "problems", { path: "a.js" }), read("c.js")] }, { content: "ok" }]), host).ask(chat, "go");
+  assert.deepEqual(host.ran.map(([name, args]) => `${name} ${args.path}`), ["read_file a.js", "read_file b.js", "problems a.js", "read_file c.js"]);
+  assert.match(chat.messages.find((m) => m.role === "tool" && /same call/.test(m.content)).content, /Not run again/);
+  assert.deepEqual(host.log.during["a.js"], [], "problems ran by itself (it opens the file to have it checked)");
+});
+
+test("Stop while several looks run: each is answered, none is left without a result", async () => {
+  const host = fakeHost();
+  host.runTool = async (name, args) => { host.ran.push([name, args]); await new Promise((resolve) => setTimeout(resolve, 200)); return { output: "late", summary: "late" }; };
+  const chat = Engine.newChat();
+  const e = engine(fakeClient([{ calls: Array.from({ length: 6 }, (_, i) => call(`r${i}`, "read_file", { path: `f${i}.js` })) }, { content: "ok" }]), host);
+  setTimeout(() => e.stop(), 30);
+  await e.ask(chat, "go");
+  const results = chat.messages.filter((m) => m.role === "tool");
+  assert.equal(results.length, 6, "every call has its answer");
+  assert.ok(results.every((m) => m.meta.failed && /stopped|Not run/i.test(m.content)), results.map((m) => m.content.slice(0, 30)).join(" | "));
+  assert.ok(host.ran.length <= 4, "no more were started than run at once");
+});

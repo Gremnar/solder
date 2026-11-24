@@ -50,6 +50,13 @@ const STUB_MIN_CHARS = 2_000;
  * held to MAX_BATCH_RESULT_CHARS, and a change that fails still stops the calls after it.
  */
 const MAX_BATCH = 50;
+/**
+ * Calls that only look, next to each other in a reply, run this many at a time: each waits on a disk, a language
+ * server or a share, not on the others, so eight reads of a slow share took eight waits. Their results are still
+ * recorded in the order the model asked. Not `problems`, which opens the file in the editor to have it checked.
+ */
+const READS_AT_ONCE = 4;
+const TOGETHER = new Set(["read_file", "symbols", "search", "find_files", "changes"]);
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -475,10 +482,36 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     // Several edits to one file in a reply: its problems are checked once, after the last of them.
     const group = calls[0]?.id || "";
     const editsTo = calls.map((other) => other.function.name === "edit_file" ? pathKey(argumentsOf(other).path) : "");
+    const parsedAll = calls.map((call, index) => parseArguments(call.function.name, call.function.arguments, cutOff && index === calls.length - 1));
+    // Reads started ahead of their turn (see READS_AT_ONCE): the call's place in the reply, and its result on the way.
+    /** @type {Map<number, Promise<ToolResult>>} */
+    const ahead = new Map();
+    /** Whether the call at this place can run beside its neighbours: a look that needs no asking and has no problem. */
+    const together = (/** @type {number} */ at) => {
+      const name = calls[at].function.name;
+      const parsed = parsedAll[at];
+      return TOGETHER.has(name) && within[at] && !parsed.problem && !this.host.needsApproval(name, parsed.args);
+    };
+    /** Start the looks that follow the one at `from`, while they're next to each other, up to READS_AT_ONCE in all. */
+    const startAhead = (/** @type {number} */ from) => {
+      if (batchChars >= batchLimit) return; // the reply's results are already as much as one may bring back
+      const prints = new Set([...seen, fingerprint(calls[from].function.name, parsedAll[from].args)]);
+      let running = [...ahead.keys()].filter((at) => at > from).length + 1;
+      for (let at = from + 1; at < calls.length && running < READS_AT_ONCE; at++) {
+        if (ahead.has(at)) { prints.add(fingerprint(calls[at].function.name, parsedAll[at].args)); continue; }
+        const print = together(at) ? fingerprint(calls[at].function.name, parsedAll[at].args) : "";
+        if (!print || prints.has(print)) break; // a change, a call to ask about, or a repeat: in its own turn
+        prints.add(print);
+        const work = this._runOne(chat, calls[at].id, calls[at].function.name, parsedAll[at].args, labelOf(calls[at].function.name, parsedAll[at].args), signal);
+        work.catch(() => {}); // awaited in its turn; never an unhandled rejection if that turn doesn't come
+        ahead.set(at, work);
+        running++;
+      }
+    };
     for (let index = 0; index < calls.length; index++) {
       const call = calls[index];
       const name = call.function.name;
-      const parsed = parseArguments(name, call.function.arguments, cutOff && index === calls.length - 1);
+      const parsed = parsedAll[index];
       const label = labelOf(name, parsed.args);
       /** @type {ToolResult} */
       let result;
@@ -488,7 +521,10 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       } else if (!within[index]) {
         result = { output: TEXTS.notRunBatch(MAX_BATCH), summary: "Not run: " + label, failed: true };
       } else if (READ_ONLY.has(name) && batchChars >= batchLimit) {
-        result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true };
+        // One started beside the others before the limit was reached: its output isn't sent, but what came with it to
+        // keep (a folder's instructions, given once) still is.
+        const kept = ahead.has(index) ? (await ahead.get(index))?.keep : "";
+        result = { output: TEXTS.notRunFull, summary: "Not run: " + label, failed: true, ...(kept ? { keep: kept } : {}) };
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {
         // A note Solder once put in old calls, sent back as the text of a change: never run (it went into a file once).
         result = { output: TEXTS.standInArgument, summary: "Not run: " + label, failed: true };
@@ -503,7 +539,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       } else {
         seen.add(fingerprint(name, parsed.args));
         const more = !!editsTo[index] && editsTo.some((other, later) => later > index && within[later] && other === editsTo[index]);
-        result = await this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);
+        // This one first (they start in the order asked), then the looks that follow it, to run beside it.
+        const started = ahead.get(index);
+        const work = started ?? this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);
+        if (started || together(index)) startAhead(index);
+        if (started) this.emit({ type: "running", chat: chat.id, id: call.id, label }); // the one now waited for
+        result = await work;
         // Arguments the tool doesn't take were left out: said once, so the next call can drop or rename them.
         if (parsed.ignored?.length) result = { ...result, output: result.output + "\n\n" + TEXTS.ignored(name, parsed.ignored) };
         if (result.failed && !READ_ONLY.has(name) && !signal.aborted) skip = TEXTS.notRun;

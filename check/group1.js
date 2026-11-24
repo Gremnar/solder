@@ -54,6 +54,21 @@ async function main() {
     check(`search glob ${glob}`, /g1\/Scripts\/Deploy\.ps1:3:/.test(r.output), r.output.slice(0, 200));
   }
 
+  // Looks run side by side (the engine runs a reply's reads a few at a time): each gives what it gives by itself.
+  {
+    const looks = [["read_file", { path: "g1/Scripts/Deploy.ps1" }], ["read_file", { path: "g1/Scripts/lib/Get-Report.ps1" }], ["search", { query: "Get-Report", glob: "g1/**" }],
+      ["find_files", { glob: "g1/**/*.ps1" }], ["symbols", { path: "g1/Scripts/lib/Get-Report.ps1" }], ["read_file", { path: "g1/notes.txt" }]];
+    const fresh = () => ({ chat: { id: "c-looks", messages: [] }, signal: AbortSignal.timeout(60000) });
+    // (A search's files come in whatever order ripgrep's threads finish: compared line by line, whatever the order.)
+    const lines = (text) => String(text).split("\n").sort().join("\n");
+    const alone = [];
+    for (const [name, args] of looks) alone.push(lines((await tools.run(name, args, fresh())).output));
+    const side = fresh();
+    const beside = (await Promise.all(looks.map(([name, args]) => tools.run(name, args, side)))).map((result) => lines(result.output));
+    check("six looks side by side give what each gives alone", JSON.stringify(beside) === JSON.stringify(alone) && alone.every((text) => text && !/^Error/.test(text)),
+      alone.map((text, n) => (text === beside[n] ? "same" : `differs: ${String(beside[n]).slice(0, 80)}`)));
+  }
+
   // edit_file: old_text copied with read_file's line numbers.
   const file = path.join(g, "Scripts", "lib", "Get-Report.ps1");
   r = await run("edit_file", { path: "g1/Scripts/lib/Get-Report.ps1", old_text: "2\t    param([int]$Days = 1)\n3\t    Write-Output \"report $Days\"", new_text: "2\t    param([int]$Days = 7)\n3\t    Write-Output \"report $Days\"" });
