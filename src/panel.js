@@ -1225,6 +1225,14 @@ class SolderPanel {
         if (this.engine.busy) { vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Resume this one when it's done.`); return; }
         this.error = null; this.useChat(this.chat); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
+      case "previewApproval": {
+        // The change a card is asking about, opened as a diff before you answer (nothing is changed by looking).
+        const asked = this.approvals.find((a) => a.id === message.id);
+        if (!asked) return;
+        const why = await this.tools.previewChange(asked.name, asked.args);
+        if (why) vscode.window.showInformationMessage(`Solder: ${why}`);
+        return;
+      }
       case "unsteer": {
         // Taken back before it went: back into the box, to change or send later.
         const text = this.engine.unsteer(Number(message.index));
@@ -1827,7 +1835,12 @@ class SolderPanel {
       workspaceName: (vscode.workspace.workspaceFolders || []).map((folder) => folder.name).join(" + "),
       status: this.awayBusy() ? "" : this.status,
       live: this.awayBusy() ? "" : this.live,
-      approvals: (this.awayBusy() ? [] : this.approvals).map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "" })),
+      // What each would do, to decide on: a write's text, an edit's old and new text (the start of each), and whether
+      // Show diff can open the file as it is beside the file as it would be.
+      approvals: (this.awayBusy() ? [] : this.approvals).map((a) => ({ id: a.id, label: a.label, reason: a.reason, content: a.name === "write_file" ? String(a.args.content || "").slice(0, 2000) : "",
+        ...(a.name === "edit_file" ? { removed: String(a.args.old_text ?? "").slice(0, 1200), added: String(a.args.new_text ?? "").slice(0, 1200),
+          cut: String(a.args.old_text ?? "").length > 1200 || String(a.args.new_text ?? "").length > 1200 } : {}),
+        diff: a.name === "edit_file" || a.name === "write_file" })),
       error: this.error && (!this.errorChat || this.errorChat === chat.id) ? this.error : null,
       answerTokens: this.awayBusy() ? 0 : this.answerTokens,
       credits: this.credits,

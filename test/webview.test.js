@@ -156,3 +156,14 @@ test("words appear at a reading pace, but the screen is never far behind: a back
   assert.ok(drain(400, true) <= 330, `a short tail took ${drain(400, true)} ms`);
   assert.equal(take(5000, false, true), 5000, "with reduced motion, all of it at once");
 });
+
+test("an approval card's change: lines taken out and put in, with nothing in them turning into markup", () => {
+  const html = panel.changeLines('if (a < b) {\n  x = "<b>";\n}', "if (a <= b) {\r\n  x = '&';\r\n}");
+  assert.equal(html.split("\n").length, 6);
+  assert.ok(html.startsWith('<span class="del">− if (a &lt; b) {</span>'));
+  assert.ok(html.includes('<span class="del">−   x = &quot;&lt;b&gt;&quot;;</span>'));
+  assert.ok(html.includes('<span class="add">+   x = &#39;&amp;&#39;;</span>') || html.includes("<span class=\"add\">+   x = '&amp;';</span>"));
+  assert.ok(!/<b>|<script/i.test(html));
+  assert.equal(panel.changeLines("", "new line"), '<span class="add">+ new line</span>', "nothing taken out: only what's put in");
+  assert.equal(panel.changeLines("gone", ""), '<span class="del">− gone</span>');
+});

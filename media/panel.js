@@ -201,7 +201,7 @@
 
   /** What identifies an element across a redraw, most specific first. */
   const FOCUS_KEYS = ["data-step", "data-chip", "data-stab", "data-field", "data-docs-about", "data-about", "data-pick-model", "data-sact", "data-setup",
-    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-review-task", "data-turn", "data-unsteer", "data-model", "data-open", "id"];
+    "data-action", "data-switch", "data-review", "data-undo", "data-undo-task", "data-review-task", "data-preview", "data-turn", "data-unsteer", "data-model", "data-open", "id"];
 
   /**
    * Runs a redraw of root; if it replaced the focused element, focus goes to its new copy (or to fallback).
@@ -1036,6 +1036,13 @@
       `</div>${open ? `<div class="fold-body">${inner}</div>` : ""}</div>`;
   }
 
+  /** An edit's old and new text as lines taken out (−) and put in (+), escaped. @param {string} removed @param {string} added */
+  function changeLines(removed, added) {
+    const lines = (/** @type {string} */ text, /** @type {string} */ mark, /** @type {string} */ kind) =>
+      String(text).split(/\r\n|\r|\n/).map((line) => `<span class="${kind}">${mark} ${escape(line)}</span>`).join("\n");
+    return [removed ? lines(removed, "−", "del") : "", added ? lines(added, "+", "add") : ""].filter(Boolean).join("\n");
+  }
+
   /** "Scroll to bottom": shown once the chat's end is more than about a screen's third away. */
   function updateToBottom() {
     const away = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
@@ -1160,9 +1167,12 @@
     const approvals = state.approvals.map((/** @type {any} */ a) => `<div class="approval" data-id="${escape(a.id)}" data-enter="a:${escape(a.id)}" role="region" aria-label="Approval needed">` +
       `<div class="what" id="ap-what-${escape(a.id)}">${ICONS.shield}<span>${escape(a.label)}</span></div><div class="why" id="ap-why-${escape(a.id)}">${escape(a.reason)}</div>` +
       (a.content ? `<pre><code>${escape(a.content)}</code></pre>` : "") +
+      (a.removed !== undefined ? `<pre class="change" aria-label="The text taken out, then the text put in"><code>${changeLines(a.removed, a.added)}${a.cut ? `\n<span class="grey">… (the start of each: Show diff has all of it)</span>` : ""}</code></pre>` : "") +
       `<input type="text" aria-label="Note for the model" placeholder="A note for the model (optional)"><div class="buttons">` +
       `<button class="allow" data-decide="allow" aria-describedby="ap-what-${escape(a.id)} ap-why-${escape(a.id)}">Allow</button>` +
-      `<button data-decide="decline" aria-describedby="ap-what-${escape(a.id)}">Decline</button></div></div>`).join("");
+      `<button data-decide="decline" aria-describedby="ap-what-${escape(a.id)}">Decline</button>` +
+      (a.diff ? `<button class="show" data-preview="${escape(a.id)}" title="Open the file as it is beside the file as this change would leave it. Nothing is changed by looking.">Show diff</button>` : "") +
+      `</div></div>`).join("");
     if (approvals !== shownApprovals) { // only when they change: a note you're typing stays put
       shownApprovals = approvals;
       const box = $("approvals");
@@ -2105,7 +2115,7 @@
     const target = /** @type {HTMLElement} */ (event.target);
     if (!target.closest("#chat-actions")) closeChatActions(false);
     if (!target.closest("#path-actions")) closePathActions(false);
-    const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-review-task],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
+    const el = /** @type {HTMLElement | null} */ (target.closest("[data-open-attachment],[data-remove-attachment],[data-edit-msg],[data-delete-msg],[data-turn],[data-undo-task],[data-review-task],[data-preview],[data-stab],[data-fold],[data-action],[data-switch],[data-starter],[data-sact],[data-sfield],[data-setup],[data-pick-model],[data-open],[data-model],[data-level],[data-chip],[data-undo],[data-review],[data-decide],[data-unsteer],[data-step],[data-path],pre .copy,pre .paste,.step-head"));
     if (!target.closest(".menu")) closeMenus();
     if (!el) return;
     const d = el.dataset;
@@ -2117,6 +2127,7 @@
     }
     if (d.undoTask) { vscode.postMessage({ type: "undoTask", at: Number(d.undoTask) }); return; }
     if (d.reviewTask) { vscode.postMessage({ type: "reviewTask", at: Number(d.reviewTask) }); return; }
+    if (d.preview) { vscode.postMessage({ type: "previewApproval", id: d.preview }); return; }
     if (d.stab) { showSettingsTab(d.stab); return; }
     if (d.openAttachment) { vscode.postMessage({ type: "openAttachment", id: d.openAttachment }); return; }
     if (d.removeAttachment) { vscode.postMessage({ type: "removeAttachment", id: d.removeAttachment }); input.focus(); return; }
@@ -2190,5 +2201,5 @@
   autosize();
   vscode.postMessage({ type: "ready" });
   // @ts-ignore: for the browser preview harness
-  window.__solder = { markdown, pasteAsChip, revealTake, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
+  window.__solder = { markdown, pasteAsChip, revealTake, changeLines, projectsHtml: (/** @type {any} */ p) => (p.page ? projectPageHtml(p) : projectListHtml(p)) };
 })();

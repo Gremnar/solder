@@ -1114,6 +1114,35 @@ class WorkspaceTools {
    * (then the problems check waits for that last edit, against the file as it was before the first)
    */
   async editFile(args, chat, hint) {
+    const { file, document, text, old, found } = await this.plannedEdit(args);
+    const { start, length, replaced } = found;
+    const shiftNote = found.note;
+    const key = file.full.toLowerCase();
+    const waiting = hint && this._pendingProblems.get(key);
+    const before = waiting && waiting.group === hint.group ? waiting.before : problemKeys(file.uri);
+    const backup = await this.backup(chat, file, text);
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replaced);
+    if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
+    await saveOrRevert(document, file, text);
+    const removed = lineCount(old);
+    const added = lineCount(replaced);
+    let problems = { text: "", summary: "" };
+    if (hint?.more) this._pendingProblems.set(key, { group: hint.group, before, file, given: String(args.path) });
+    else {
+      this._pendingProblems.delete(key);
+      problems = await this.newProblems(file, before);
+    }
+    return this._edited(file, document, text, backup, removed, added, start, shiftNote, problems);
+  }
+
+  /**
+   * Where an edit would go and what it would put there, worked out exactly as the edit works it out (it is the edit's
+   * own first half): so what a preview shows before you allow a change is what the change then does. Throws what the
+   * edit would (no such file, old_text not found or found more than once).
+   * @param {any} args
+   */
+  async plannedEdit(args) {
     const file = this.resolve(args.path);
     await this.mustBeFile(file);
     const document = await vscode.workspace.openTextDocument(file.uri);
@@ -1135,24 +1164,12 @@ class WorkspaceTools {
       if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
     }
     if (!found) throw notFound(file.shown, text, plain ?? old, eol);
-    const { start, length, replaced } = found;
-    const shiftNote = found.note;
-    const key = file.full.toLowerCase();
-    const waiting = hint && this._pendingProblems.get(key);
-    const before = waiting && waiting.group === hint.group ? waiting.before : problemKeys(file.uri);
-    const backup = await this.backup(chat, file, text);
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replaced);
-    if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
-    await saveOrRevert(document, file, text);
-    const removed = lineCount(old);
-    const added = lineCount(replaced);
-    let problems = { text: "", summary: "" };
-    if (hint?.more) this._pendingProblems.set(key, { group: hint.group, before, file, given: String(args.path) });
-    else {
-      this._pendingProblems.delete(key);
-      problems = await this.newProblems(file, before);
-    }
+    return { file, document, text, eol, old, found };
+  }
+
+  /** An edit's result, once it's made. */
+  _edited(/** @type {any} */ file, /** @type {any} */ document, /** @type {string} */ text, /** @type {string} */ backup, /** @type {number} */ removed, /** @type {number} */ added,
+    /** @type {number} */ start, /** @type {string} */ shiftNote, /** @type {{text: string, summary: string}} */ problems) {
     return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + shiftNote + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: false, after: hash(document.getText()) } };
@@ -1535,6 +1552,34 @@ class WorkspaceTools {
       await vscode.commands.executeCommand("vscode.changes", title, resources);
     }
     return { opened: resources.length, notes };
+  }
+
+  /**
+   * A change that's waiting for your Allow, shown before it's made: the file as it is ↔ the file as the change would
+   * leave it, worked out as the change itself is (plannedEdit). Nothing is changed by looking.
+   * @param {string} name @param {any} args @returns {Promise<string>} "" when a diff was opened, else why there's none
+   */
+  async previewChange(name, args) {
+    try {
+      if (name === "edit_file") {
+        const { file, text, found } = await this.plannedEdit(args);
+        const proposed = text.slice(0, found.start) + found.replaced + text.slice(found.start + found.length);
+        await vscode.commands.executeCommand("vscode.diff", file.uri, previewDocument(file.full, proposed), `${file.shown} (now ↔ if you allow this)`, { preview: true });
+        return "";
+      }
+      if (name === "write_file") {
+        const file = this.resolve(args.path);
+        let exists = false;
+        try { exists = fs.statSync(file.full).isFile(); } catch { exists = false; }
+        await vscode.commands.executeCommand("vscode.diff", exists ? file.uri : emptyDocument(file.full), previewDocument(file.full, String(args.content ?? "")),
+          `${file.shown} (${exists ? "now" : "new"} ↔ if you allow this)`, { preview: true });
+        return "";
+      }
+      return "There's nothing to show side by side for this one: the card says what it does.";
+    } catch (error) {
+      if (error instanceof ToolError) return `This change wouldn't go through as it stands: ${error.message}`;
+      return `The change couldn't be shown: ${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   async mustBeFile(/** @type {any} */ file) {

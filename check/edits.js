@@ -43,6 +43,42 @@ async function main() {
   log("A2:", r.output);
   check("A2: uneven refused with the file's lines", r.failed && /closest place is around lines \d+-\d+/.test(r.output) && /\n3\t    for \(const item of items\) \{/.test(r.output));
 
+  // P. Show diff on an approval card: what it shows is what the edit then makes, and looking changes nothing.
+  {
+    const own = require("node:module").createRequire(path.join(REPO, "src", "tools.js"))("vscode");
+    const real = own.commands.executeCommand;
+    const shown = [];
+    own.commands.executeCommand = async (id, ...rest) => { if (id === "vscode.diff") { shown.push(rest); return undefined; } return real.call(own.commands, id, ...rest); };
+    const text = async (uri) => (await vscode.workspace.openTextDocument(uri)).getText();
+    const other = path.join(ws, "preview.ps1");
+    const was = "function Get-Total {\r\n    param([int[]]$Items)\r\n    $sum = 0\r\n    foreach ($item in $Items) { $sum += $item }\r\n    return $sum\r\n}\r\n";
+    fs.writeFileSync(other, was);
+    try {
+      // old_text written two spaces short, as a model does: the preview works it out the way the edit will.
+      const edit = { path: "preview.ps1", old_text: "  $sum = 0\n  foreach ($item in $Items) { $sum += $item }", new_text: "  $sum = 0\n  foreach ($item in $Items) { if ($item -gt 0) { $sum += $item } }" };
+      const why = await tools.previewChange("edit_file", edit);
+      const proposed = shown[0] ? await text(shown[0][1]) : "";
+      check("P: Show diff opens the file beside the file as the edit would leave it, and changes nothing", why === "" && shown.length === 1 && shown[0][0].fsPath.toLowerCase() === other.toLowerCase()
+        && shown[0][1].scheme === "solder-preview" && /now ↔ if you allow this/.test(shown[0][2]) && fs.readFileSync(other, "utf8") === was && proposed.includes("if ($item -gt 0)"), [why, shown.length, proposed.slice(0, 120)]);
+      const done = await tools.run("edit_file", edit, { chat, signal: AbortSignal.timeout(30000) });
+      check("P: ... and that is exactly what the edit then makes (line endings and depth included)", !done.failed && fs.readFileSync(other, "utf8") === proposed && proposed.includes("\r\n    foreach"), [done.output, JSON.stringify(proposed).slice(0, 160)]);
+      const miss = await tools.previewChange("edit_file", { path: "preview.ps1", old_text: "not in the file", new_text: "x" });
+      check("P: an edit that wouldn't go through says so, with why, and opens nothing", /wouldn't go through as it stands: /.test(miss) && shown.length === 1, miss.slice(0, 160));
+      shown.length = 0;
+      const fresh = await tools.previewChange("write_file", { path: "brand-new.ps1", content: "Write-Output 'hi'\n" });
+      check("P: a file that would be new is shown against nothing, and isn't made", fresh === "" && shown.length === 1 && await text(shown[0][0]) === "" && await text(shown[0][1]) === "Write-Output 'hi'\n"
+        && /\(new ↔ if you allow this\)/.test(shown[0][2]) && !fs.existsSync(path.join(ws, "brand-new.ps1")), shown[0]?.[2]);
+      shown.length = 0;
+      await tools.previewChange("write_file", { path: "preview.ps1", content: "replaced\n" });
+      check("P: a write over a file is shown against the file as it is", shown.length === 1 && shown[0][0].scheme === "file" && await text(shown[0][1]) === "replaced\n" && fs.readFileSync(other, "utf8") === proposed);
+      check("P: a move has nothing to show side by side, and says so", /nothing to show side by side/.test(await tools.previewChange("move_item", { from: "preview.ps1", to: "p2.ps1" })));
+    } finally {
+      own.commands.executeCommand = real;
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file), { preview: false });
+    }
+  }
+
   // C. Two edits in one reply: the first breaks the file (an undefined name), the second fixes it. Nothing reported.
   let began = Date.now();
   const r1 = await run({ old_text: "    let sum = 0;", new_text: "    let sum = zero;" }, { group: "g1", more: true });

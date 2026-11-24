@@ -605,6 +605,11 @@ button.chip:active { transform: scale(0.95); }
 .approval .what svg { flex: none; width: 15px; height: 15px; color: var(--warn); }
 .approval .why { color: var(--muted); margin: 3px 0 8px; line-height: 1.45; }
 .approval pre { max-height: 140px; }
+.approval pre.change .del { color: var(--bad); }
+.approval pre.change .add { color: var(--ok); }
+.approval pre.change .grey { color: var(--muted); }
+.approval .buttons button.show { margin-left: auto; background: none; color: var(--link); font-weight: 400; padding: 4px 6px; }
+.approval .buttons button.show:hover { background: var(--hover); }
 .approval input { width: 100%; margin: 2px 0 8px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--line)); background: var(--input-bg);
   color: var(--vscode-input-foreground); border-radius: 6px; font: inherit; transition: border-color var(--t-fast) ease, box-shadow var(--t) ease; }
 .approval input::placeholder { color: var(--vscode-input-placeholderForeground); }
