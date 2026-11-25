@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.13 (2026-11-25)
 
 - **Set the default model from the model picker.** Right-click a model in the picker beside Send (or press **Shift+F10** on it) for **Use in this chat** and **Set as default**. The default is what new chats start on, as **Settings → Connection** sets it, and it's marked *default* in the list. When your organization sets the model, there's nothing to change.
+- **The guided setup spots an Assist model.** After you pick your default model, Solder asks it to call a tool (one small request, a few seconds). If it answers without one, your endpoint serves it without tool calling: the setup says so and offers **Mark it as an Assist model**, or **Keep it as a Tool model**. Before, such a model was left as a Tool model, and answered without ever looking at your files until you found the setting. A model already marked, or one the check can't reach, goes straight on.
+- **Check connection offers the same.** When the model answers without calling the tool, the message has **Mark as an Assist model**. When your organization sets which models are which, it says so instead.
+- **Read it first: a project you haven't added yet.** When Solder finds a project in your workspace (a `.solder` folder you haven't used), its row on the Projects screen, and the question that offers it, have **Read it first**: its page, read-only, with its rules file and skills, so you can see what it would tell the model before you use it. None of it is used until you choose **Use this project**.
+- **Fix: the docs overpromised about a project you haven't added.** README, SECURITY.md and the design notes said nothing of such a project reaches the model. Its skills and skill switches don't, but a rules file (`AGENTS.md`) at the top of a workspace folder applies to every chat in that folder, project or not, as it always has. They now say so, and suggest reading it first.
+- **New screenshots in the README**, among them the approval card and the setup's Assist offer.
 
 ## 0.3.12 (2026-11-24)
 
