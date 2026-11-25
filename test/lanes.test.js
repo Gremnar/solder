@@ -104,3 +104,38 @@ test("the model chosen for you: not a small one, then the highest version, then 
   assert.equal(bestModel(["m-lite", "m-nano"]), "m-lite", "only small ones: still one of them");
   assert.equal(bestModel([]), "");
 });
+
+test("the tool-calling test: a model that calls the tool, and uses its result; one served without tool calling answers in prose", async () => {
+  const { probeTools } = require("../src/lanes.js");
+  const { PROBE } = require("../src/prompt.js");
+  const sent = [];
+  const toolModel = { reply: async (/** @type {any} */ request) => {
+    sent.push(request);
+    if (sent.length === 1) return { content: "", calls: [{ id: "c1", name: "read_file", arguments: '{"path":"version.txt"}' }], ms: 5 };
+    return { content: `It says ${request.messages.at(-1).content.includes(PROBE.canary) ? PROBE.canary : "nothing"}.`, calls: [], ms: 5 };
+  } };
+  const yes = await probeTools(toolModel, "model-a");
+  assert.deepEqual([yes.calls, yes.used], [true, true]);
+  assert.deepEqual(sent[0].tools, [PROBE.tool]);
+  assert.equal(sent[0].messages[0].content, PROBE.system);
+  assert.equal(sent[1].messages.at(-1).role, "tool");
+  assert.equal(sent[1].messages.at(-1).content, PROBE.result);
+  const prose = { reply: async () => ({ content: "I can't open files, but version.txt usually holds a version number.", calls: [], ms: 5 }) };
+  const no = await probeTools(prose, "model-b");
+  assert.deepEqual([no.calls, no.used, no.second], [false, false, null]);
+  await assert.rejects(probeTools({ reply: async () => { throw new Error("gateway down"); } }, "model-c"), /gateway down/, "a failure is the caller's to handle");
+});
+
+test("marking a model as an Assist model keeps the ones a pattern made Assist models (a list, once there is one, decides alone)", () => {
+  const { withAssist, laneOf } = require("../src/lanes.js");
+  const offered = ["a-tools", "a", "b-tools", "b", "c-tools"];
+  // By the pattern, a and b are Assist models; c-tools answered without calling a tool.
+  const list = withAssist(offered, { toolModels: "-tools$" }, "c-tools");
+  assert.deepEqual(list.sort(), ["a", "b", "c-tools"]);
+  assert.equal(laneOf("c-tools", { toolModels: "-tools$", assistModels: list }), "assist");
+  assert.equal(laneOf("a", { toolModels: "-tools$", assistModels: list }), "assist", "a stays an Assist model");
+  assert.equal(laneOf("a-tools", { toolModels: "-tools$", assistModels: list }), "tool");
+  // With a list already, it's added to, once.
+  assert.deepEqual(withAssist(offered, { assistModels: ["b"] }, "b"), ["b"]);
+  assert.deepEqual(withAssist(offered, {}, "a").sort(), ["a"], "no list and no pattern: every model was a Tool model");
+});

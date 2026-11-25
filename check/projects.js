@@ -148,6 +148,22 @@ async function main() {
     const outsider = Engine.newChat();
     outsider.project = theirs;
     check("... a chat naming a project that isn't on your list gets nothing from it", !panel.promptContext(outsider).skills.some((k) => k.name === "their_way") && panel.projectOf(outsider) === null);
+    // Read it first: its page, read-only, before you decide.
+    answer = "Read it first";
+    await panel.addProject(theirs);
+    s = state();
+    check("Read it first (in the question) opens its page read-only: its rules and its skill, and it's still not yours", s.projects.page?.preview === true && s.projects.page.name === "Shared tooling"
+      && s.projects.page.rules.some((r) => r.text.includes("Their rules")) && s.projects.page.skills.some((k) => k.name === "their_way") && !panel.projects.has(theirs), s.projects.page);
+    await panel.onMessage({ type: "projectSkillNew", path: theirs, name: "sneaky", when: "Always." });
+    await panel.onMessage({ type: "projectRename", path: theirs, name: "Mine now" });
+    await panel.onMessage({ type: "projectSkillSwitch", path: theirs, name: "their_way", on: false });
+    check("... and nothing on it can be changed: no new skill, no new name, no switch", !fs.existsSync(path.join(theirs, ".solder", "skills", "sneaky.md"))
+      && JSON.parse(fs.readFileSync(path.join(theirs, ".solder", "project.json"), "utf8")).name === "Shared tooling" && !Object.keys(JSON.parse(fs.readFileSync(path.join(theirs, ".solder", "project.json"), "utf8")).skills || {}).length);
+    await panel.onMessage({ type: "projectPreview", path: path.join(T, "not-a-project-" + Date.now()) });
+    check("... a folder that isn't a project found in this window can't be opened that way", state().projects.page?.path?.toLowerCase() === path.resolve(theirs).toLowerCase(), state().projects.page?.path);
+    await panel.onMessage({ type: "projects" });
+    await panel.onMessage({ type: "projectPreview", path: theirs });
+    check("... and Read it first beside Use it… on the Projects screen opens the same page", state().projects.page?.preview === true);
     answer = "Use project";
     await panel.addProject(theirs);
     check("... yes puts it on your list, as it was made (nothing in its folder is changed)", panel.projects.has(theirs) && JSON.parse(fs.readFileSync(path.join(theirs, ".solder", "project.json"), "utf8")).name === "Shared tooling");

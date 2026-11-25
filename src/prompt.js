@@ -641,4 +641,18 @@ function assistText(text) {
   return out;
 }
 
-module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };
+/**
+ * The tool-calling test (Check connection, and the guided setup's model step): one small tool, a request that needs
+ * it, and a result with a word in it to look for in the answer. A model that answers without calling the tool is
+ * served without tool calling: an Assist model.
+ */
+const PROBE = {
+  system: "You are a coding agent. Use read_file to look at files; never guess what one says.",
+  ask: "What does version.txt say? Read it, then tell me in one line.",
+  tool: { type: "function", function: { name: "read_file", description: "Returns a text file with line numbers.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "The file to read." } }, required: ["path"] } } },
+  result: "1\tcanary WREN-12",
+  canary: "WREN-12",
+};
+
+module.exports = { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, PROBE, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText };

@@ -17,7 +17,7 @@
 | **Each step** | Faster; takes a thinking level | A few seconds slower; no thinking level |
 | **Typical** | Most OpenAI-compatible APIs, and local servers with function calling turned on | Models a gateway offers for chat without tool calling; some gateways don't count them against a daily allowance |
 
-**Every model starts as a Tool model.** That's right for most endpoints. Change it only for a model your endpoint serves without tool calling.
+**Every model starts as a Tool model.** That's right for most endpoints. Change it only for a model your endpoint serves without tool calling. You don't have to know which those are: the guided setup and **Check connection** ask your model to call a tool, and if it answers without one, they offer to mark it as an Assist model.
 
 **Signs a model is set as the wrong kind:**
 
@@ -26,9 +26,11 @@
 
 **How to check and set it:**
 
-- **Check a model:** run **Solder: Check connection** from the Command Palette (**Ctrl+Shift+P**). It asks the model to read a file with a native tool call. *"works, tool calls included"* means a Tool model. *"answered without calling the tool"* means tool calling isn't on for that model: use it as an Assist model.
+- **Check a model:** run **Solder: Check connection** from the Command Palette (**Ctrl+Shift+P**). It asks the model to read a file with a native tool call. *"works, tool calls included"* means a Tool model. *"answered without calling the tool"* means tool calling isn't on for that model, and **Mark as an Assist model** on that message makes it one.
 - **Set it:** **Settings → Advanced → Kinds of model**. Every model starts on the right, as a Tool model; move an Assist model to the left with its arrow. Assist models are tagged **Assist** in the model picker.
 - **For organizations:** the `AssistModels` policy lists the Assist models for everyone, or the `ToolModels` policy marks the Tool models by a pattern in their names (see [docs/POLICY.md](docs/POLICY.md)).
+
+<p><img src="media/screenshots/setup-assist.png" width="380" alt="Guided setup: the chosen model answered without calling a tool, and Solder offers to mark it as an Assist model"></p>
 
 More on how Solder runs Assist models: [Assist models in detail](#assist-models-in-detail).
 
@@ -57,7 +59,7 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
 2. **Run the guided setup.** Solder offers it the first time it starts. You can also run it any time from the panel's **⋯ menu → Guided setup…**. It asks for:
    - **your gateway's address:** the full Chat Completions URL, ending in `/chat/completions`;
    - **your API key:** kept in VS Code's secret storage, never in settings. Solder checks it by listing the models;
-   - **your default model:** if your endpoint serves it without tool calling, mark it as an Assist model afterwards (see [Tool models and Assist models](#tool-models-and-assist-models));
+   - **your default model:** Solder asks it to call a tool. If it answers without one, your endpoint serves it without tool calling, and Solder offers to mark it as an Assist model (see [Tool models and Assist models](#tool-models-and-assist-models));
    - **your own docs folders:** optional, see [Your docs](#your-docs);
    - **a few rules about you and your code:** optional, for example "We target Python 3.10" or "Never edit files under `generated/`";
    - **whether Solder may change files:** see [Read-only mode](#read-only-mode).
@@ -92,7 +94,9 @@ See the [admin guide](docs/POLICY.md) for every setting and how to deploy it.
   - changing a rules file (`AGENTS.md`) or anything in a project's `.solder` folder, which later chats follow;
   - reading a file outside the workspace and your docs and skills folders.
 
-  You can add a note for the model when you answer.
+  The question shows what would change: the lines removed and added, and **Show diff** for VS Code's diff of the whole file. You can add a note for the model when you answer.
+
+  <p><img src="media/screenshots/approval.png" width="380" alt="Solder asks before changing AGENTS.md: the lines it would remove and add, a note for the model, Allow, Decline and Show diff"></p>
 - **Slash commands.** Type **/** in the box for the list; the arrow keys move, **Enter** or **Tab** picks one, **Esc** closes it:
   - **/new** starts a new chat (in no project), and **/fork** carries on in a copy of this one (the original stays as it was);
   - **/compact** summarises the chat now to save tokens; add what matters most, as in `/compact the API names`;
@@ -193,7 +197,7 @@ A project is a folder you work in, with its own rules, skills and chats. Everyth
   - **Name:** change it there. The folder isn't renamed.
 - **The folder is the project:** the code, its `AGENTS.md` and the small `.solder` folder together. Nothing needs moving into `.solder`: that folder only holds the project's name, skills and switches.
 - **Sharing one:** **Export…** on the project's page writes one zip named after the project, with either the project's own files (for someone who has the code already) or the whole folder, code included. The whole-folder export leaves out git's history and `node_modules`, and asks first: check the folder holds nothing you wouldn't hand over. Copying or zipping the folder yourself works just as well. Its rules, its skills and its skill switches come along. Whoever gets it opens the folder in VS Code, and the Projects screen offers it with **Use it…**. Chats aren't in the folder: they stay on your PC.
-- **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project, and uses nothing from it until you say yes. A project can't change your settings, what needs approval, or read-only mode; its skill switches only decide which skills its own chats are offered, and your organization's skills stay on.
+- **A project from someone else:** its rules and skills are instructions the model follows, so Solder asks before using a folder that's already set up as a project. **Read it first** (beside **Use it…** on the Projects screen, and in that question) shows its rules and skills, read-only, before you decide. Until you say yes, its skills and skill switches aren't used. Its rules file is the exception when the project's folder is itself open as your workspace: a rules file at the top of a workspace folder applies to every chat there, as any workspace's does, so read it first. A project can't change your settings, what needs approval, or read-only mode; its skill switches only decide which skills its own chats are offered, and your organization's skills stay on.
 - **Removing one:** **Remove from my projects** on its page takes it off your list. The folder, its rules and its skills stay as they are, and its chats move to **Other chats**.
 - **For organizations:** when the `SkillsFolders` policy sets the skills and users can't add their own, a project's skills aren't used either.
 

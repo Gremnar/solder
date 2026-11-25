@@ -85,4 +85,36 @@ function bestModel(ids) {
   return ranked[0]?.id ?? "";
 }
 
-module.exports = { laneOf, assistTwin, bestModel, versionOf };
+/**
+ * Whether a model can call tools natively: it's asked something only a tool can answer, given one tool. A model that
+ * answers without calling it is served without tool calling (an Assist model, to Solder). When it does call the tool,
+ * it's given the result, and whether its answer used it is said too.
+ * @param {{reply: (request: any) => Promise<any>}} client @param {string} model @param {AbortSignal} [signal]
+ * @returns {Promise<{calls: boolean, used: boolean, first: any, second: any}>} throws what the request throws
+ */
+async function probeTools(client, model, signal) {
+  const { PROBE } = require("./prompt.js");
+  const tools = [PROBE.tool];
+  /** @type {any[]} */
+  const messages = [{ role: "system", content: PROBE.system }, { role: "user", content: PROBE.ask }];
+  const first = await client.reply({ model, messages, tools, signal });
+  if (!first.calls.length) return { calls: false, used: false, first, second: null };
+  messages.push({ role: "assistant", content: first.content, tool_calls: first.calls.map((/** @type {any} */ call) => ({ id: call.id,
+    type: "function", function: { name: call.name, arguments: call.arguments }, ...(call.extra ? { extra_content: call.extra } : {}) })) });
+  for (const call of first.calls) messages.push({ role: "tool", tool_call_id: call.id, content: PROBE.result });
+  const second = await client.reply({ model, messages, tools, signal });
+  return { calls: true, used: String(second.content || "").includes(PROBE.canary), first, second };
+}
+
+/**
+ * The Assist models list with one more model in it, made as Settings makes it: every model offered that's an Assist
+ * model now (by the list, or else by the Tool models pattern), and this one. A list, once there is one, decides alone,
+ * so it has to keep the ones the pattern made Assist models.
+ * @param {string[]} offered the models listed @param {{toolModels?: string, assistModels?: string[]}} kinds @param {string} model
+ */
+function withAssist(offered, kinds, model) {
+  const now = offered.filter((id) => laneOf(id, kinds) === "assist");
+  return [...new Set([...(kinds.assistModels || []), ...now, model])];
+}
+
+module.exports = { laneOf, assistTwin, bestModel, versionOf, probeTools, withAssist };

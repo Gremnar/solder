@@ -828,6 +828,12 @@
             ["Good for", "Quick, exact changes", "Long work, and when your allowance is low"]]
             .map(([what, tool, assist]) => `<tr><th scope="row">${what}</th><td>${tool}</td><td>${assist}</td></tr>`).join("") +
           `</tbody></table></details>`;
+      // The chosen model answered without calling a tool: it's one the gateway serves without tool calling.
+      if (s.assistOffer) {
+        body = `<div class="settings-notice warn" role="status"><b>${escape(s.assistOffer.name)}</b> answered without calling a tool, so it looks like an Assist model: ` +
+          `one your gateway serves without tool calling. Solder can still use it, with all its tools, once it's marked as one: it describes its tools in your ` +
+          `message, and the model asks for them in its reply. Left as a Tool model, it would answer without looking at your files.</div>`;
+      }
     } else if (s.step === "docs") {
       body = `<div class="docs">${s.docs.map((/** @type {any} */ d, /** @type {number} */ i) => `<div class="doc"><div class="doc-path" title="${escape(d.path)}">` +
           `<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg><span>${escape(d.path)}</span>` +
@@ -852,8 +858,11 @@
     const error = s.error ? `<div class="setup-error${shake ? " enter" : ""}" role="alert">${ICONS.alert}<div>${escape(s.error)}` +
       `${s.step === "key" ? ` <button class="link" data-setup="skipCheck">Continue without checking</button>` : ""}</div></div>` : "";
     const next = s.step === "done" ? "Start chatting" : s.step === "key" ? (s.busy ? "Checking…" : "Check and continue")
+      : s.step === "model" && s.busy ? "Checking it can use tools…"
       : (s.step === "docs" && !s.docs.length) || (s.step === "rules" && !(setupDraft["setup-rules"] ?? s.rules)) ? "Skip" : "Continue";
-    const buttons = s.step === "changes" ? `<div class="setup-buttons">` +
+    const buttons = s.step === "model" && s.assistOffer ? `<div class="setup-buttons"><button class="link-button" data-setup="keepTool">Keep it as a Tool model</button>` +
+      `<span class="grow"></span><button class="link-button primary" data-setup="markAssist">Mark it as an Assist model</button></div>`
+      : s.step === "changes" ? `<div class="setup-buttons">` +
       (at > 0 ? `<button class="link-button" data-setup="back">Back</button>` : `<button class="link-button" data-setup="cancel">Not now</button>`) +
       `<span class="grow"></span><button class="link-button" data-setup="next">Keep read-only</button><button class="link-button primary" data-setup="allowChanges">Enable tools</button></div>`
       : `<div class="setup-buttons">` +
@@ -1598,7 +1607,7 @@
     projectsCurrent = p.current;
     const notice = p.notice ? `<div class="settings-notice ${escape(p.noticeKind)}">${escape(p.notice)}</div>` : "";
     const found = p.found.map((/** @type {any} */ f) => `<div class="pfound"><div><b>${escape(f.name)}</b> is a project in this window that isn't one of yours yet.` +
-      `<div class="grey ppath" title="${escape(f.path)}">${escape(f.path)}</div></div><button class="link-button" data-puse="${escape(f.path)}">Use it…</button></div>`).join("");
+      `<div class="grey ppath" title="${escape(f.path)}">${escape(f.path)}</div></div><span class="pfound-acts"><button class="link-button" data-ppreview="${escape(f.path)}" title="See its rules and skills before you decide: nothing of it is used, and nothing can be changed">Read it first</button> <button class="link-button" data-puse="${escape(f.path)}">Use it…</button></span></div>`).join("");
     const groups = p.projects.map((/** @type {any} */ pr) => projectGroup(pr.name + (pr.missing ? " (folder not found)" : ""), pr.path, pr.chats,
       (pr.missing ? `<button class="link-button" data-premove="${escape(pr.path)}">Remove</button>`
         : `<button class="icon" data-pchat="${escape(pr.path)}" title="New chat in this project" aria-label="New chat in ${escape(pr.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>` +
@@ -1614,6 +1623,7 @@
   function projectPageHtml(p) {
     projectsCurrent = p.current;
     const page = p.page;
+    if (page.preview) return projectPreviewHtml(p);
     const at = escape(page.path);
     const notice = `<div id="projects-notice" class="settings-notice ${escape(p.noticeKind)}" role="status">${escape(p.notice)}</div>`;
     const rules = page.rules.length
@@ -1658,6 +1668,31 @@
         `<div class="actions-row"><button class="link-button" data-pexport="${at}">Export…</button> <button class="link-button" data-premove="${at}">Remove from my projects</button></div>`) + `</div>`;
   }
 
+  /**
+   * A project that isn't yours yet, read-only: its rules and its skills, as the model would be given them, and the
+   * choice to use it. Nothing to edit, switch or create.
+   * @param {any} p
+   */
+  function projectPreviewHtml(p) {
+    const page = p.page;
+    const at = escape(page.path);
+    const rules = page.rules.length
+      ? page.rules.map((/** @type {any} */ rule) => `<div class="pfile"><div class="pfile-head"><span class="pfile-name">${escape(rule.name)}</span></div><div class="answer pfile-text">${markdown(rule.text)}</div>` +
+          (rule.cut ? `<div class="hint warn">Only its first 40,000 characters are used.</div>` : "") + `</div>`).join("")
+      : `<div class="hint">It has no ${escape(page.ruleName)}.</div>`;
+    const skills = page.skills.map((/** @type {any} */ skill) => `<details class="pskill"><summary><span class="pskill-name">${escape(skill.name)}</span>` +
+      `<span class="pskill-when${skill.problem ? " warn" : ""}">${escape(skill.problem || skill.when)}</span>${P_CHEV}</summary>` +
+      `<div class="answer pfile-text">${skill.text ? markdown(skill.text) : `<p class="grey">No instructions.</p>`}</div></details>`).join("");
+    return `<div class="setup settings projects ppage"><button class="link pback" data-pback>‹ All projects</button>` +
+      section("", `<div class="pname">${escape(page.name)}</div><div class="hint ppath" title="${at}">${at}</div>` +
+        `<div class="settings-notice warn" role="status">Not one of your projects: you're reading it before you decide. Its rules and skills are instructions the model would follow in its chats` +
+        (page.switched ? `, and it switches ${page.switched} skill${page.switched === 1 ? "" : "s"} on or off in them` : "") + `. None of it is used, and nothing here can be changed, until you choose Use this project.` +
+        (page.here ? ` (A rules file at the top of a folder open in this window applies to every chat here already, as any workspace's does.)` : "") + `</div>` +
+        `<div class="actions-row"><button class="link-button primary" data-puse="${at}">Use this project…</button></div>`) +
+      section("Rules", rules) +
+      section("Skills", skills ? `<div class="pskills">${skills}</div>` : `<div class="hint">It has no skills of its own.</div>`) + `</div>`;
+  }
+
   /** What a skill's switch on a project's page says. @param {any} skill */
   function switchLabel(skill) {
     return skill.on ? `${skill.name} is on in this project. Click to switch it off here.` : `${skill.name} is off in this project. Click to switch it on here.`;
@@ -1700,7 +1735,7 @@
   transcript.addEventListener("click", (event) => {
     if (!state?.projects) return;
     const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (event.target).closest(
-      "[data-padd],[data-puse],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete],[data-pskill-switch],[data-pexport]"));
+      "[data-padd],[data-puse],[data-ppreview],[data-ptoggle],[data-pmore],[data-pchat],[data-ppage],[data-pback],[data-prules],[data-preveal],[data-premove],[data-pskill-form],[data-pskill-create],[data-pskill-open],[data-pskill-delete],[data-pskill-switch],[data-pexport]"));
     if (!el) return;
     const d = el.dataset;
     const page = state.projects.page?.path || "";
@@ -1709,6 +1744,7 @@
     if (d.pskillSwitch !== undefined) { event.preventDefault(); if (!el.hasAttribute("disabled")) vscode.postMessage({ type: "projectSkillSwitch", path: page, name: d.pskillSwitch, on: d.on === "true" }); }
     else if (d.padd !== undefined) vscode.postMessage({ type: "projectAdd" });
     else if (d.puse !== undefined) vscode.postMessage({ type: "projectAdd", path: d.puse });
+    else if (d.ppreview !== undefined) vscode.postMessage({ type: "projectPreview", path: d.ppreview });
     else if (d.ptoggle !== undefined) fold(projectsShut, d.ptoggle);
     else if (d.pmore !== undefined) fold(projectsAll, d.pmore);
     else if (d.pchat !== undefined) { focusInput = true; vscode.postMessage({ type: "projectChat", path: d.pchat }); }

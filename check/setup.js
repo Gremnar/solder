@@ -243,6 +243,48 @@ async function main() {
       await again.onMessage({ type: "settings" });
     }
 
+    // ---- the guided setup's model step: a model that answers without calling a tool is offered as an Assist model
+    {
+      policy.apply(new Map([["endpoint", "https://gateway.invalid/v1/chat/completions"]]), "");
+      await raw().update("toolModels", "-tools$", vscode.ConfigurationTarget.Global);
+      const probed = [];
+      let calls = false;
+      const realProbe = again.setup.probe;
+      again.setup.probe = async (_client, model) => { probed.push(model); return { calls, used: calls, first: { calls: [] }, second: null }; };
+      try {
+        await again.setup.start();
+        const view = again.setup.view;
+        view.models = [{ id: "plain-tools", name: "Plain", assist: false }, { id: "chat-model", name: "Chat", assist: true }, { id: "real-tools", name: "Real", assist: false }];
+        view.step = "model";
+        await again.setup.handle({ action: "next", model: "plain-tools" });
+        check("setup's model step tests the chosen model once; one that answers without calling a tool is offered as an Assist model",
+          JSON.stringify(probed) === JSON.stringify(["plain-tools"]) && again.setup.view.step === "model" && again.setup.view.assistOffer?.model === "plain-tools" && !again.setup.view.busy,
+          [probed, again.setup.view.step, again.setup.view.assistOffer]);
+        await again.setup.handle({ action: "markAssist" });
+        const list = raw().get("assistModels") || [];
+        check("... Mark it as an Assist model adds it to the list, keeps the ones the pattern made Assist models, and goes on", list.includes("plain-tools") && list.includes("chat-model")
+          && !list.includes("real-tools") && again.setup.view.step !== "model" && !again.setup.view.assistOffer, [list, again.setup.view.step]);
+        again.setup.view.step = "model";
+        probed.length = 0;
+        await again.setup.handle({ action: "next", model: "chat-model" });
+        check("... a model already marked as an Assist model isn't tested", probed.length === 0 && again.setup.view.step !== "model");
+        again.setup.view.step = "model";
+        calls = true;
+        await again.setup.handle({ action: "next", model: "real-tools" });
+        check("... and one that calls the tool goes straight on", JSON.stringify(probed) === JSON.stringify(["real-tools"]) && again.setup.view.step !== "model" && !again.setup.view.assistOffer);
+        again.setup.view.step = "model";
+        again.setup.probe = async () => { throw new Error("the gateway is down"); };
+        await again.setup.handle({ action: "next", model: "real-tools" });
+        check("... a test that can't run doesn't hold setup up", again.setup.view.step !== "model" && !again.setup.view.error, again.setup.view.error);
+        await again.setup.handle({ action: "cancel" });
+      } finally {
+        again.setup.probe = realProbe;
+        await raw().update("toolModels", undefined, vscode.ConfigurationTarget.Global);
+        await raw().update("assistModels", undefined, vscode.ConfigurationTarget.Global);
+        await raw().update("model", undefined, vscode.ConfigurationTarget.Global);
+      }
+    }
+
     // ---- your organization's Tool models pattern: Kinds of model is shown by it, and locked
     await raw().update("assistModels", ["model-a-tools"], vscode.ConfigurationTarget.Global);
     again.models = [{ id: "model-a-tools", name: "A" }, { id: "model-a", name: "A (Assist)" }];

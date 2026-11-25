@@ -740,6 +740,9 @@ body.in-projects #transcript { padding-top: 4px; }
 .projects .pfound { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); font-size: 0.92em; }
 .projects .pfound > div { flex: 1; min-width: 0; }
 .projects .pfound .link-button { flex: none; }
+.projects .pfound-acts { flex: none; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.projects.ppage .pname { font-size: 1.1em; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
+.settings-notice.warn { color: var(--fg); padding: 8px 10px; border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); border-radius: 4px; line-height: 1.45; }
 .projects .ppath { overflow-wrap: anywhere; }
 .projects .grey { color: var(--muted); font-size: 0.88em; }
 .projects .pback { display: inline-block; margin: 0 0 10px; text-decoration: none; }

@@ -504,6 +504,20 @@ class SolderPanel {
     this.post();
   }
 
+  /**
+   * A project in this window that isn't one of yours, shown read-only before you decide: its name, its rules and its
+   * skills, and nothing to change. Only a folder that's a project, found in this window (so the page can't be pointed
+   * at just any folder); every action on a project still asks that it's on your list.
+   * @param {string} folder
+   */
+  previewProject(folder) {
+    if (!folder || this.projects.has(folder) || !isProject(folder)) return;
+    if (!this.foundProjects().some((item) => projectKey(item.path) === projectKey(folder))) return;
+    this.settingsScreen.close();
+    this.projectsView = { page: path.resolve(folder), preview: true, skillForm: false, notice: "", noticeKind: "" };
+    this.post();
+  }
+
   closeProjects() {
     this.projectsView = null;
     this.post();
@@ -537,7 +551,16 @@ class SolderPanel {
     // Projects in this window that aren't yours yet (a folder someone shared, opened here): offered, never just used.
     const found = this.foundProjects().filter((item) => !this.projects.has(item.path));
     let page = null;
-    if (view.page) {
+    if (view.page && /** @type {any} */ (view).preview) {
+      // Not yours yet: what it holds, to read. Nothing of it is used, and nothing can be changed from here.
+      const project = this.projects.has(view.page) ? null : readProject(view.page, names);
+      if (project) {
+        page = { path: project.path, name: project.name, preview: true, here: !!this.tools.rootOf(project.path), ruleName: names[0] || "AGENTS.md",
+          rules: project.rules, skillsLocked: policy.locked("skillsFolders"), yours: [], chats: [],
+          skills: project.skills.map((skill) => ({ name: skill.name, when: skill.when, text: skill.text, cut: skill.cut, on: true, everywhere: true, problem: skill.problem || "" })),
+          switched: Object.keys(projectSwitches(project.path)).length };
+      } else { view.page = ""; /** @type {any} */ (view).preview = false; }
+    } else if (view.page) {
       const project = readProject(view.page, names);
       const yours = project ? this.skillSwitches(project.path, this.tools.skills(false)) : [];
       if (project) {
@@ -599,9 +622,11 @@ class SolderPanel {
       const brings = [theirs?.rules.length ? "rules" : "", theirs?.skills.length ? `${theirs.skills.length} skill${theirs.skills.length === 1 ? "" : "s"}` : "",
         switched ? `switches for ${switched} skill${switched === 1 ? "" : "s"} (on or off in its chats)` : ""].filter(Boolean)
         .reduce((text, part, index, all) => text + (index ? (index === all.length - 1 ? " and " : ", ") : "") + part, "");
+      const READ = "Read it first";
       const pick = await vscode.window.showWarningMessage(`Use the project "${theirs?.name ?? path.basename(folder)}"?`, { modal: true,
         detail: `This folder is already set up as a Solder project${brings ? `, with ${brings}` : ""}. A project's rules and skills are instructions the model follows in its chats: use it only if you trust where it came from. You can read them on its page first.` },
-      "Use project");
+      "Use project", READ);
+      if (pick === READ) { this.previewProject(folder); return; }
       if (pick !== "Use project") return;
     }
     try {
@@ -1287,6 +1312,7 @@ class SolderPanel {
       }
       case "projects": return this.openProjects(String(message.path || ""));
       case "projectsClose": return this.closeProjects();
+      case "projectPreview": return this.previewProject(String(message.path || ""));
       case "projectAdd": {
         // With a folder, it's "Use it…" on a project found in this window: only a folder that is one (so it's asked about).
         const given = message.path ? String(message.path) : "";

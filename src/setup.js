@@ -8,7 +8,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
-const { laneOf, bestModel } = require("./lanes.js");
+const { laneOf, bestModel, probeTools, withAssist } = require("./lanes.js");
 
 const STEPS = ["endpoint", "key", "model", "docs", "rules", "changes", "done"];
 const CHECK_MS = 30_000;
@@ -28,6 +28,8 @@ class SetupWizard {
     this.hooks = hooks;
     /** @type {any} what the panel shows, or null when setup isn't running */
     this.view = null;
+    /** The tool-calling test (lanes.js), here so a check can stand in for the gateway. */
+    this.probe = probeTools;
   }
 
   /** Whether Solder still needs setting up: no endpoint, or a remote one with no key. */
@@ -124,10 +126,46 @@ class SetupWizard {
         return;
       }
       case "model": {
+        // The model answered without calling a tool: marked as an Assist model, or kept as it is.
+        if (action === "markAssist" || action === "keepTool") {
+          const offer = view.assistOffer;
+          view.assistOffer = null;
+          if (action === "markAssist" && offer) {
+            if (policy.locked("assistModels") || policy.locked("toolModels")) { view.error = "Your organization sets which models are Assist models."; this.changed(); return; }
+            const kinds = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
+            await save("assistModels", withAssist(view.models.map((/** @type {any} */ m) => m.id), kinds, offer.model));
+            view.models = view.models.map((/** @type {any} */ m) => m.id === offer.model ? { ...m, assist: true } : m);
+          }
+          this.go(after("model"));
+          return;
+        }
         const model = String(message.model || "").trim();
         if (!model) { view.error = "Choose a model, or type its id."; this.changed(); return; }
         view.model = model;
         await save("model", model);
+        // A model listed as a Tool model is asked to call a tool, once: one served without tool calling answers in
+        // prose, and would look as if Solder didn't work. Then you're offered to mark it as an Assist model. A model
+        // you typed, or one already marked as an Assist model, isn't tested; nor is anything when the test can't run.
+        const listed = view.models.find((/** @type {any} */ m) => m.id === model);
+        if (listed && !listed.assist && !policy.locked("assistModels") && !policy.locked("toolModels")) {
+          view.busy = true;
+          view.error = "";
+          this.changed();
+          let calls = true;
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), CHECK_MS);
+            try {
+              policy.gate();
+              const endpoint = String(config.get("endpoint", "") || view.endpoint);
+              const client = new GatewayClient({ endpoint, apiKey: await this.key.get(endpoint) });
+              calls = (await this.probe(client, model, controller.signal)).calls;
+            } finally { clearTimeout(timer); }
+          } catch { calls = true; } // couldn't tell: as it was
+          view.busy = false;
+          if (!this.view) return; // setup closed meanwhile
+          if (!calls) { view.assistOffer = { model, name: listed.name }; this.changed(); return; }
+        }
         this.go(after("model"));
         return;
       }

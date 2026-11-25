@@ -8,6 +8,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
+const { laneOf, probeTools, withAssist } = require("./lanes.js");
 const { SolderPanel, KEY } = require("./panel.js");
 const os = require("node:os");
 const fs = require("node:fs");
@@ -67,7 +68,7 @@ async function activate(context) {
       vscode.window.showInformationMessage(key.trim() ? "Solder: API key saved." : "Solder: API key removed.");
       await panel.refreshModels();
     }),
-    vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(panel.savedKey, output)),
+    vscode.commands.registerCommand("solder.checkConnection", () => checkConnection(panel.savedKey, output, () => panel.refreshModels())),
     vscode.commands.registerCommand("solder.focus", () => vscode.commands.executeCommand("solder.chat.focus")),
     vscode.commands.registerCommand("solder.setup", async () => {
       await vscode.commands.executeCommand("solder.chat.focus");
@@ -133,8 +134,11 @@ async function activate(context) {
   );
 }
 
-/** @param {import("./key.js").SavedKey} savedKey @param {vscode.OutputChannel} output */
-async function checkConnection(savedKey, output) {
+/**
+ * @param {import("./key.js").SavedKey} savedKey @param {vscode.OutputChannel} output
+ * @param {() => Promise<void>} [refresh] the panel's model list, read again after a model is marked as an Assist model
+ */
+async function checkConnection(savedKey, output, refresh) {
   const config = solderSettings();
   output.show(true);
   const log = (/** @type {string} */ line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`);
@@ -159,29 +163,31 @@ async function checkConnection(savedKey, output) {
     const model = config.get("model", "") || (models.length ? await vscode.window.showQuickPick(models,
       { placeHolder: "A model for the tool round trip" }) : "");
     if (!model) return;
-    const tools = [{ type: "function", function: { name: "read_file", description: "Returns a text file with line numbers.",
-      parameters: { type: "object", properties: { path: { type: "string", description: "The file to read." } },
-        required: ["path"] } } }];
-    /** @type {any[]} */
-    const messages = [
-      { role: "system", content: "You are a coding agent. Use read_file to look at files; never guess what one says." },
-      { role: "user", content: "What does version.txt say? Read it, then tell me in one line." }];
-    log(`Asking ${model} to call a tool…`);
-    const first = await client.reply({ model, messages, tools });
-    log(`Reply in ${first.ms} ms: ${first.calls.length} call(s) ${first.calls.map((c) => c.name).join(", ")}; ` +
-      `${first.usage?.total_tokens ?? "?"} tokens${first.credits ? `; ${first.credits.remaining} of ${first.credits.limit} ${first.credits.bucket} left` : ""}`);
-    if (!first.calls.length) {
-      log("The model answered without calling the tool: tool calling may not be on for this model.");
+    const kinds = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
+    if (laneOf(model, kinds) === "assist") {
+      log(`${model} is set as an Assist model: Solder sends it no tools (it writes its tool requests as text), so there's no tool call to test.`);
+      vscode.window.showInformationMessage(`Solder: connected. ${model} is set as an Assist model, so it's used without tool calling.`);
       return;
     }
-    messages.push({ role: "assistant", content: first.content, tool_calls: first.calls.map((call) => ({ id: call.id,
-      type: "function", function: { name: call.name, arguments: call.arguments },
-      ...(call.extra ? { extra_content: call.extra } : {}) })) });
-    for (const call of first.calls) messages.push({ role: "tool", tool_call_id: call.id, content: "1\tcanary WREN-12" });
-    const second = await client.reply({ model, messages, tools });
-    const used = /WREN-12/.test(second.content);
-    log(`Answer in ${second.ms} ms: ${used ? "it used the tool's result" : "it did NOT use the tool's result"}.`);
-    vscode.window.showInformationMessage(used ? `Solder: ${model} works, tool calls included.`
+    log(`Asking ${model} to call a tool…`);
+    const probe = await probeTools(client, model);
+    const first = probe.first;
+    log(`Reply in ${first.ms} ms: ${first.calls.length} call(s) ${first.calls.map((/** @type {any} */ c) => c.name).join(", ")}; ` +
+      `${first.usage?.total_tokens ?? "?"} tokens${first.credits ? `; ${first.credits.remaining} of ${first.credits.limit} ${first.credits.bucket} left` : ""}`);
+    if (!probe.calls) {
+      log("The model answered without calling the tool: tool calling isn't on for it, so it's an Assist model to Solder.");
+      const MARK = "Mark as an Assist model";
+      const pick = await vscode.window.showWarningMessage(`Solder: ${model} answered without calling the tool, so it looks like an Assist model: one your endpoint serves without tool calling. ` +
+        `Solder can still use it, with all its tools, once it's marked as one.`, MARK);
+      if (pick !== MARK) return;
+      if (policy.locked("assistModels") || policy.locked("toolModels")) { vscode.window.showInformationMessage("Your organization sets which models are which."); return; }
+      await config.update("assistModels", withAssist(models, kinds, model), vscode.ConfigurationTarget.Global);
+      await refresh?.();
+      vscode.window.showInformationMessage(`Solder: ${model} is now an Assist model.`);
+      return;
+    }
+    log(`Answer in ${probe.second.ms} ms: ${probe.used ? "it used the tool's result" : "it did NOT use the tool's result"}.`);
+    vscode.window.showInformationMessage(probe.used ? `Solder: ${model} works, tool calls included.`
       : `Solder: ${model} answered but ignored the tool result. See the Solder output.`);
   } catch (error) {
     log(`Failed: ${message(error)}`);
