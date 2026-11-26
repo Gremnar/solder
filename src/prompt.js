@@ -17,10 +17,6 @@ something needs building, testing or running, say what to run and the user will.
 
 # How to work
 - If the question doesn't need the workspace, just answer.
-- Look with read_file, symbols, search and find_files (changes: what's changed since the last commit); change \
-files with edit_file and write_file; check them with problems (VS Code's errors and \
-warnings). move_item moves, renames or copies a file or folder; remove_item deletes one, and asks the user \
-first. write_file and move_item create any folders a path needs.
 - To find where a function, class or method is defined or used, use symbols rather than search: it follows \
 imports and skips comments, strings and look-alike names.
 - A working folder or open file named in the user's message tells you where they are, not what to do: read \
@@ -64,11 +60,11 @@ function systemPrompt({ workspace, folders = [], os = "Windows", instructions = 
   if (readOnly) skillsFolder = "";
   const several = folders.length > 1;
   const facts = [several
-    ? `- Workspace folders: ${folders[0]} (the main one), ${folders.slice(1).join(", ")}. Relative paths are relative \
+    ? `- Workspace folders: ${folders[0]} (the main one), ${folders.slice(1).join(", ")}. A path in a tool call is relative \
 to the working folder when the user's message names one, otherwise to the main folder; use full paths for the others. \
 Searches cover all of them, or just the working folder when there is one.`
-    : `- Workspace folder: ${workspace || "(none open)"}. Relative paths are relative to the working folder \
-when the user's message names one, otherwise to this folder; searches start there too.`,
+    : `- Workspace folder: ${workspace || "(none open)"}. A path in a tool call is relative to the working folder \
+when the user's message names one, otherwise to this folder, or a full path; searches start there too.`,
     `- OS: ${os}.`,
     "- Each of the user's messages starts with their local date and time."];
   if (!instructions.length) facts.push(`- There's no project instructions file (AGENTS.md) at the ${several ? "top of any workspace folder" : "workspace root"}, so \
@@ -95,70 +91,64 @@ they're likely to repeat you may offer once, but save one only if they agree.`;
   return text;
 }
 
-const RELATIVE = "a path relative to the workspace folder, or a full path";
-
-/** name → [description, {argument: schema}, required[]] */
+/** name → [description, {argument: schema}, required[]]. Kept short: on the Tool lane every word goes with every request. */
 const TOOLS = {
-  read_file: ["Returns a text file with line numbers (unsaved changes in the editor included). Up to 2,000 \
-lines at a time: for a longer file, ask for a range (symbols shows where things are).", {
-    path: { type: "string", description: `The file: ${RELATIVE}.` },
-    start_line: { type: "integer", description: "The first line to return (lines are numbered from 1)." },
+  read_file: ["Returns a text file with line numbers (unsaved editor changes included), up to 2,000 lines at a time: \
+ask for a range of a longer one (symbols shows where things are).", {
+    path: { type: "string", description: "The file." },
+    start_line: { type: "integer", description: "The first line to return (from 1)." },
     end_line: { type: "integer", description: "The last line to return." },
   }, ["path"]],
-  symbols: ["Uses VS Code's language support. With just a path: the file's outline (its classes, functions, \
-methods and so on, nested, with line ranges), much smaller than the file. With a name: where that symbol is \
-defined, with its code, or (find: references) every place it's used; give a file it appears in if you know one.", {
-    path: { type: "string", description: `The file: ${RELATIVE}. With name, a file it appears in (optional).` },
+  symbols: ["VS Code's language support. With just a path: the file's outline (classes, functions, methods, nested, \
+with line ranges), much smaller than the file. With a name: where it's defined, with its code, or (find: references) \
+every place it's used; give a file it appears in if you know one.", {
+    path: { type: "string", description: "The file; with name, a file it appears in (optional)." },
     name: { type: "string", description: "A function, class, method or variable name." },
-    find: { type: "string", enum: ["definition", "references"], description: "What to find for name: definition (the default) or references." },
-    line: { type: "integer", description: "The line where name appears, when it appears more than once in the file." },
+    find: { type: "string", enum: ["definition", "references"], description: "definition (the default) or references." },
+    line: { type: "integer", description: "The line where name appears, when it's in the file more than once." },
   }, []],
-  search: ["Searches file contents in the workspace (respecting .gitignore), or in one file or folder, and returns \
+  search: ["Searches file contents (respecting .gitignore) in the workspace, or in one file or folder, and returns \
 matching lines as path:line: text, up to 200.", {
     query: { type: "string", description: "The text to find." },
-    path: { type: "string", description: `Only this file or folder (an attached file or saved paste too): ${RELATIVE}.` },
+    path: { type: "string", description: "Just this file or folder (an attached file or saved paste too)." },
     regex: { type: "boolean", description: "True to read query as a regular expression." },
-    glob: { type: "string", description: "Only search files matching this, such as src/**/*.ts or *.py." },
-    files_only: { type: "boolean", description: "True to list just the matching files, each with its count of matching lines, up to 300." },
-    context_lines: { type: "integer", description: "Also show this many lines before and after each match (1 to 5), numbered as read_file numbers them, when it's the code around a match you need rather than the whole file." },
-    docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead: the best \
-passages for the query (a few key words, or a short question), in any order (the other arguments don't apply)." },
+    glob: { type: "string", description: "Only files matching this, such as src/**/*.ts or *.py." },
+    files_only: { type: "boolean", description: "True to list just the matching files, with their counts of matching lines." },
+    context_lines: { type: "integer", description: "Lines to show before and after each match (1 to 5), numbered as read_file numbers them: when you need the code around a match, not the whole file." },
+    docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead, for the best \
+passages (a few key words or a short question); the other arguments don't apply." },
   }, ["query"]],
-  find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), \
-up to 300.", {
-    glob: { type: "string", description: "A glob such as **/*.json, src/**/test_*.py or **/README*." },
+  find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), up to 300.", {
+    glob: { type: "string", description: "Such as **/*.json, src/**/test_*.py or **/README*." },
   }, ["glob"]],
-  changes: ["Shows what's changed in git since the last commit. With no path: the changed files (staged, \
-unstaged and new) with their line counts, and the diff too when it's small. With a path: the diff for that file \
-or folder. Unsaved editor changes aren't included.", {
-    path: { type: "string", description: `Just this file or folder: ${RELATIVE}.` },
+  changes: ["What's changed in git since the last commit (not unsaved editor changes). With no path: the changed files \
+(staged, unstaged and new) with their line counts, and the diff when it's small. With a path: its diff.", {
+    path: { type: "string", description: "Just this file or folder." },
   }, []],
-  edit_file: ["Replaces one exact piece of text in a file and saves it. old_text must appear exactly once: \
-include enough surrounding lines to make it unique. To change every place a name or a value appears in the file, \
-set replace_all instead of sending one edit for each. Returns any new problems in the file.", {
-    path: { type: "string", description: `The file: ${RELATIVE}.` },
-    old_text: { type: "string", description: "The exact text to replace, appearing once in the file." },
+  edit_file: ["Replaces one exact piece of text in a file and saves it. old_text must appear exactly once: include \
+enough lines to make it unique, or set replace_all to change every place it appears. Returns any new problems.", {
+    path: { type: "string", description: "The file." },
+    old_text: { type: "string", description: "The exact text to replace." },
     new_text: { type: "string", description: "The text to put in its place." },
-    replace_all: { type: "boolean", description: "True to replace every place old_text appears in the file, exactly as \
-written (so make it long enough not to match inside other words)." },
+    replace_all: { type: "boolean", description: "True to replace every place old_text appears, exactly as written \
+(so make it long enough not to match inside other words)." },
   }, ["path", "old_text", "new_text"]],
-  write_file: ["Writes a whole file (creating it, and its folders, if needed) and saves it. For a change to \
-part of an existing file, use edit_file. Returns any new problems in the file.", {
-    path: { type: "string", description: `The file: ${RELATIVE}.` },
+  write_file: ["Writes a whole file and saves it, creating it and its folders if needed. To change part of a file, \
+use edit_file. Returns any new problems.", {
+    path: { type: "string", description: "The file." },
     content: { type: "string", description: "The file's whole text." },
   }, ["path", "content"]],
-  move_item: ["Moves or renames a file or folder, or copies it (copy: true), creating any folders needed. A to that's \
-a folder, or ends with /, means into it. Never overwrites; the user can undo it.", {
+  move_item: ["Moves, renames or (copy: true) copies a file or folder, creating folders as needed. A to that's a \
+folder, or ends with /, means into it. Never overwrites; the user can undo it.", {
     from: { type: "string", description: "The file or folder." },
     to: { type: "string", description: "Its new path, or a folder to put it in." },
     copy: { type: "boolean", description: "True to copy instead." },
   }, ["from", "to"]],
-  remove_item: ["Deletes a file or a folder (with everything in it). The user is asked first, and can undo it.", {
-    path: { type: "string", description: `The file or folder: ${RELATIVE}.` },
+  remove_item: ["Deletes a file or folder (with everything in it). The user is asked first, and can undo it.", {
+    path: { type: "string", description: "The file or folder." },
   }, ["path"]],
-  problems: ["Returns the errors and warnings VS Code currently shows (from its language servers and \
-linters), for one file or the whole workspace.", {
-    path: { type: "string", description: `Just this file: ${RELATIVE}.` },
+  problems: ["VS Code's current errors and warnings (language servers, linters), for one file or the whole workspace.", {
+    path: { type: "string", description: "Just this file." },
   }, []],
 };
 
@@ -174,12 +164,23 @@ Solder is in read-only mode: you can look at the workspace but not change it, so
 available. When a task needs a change, find what to change, then show it: the file, where, and the new code. The user \
 can make it, or turn on changes with Enable tools at the top of Solder's panel and ask again.`;
 
-/** The tools array, in a fixed order; only those that look in read-only mode. @param {boolean} [readOnly] */
-function toolDefinitions(readOnly = false) {
+/**
+ * The tools array, in a fixed order; only those that look in read-only mode. search's docs argument goes only when
+ * the user has docs folders (it's sent with every request, and means nothing without them).
+ * @param {boolean} [readOnly] @param {boolean} [hasDocs]
+ */
+function toolDefinitions(readOnly = false, hasDocs = true) {
   return Object.entries(TOOLS).filter(([name]) => !readOnly || READ_ONLY.has(name)).map(([name, [description, properties, required]]) => ({
     type: "function",
-    function: { name, description, parameters: { type: "object", properties, required } },
+    function: { name, description, parameters: { type: "object", properties: withoutDocs(name, properties, hasDocs), required } },
   }));
+}
+
+/** A tool's arguments, less search's docs when there are no docs folders. @param {string} name @param {any} properties @param {boolean} hasDocs */
+function withoutDocs(name, properties, hasDocs) {
+  if (hasDocs || name !== "search") return properties;
+  const { docs, ...rest } = properties;
+  return rest;
 }
 
 /** "a", "a and b", "a, b and c". @param {string[]} items */
@@ -574,7 +575,7 @@ function assistSetup({ workspace, folders = [], os = "Windows", instructions = [
   const lines = Object.entries(TOOLS).filter(([name]) => !readOnly || READ_ONLY.has(name)).map(([name, [description, properties, required]]) => {
     // Each argument as the Tool lane's definitions give it: its name, whether it's needed, what kind of value it
     // takes and what it means. Names alone left the meaning to be guessed (what glob covers, what docs does).
-    const args = Object.entries(/** @type {Record<string, any>} */ (properties)).map(([arg, schema]) => {
+    const args = Object.entries(/** @type {Record<string, any>} */ (withoutDocs(name, properties, docs.length > 0))).map(([arg, schema]) => {
       const kind = schema.enum ? schema.enum.join(" or ") : schema.type === "boolean" ? "true or false" : schema.type === "integer" ? "a whole number" : "";
       const notes = [/** @type {string[]} */ (required).includes(arg) ? "" : "optional", kind].filter(Boolean).join(", ");
       return `  - ${arg}${notes ? ` (${notes})` : ""}: ${assistText(schema.description)}`;
@@ -584,8 +585,8 @@ function assistSetup({ workspace, folders = [], os = "Windows", instructions = [
   const where = folders.length > 1
     ? `My workspace folders are ${folders[0]} (the main one) and ${folders.slice(1).join(", ")}. Relative paths are \
 relative to the working folder when my message names one, otherwise to the main folder; use full paths for the others.`
-    : `My workspace folder is ${workspace || "(none open)"}. Relative paths are relative to the working folder when my \
-message names one, otherwise to this folder.`;
+    : `My workspace folder is ${workspace || "(none open)"}. A path in a request is relative to the working folder when my \
+message names one, otherwise to this folder, or a full path.`;
   const parts = [ASSIST_LEAD + "\n\n" + lines.join("\n"), ASSIST_HOW, ...(readOnly ? [ASSIST_READ_ONLY] : []),`${where} I'm on ${os}. Each of my messages starts with my local date and time.`];
   for (const file of instructions) parts.push(`My project's instructions (${file.path}), which you should follow; what \
 I ask in a message wins if they conflict:\n\n${file.text.trim()}`);

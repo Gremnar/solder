@@ -305,7 +305,7 @@ class WorkspaceTools {
   }
 
   /**
-   * For read_file of a path that isn't there: the one file in the workspace with that name (any case, the same
+   * For read_file or symbols of a path that isn't there: the one file in the workspace with that name (any case, the same
    * extension), resolved as any read is, when reading it needs no approval. null when the path is there, when there
    * are none or several, or when the path asked for is outside the workspace. Never used for a change.
    * @param {any} file resolve()'s @returns {Promise<any>}
@@ -519,6 +519,16 @@ class WorkspaceTools {
 
   /** The outline, or (with a name) its definition or references. */
   async symbols(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
+    // A path that isn't there, and the workspace has just one file of that name: that one is looked at, as read_file
+    // does, and the result says so (it only looks, so nothing can land in the wrong file).
+    if (args.path) {
+      const instead = await this.onlyOfName(this.resolve(args.path));
+      if (instead) {
+        const done = await this.symbols({ ...args, path: instead.full }, signal);
+        const asked = path.basename(String(args.path).trim().replace(/^["']|["']$/g, ""));
+        return { ...done, output: RESULTS.readInstead(asked, instead.shown) + "\n" + done.output };
+      }
+    }
     if (!args.name) {
       if (!args.path) throw new ToolError(RESULTS.symbolsNeedsPath);
       return this.outline(args);

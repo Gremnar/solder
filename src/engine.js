@@ -349,7 +349,7 @@ class Engine {
   async _loop(chat, signal) {
     const settings = this.settings();
     const maxRounds = this._roundLimit(chat, settings);
-    const tools = toolDefinitions(!!settings.readOnly);
+    const tools = toolDefinitions(!!settings.readOnly, settings.hasDocs !== false);
     let rounds = 0;
     let repairs = 0;
     // An Assist reply that was cut off partway has been carried on from, and no reply has finished since.
@@ -868,7 +868,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     trim(chat, settings.compactAt);
     const system = await this.host.systemPrompt(chat);
     const ratio = chat.tokenRatio || 1;
-    const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions(!!settings.readOnly)));
+    const size = estimateMessages(outbound(chat, system)) + estimate(JSON.stringify(toolDefinitions(!!settings.readOnly, settings.hasDocs !== false)));
     if (!force && size * ratio < settings.compactAt) return "skipped";
     const start = chat.compaction ? chat.compaction.through : 0;
     const keep = force ? 0 : settings.compactAt / 5 / ratio; // in estimated tokens

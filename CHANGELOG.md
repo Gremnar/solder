@@ -19,7 +19,7 @@ Step 2:
 
 - **An outline for files VS Code can't outline.** For a PowerShell script with no PowerShell extension, Structured Text or SCL, a TwinCAT or other PLC XML export, a batch file, Python or SQL, Solder makes the outline from the text (functions, blocks and sections, with their lines), says so, and finds a name's definition in it. Before, the model's only way into a big script was reading it whole. A language that never gives an outline is waited for once, not every time.
 - **A folder's own rules arrive before the first change there.** A subfolder's AGENTS.md used to reach the model only with a read in that folder, so a change made from a search, or a new file, could miss it. Now a search or symbols result brings it, and a change in a folder whose rules the model hasn't seen yet waits: the rules come back, and the model makes the change again following them.
-- **A read of a file in the wrong folder reads the right one**, when there's exactly one file of that name in the workspace, and says where it is. Changes are never redirected: they still need the exact path.
+- **A look at a file in the wrong folder (read_file or symbols) finds the right one**, when there's exactly one file of that name in the workspace, and says where it is. Changes are never redirected: they still need the exact path.
 - **Edits written with spaces land on files indented with tabs** (and the other way round), when it's clear one tab stands for 2 or 4 spaces throughout, with the new text indented to match.
 - **Tool models are nudged to make independent changes together** after reading several files, rather than one change a reply.
 - **Assist models:**
@@ -27,6 +27,10 @@ Step 2:
   - A reply cut off partway keeps the requests that arrived whole: they run, and the model is told the rest didn't arrive. When the session still holds the conversation, only what's new is sent.
   - Tool results reach the model as they were: a line of a file that happened to read like one of Solder's own notes was reworded, and a tab at a line's end was dropped.
 - **A reply cut off at the model's output limit** is kept and marked unfinished, with Resume, instead of ending as if it were done.
+
+Step 3:
+
+- **Fewer tokens on every Tool-model request.** The instructions and tool descriptions are sent with every request, and in the live tests they were more than half of all tokens. They're shorter now, saying the same things once: the rules no longer list every tool (each tool's own description says what it does), the note on relative and full paths is said once instead of in every path argument, and search's docs argument is left out when you have no docs folders. About 1,400 characters (some 350 tokens) less on every request; the Assist setup message is about 1,000 characters shorter too.
 
 ## 0.3.15 (2026-11-25)
 

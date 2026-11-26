@@ -129,7 +129,7 @@ async function once(scenario, run) {
   };
   let failure = "";
   const engine = new S.Engine({ client, host, settings: () => ({ model, effort, compactAt: scenario.compactAt || 100_000, ...(twinModel ? { assistTwinOf: () => twinModel } : {}), maxRounds: scenario.maxRounds || 40, assistMaxRounds: scenario.maxRounds || 60, toolModels, assistSessionBlock: assistBlock,
-    readOnly: !!scenario.readOnly }),
+    readOnly: !!scenario.readOnly, hasDocs: !!scenario.docs }),
     // The engine reports a failed reply as an event, not a throw: a run that ended on one is an error (a 429, say),
     // not a model that got the task wrong.
     onEvent: (/** @type {any} */ event) => { if (event.type === "error") failure = event.message || "error"; } });

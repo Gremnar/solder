@@ -391,6 +391,15 @@ class Workspace {
    * no language support here, as in a VS Code without it: Solder's own outline by their text, as the real tool gives.
    */
   symbols(/** @type {any} */ args) {
+    // A path that isn't there, with one file of that name in the workspace: looked at instead, as Solder's own symbols
+    // does (when the Solder under test does it).
+    if (args.path && String(this.S.tools.WorkspaceTools?.prototype?.symbols ?? "").includes("onlyOfName")) {
+      const instead = this.onlyOfName(args.path);
+      if (instead) {
+        const done = this.symbols({ ...args, path: this.shown(instead) });
+        return { ...done, output: this.R.readInstead(path.basename(String(args.path)), this.shown(instead)) + "\n" + done.output };
+      }
+    }
     const all = this.files().filter((f) => /\.(c|m)?js$/i.test(f));
     // Solder's text outline (src/outline.js), when the Solder under test has it.
     const own = this.R.textOutlineHead && fs.existsSync(path.join(__dirname, "..", "src", "outline.js")) ? require(path.join(__dirname, "..", "src", "outline.js")) : null;

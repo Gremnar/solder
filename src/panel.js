@@ -1096,6 +1096,8 @@ class SolderPanel {
       assistMaxRounds: Math.round(clamp(config.get("assistMaxRounds", 60), 1, 200, 60)), assistCarryTokens: Math.round(clamp(config.get("assistCarryTokens", 200_000), 20_000, 900_000, 200_000)),
       toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String), assistSessionBlock: String(config.get("assistSessionBlock", "") || ""),
       modelAllowed: modelAllowed(), readOnly: readOnly(),
+      // search's docs argument goes with the tools only when there are docs folders to search.
+      hasDocs: this.tools.docsFolders().length > 0,
       // A Tool model's Assist twin on offer: it writes summaries and titles, free of the allowance.
       assistTwinOf: (/** @type {string} */ model) => assistTwin(model, lanes, this.models.map((m) => m.id)) };
   }
@@ -1836,7 +1838,7 @@ class SolderPanel {
       `This chat: ${this.chat.messages.length} messages, ${this.chat.usage.tokens} tokens, token ratio ${(this.chat.tokenRatio || 1).toFixed(2)}${this.chat.compaction ? ", compacted" : ""}`,
       "",
       // Numbers only, by kind: what the chat's tokens carried, so the biggest cost is plain.
-      ...tokenReport(this.chat, systemPrompt(this.promptContext()), toolDefinitions()),
+      ...tokenReport(this.chat, systemPrompt(this.promptContext()), toolDefinitions(readOnly(), this.tools.docsFolders().length > 0)),
       "",
       "Recent log:",
       ...this.log.recent(200),

@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, PROBE, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "83beb1371f6cc8cd";
+const PINNED = "3bf82e1cf21ded56";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -101,14 +101,18 @@ test("the tools: a fixed order, every argument described and typed, required one
   assert.ok(!READ_ONLY.has("edit_file") && !READ_ONLY.has("write_file") && !READ_ONLY.has("remove_item"));
 });
 
-test("the rules name every tool, say there's no shell, and stay small", () => {
-  for (const name of Object.keys(TOOLS)) assert.ok(RULES.includes(name), `the rules mention ${name}`);
+test("the rules say there's no shell, and stay small; the tools' own definitions say what each does", () => {
+  // Every tool is named in its definition, sent with every request: the rules don't list them again (2026-11-26).
+  for (const name of Object.keys(TOOLS)) assert.ok(toolDefinitions().some((tool) => tool.function.name === name), name);
+  assert.match(RULES, /use symbols rather than search/);
   assert.match(RULES, /can't run commands/);
   assert.match(RULES, /Never guess what a file says/);
   assert.match(RULES, /don't put your reasoning, drafts or second thoughts in it/);
-  // Every request resends these: keep the rules under ~700 tokens and the 11 tools under ~1,700.
-  assert.ok(RULES.length / 4 < 700, `RULES is ${Math.ceil(RULES.length / 4)} tokens`);
-  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1700, `the tool definitions are ${Math.ceil(JSON.stringify(toolDefinitions()).length / 4)} tokens`);
+  // Every request resends these: keep the rules under ~600 tokens and the tools under ~1,450 (less without docs).
+  assert.ok(RULES.length / 4 < 600, `RULES is ${Math.ceil(RULES.length / 4)} tokens`);
+  assert.ok(JSON.stringify(toolDefinitions()).length / 4 < 1450, `the tool definitions are ${Math.ceil(JSON.stringify(toolDefinitions()).length / 4)} tokens`);
+  assert.ok(JSON.stringify(toolDefinitions(false, false)).length < JSON.stringify(toolDefinitions()).length);
+  assert.ok(!JSON.stringify(toolDefinitions(false, false)).includes('"docs"'), "no docs folders: no docs argument");
 });
 
 test("the system prompt is stable: no time, instructions and rules only when given", () => {
@@ -143,7 +147,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "c98c9c875be7e660";
+const ASSIST_PINNED = "818bc24b66ba98ef";
 
 function assistEverything() {
   return {
