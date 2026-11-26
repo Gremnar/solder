@@ -15,6 +15,19 @@ From an eight-reviewer engine review (2026-11-25), step 1:
 - **Fix: two Undo backups made at the same moment for files of the same name** (in different folders) could overwrite each other, so one Undo put back the other file's text.
 - **Fix: symbols never found a PowerShell `$variable`** by name, and `Get-Uptime` also matched inside `My-Get-Uptime`.
 
+Step 2:
+
+- **An outline for files VS Code can't outline.** For a PowerShell script with no PowerShell extension, Structured Text or SCL, a TwinCAT or other PLC XML export, a batch file, Python or SQL, Solder makes the outline from the text (functions, blocks and sections, with their lines), says so, and finds a name's definition in it. Before, the model's only way into a big script was reading it whole. A language that never gives an outline is waited for once, not every time.
+- **A folder's own rules arrive before the first change there.** A subfolder's AGENTS.md used to reach the model only with a read in that folder, so a change made from a search, or a new file, could miss it. Now a search or symbols result brings it, and a change in a folder whose rules the model hasn't seen yet waits: the rules come back, and the model makes the change again following them.
+- **A read of a file in the wrong folder reads the right one**, when there's exactly one file of that name in the workspace, and says where it is. Changes are never redirected: they still need the exact path.
+- **Edits written with spaces land on files indented with tabs** (and the other way round), when it's clear one tab stands for 2 or 4 spaces throughout, with the new text indented to match.
+- **Tool models are nudged to make independent changes together** after reading several files, rather than one change a reply.
+- **Assist models:**
+  - A conversation carried over in one message (no session, a dead one, a switch) keeps your current request, your messages after it, and the skills and folder rules the task is using: earlier turns are shortened first, and only then are the oldest left out. A skill that had to be left out is sent again when it's read.
+  - A reply cut off partway keeps the requests that arrived whole: they run, and the model is told the rest didn't arrive. When the session still holds the conversation, only what's new is sent.
+  - Tool results reach the model as they were: a line of a file that happened to read like one of Solder's own notes was reworded, and a tab at a line's end was dropped.
+- **A reply cut off at the model's output limit** is kept and marked unfinished, with Resume, instead of ending as if it were done.
+
 ## 0.3.15 (2026-11-25)
 
 Fixes from an eight-reviewer bug hunt (2026-11-25). Nothing looks or works differently, except that these no longer happen.

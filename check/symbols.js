@@ -82,4 +82,14 @@ async function main() {
   check("undo of an unchanged copy works", !undone && !fs.existsSync(path.join(ws, "copydst2")), undone);
   fs.rmSync(path.join(ws, "copysrc"), { recursive: true, force: true });
   fs.rmSync(path.join(ws, "copydst"), { recursive: true, force: true });
+
+  // A kind of file VS Code has no outline for (Structured Text): Solder's outline by its text, and a definition's body.
+  fs.writeFileSync(path.join(ws, "sym", "motor.scl"), "FUNCTION_BLOCK \"FB_Motor\"\r\nVAR_INPUT\r\n  start : Bool;\r\nEND_VAR\r\nBEGIN\r\n  #start := FALSE;\r\nEND_FUNCTION_BLOCK\r\n");
+  const st = await tools.symbols({ path: "sym/motor.scl" }, signal);
+  log("text outline:", st.summary, "\n" + st.output);
+  check("an ST file gets Solder's outline by its text", /Solder's outline by its text/.test(st.output) && /function_block FB_Motor 1–7/.test(st.output) && /var_input 2–4/.test(st.output));
+  const started = Date.now();
+  const stDef = await tools.symbols({ name: "FB_Motor", path: "sym/motor.scl" }, signal);
+  log("text definition:", stDef.summary, Date.now() - started, "ms\n" + stDef.output);
+  check("its definition by text, not waited for again", /By Solder's outline of the text/.test(stDef.output) && /7\tEND_FUNCTION_BLOCK/.test(stDef.output) && Date.now() - started < 2000);
 }

@@ -37,7 +37,12 @@ async function main() {
   // A missing path: the file of that name is suggested (any case), node_modules left out.
   let r = await run("read_file", { path: "g1/Scripts/get-report.ps1" });
   log("missing:", r.output);
-  check("missing path suggests the real one", r.failed && /Files with that name: g1\/Scripts\/lib\/Get-Report\.ps1\./.test(r.output) && !/node_modules/.test(r.output));
+  // A read of it: the one file of that name is read instead, and said so (the copy in node_modules doesn't count).
+  check("missing path, one file of that name: read instead, and said so", !r.failed && /isn't at that path; this is g1\/Scripts\/lib\/Get-Report\.ps1, the only file of that name/.test(r.output)
+    && /function Get-Report/.test(r.output) && !/node_modules/.test(r.output), r.output.slice(0, 200));
+  // A change to it is never sent to another file: the real one is only suggested.
+  r = await run("edit_file", { path: "g1/Scripts/get-report.ps1", old_text: "x", new_text: "y" });
+  check("missing path for a change: refused, and the real one suggested", r.failed && /Files with that name: g1\/Scripts\/lib\/Get-Report\.ps1\./.test(r.output) && !/node_modules/.test(r.output), r.output.slice(0, 200));
   r = await run("read_file", { path: "g1/Deploy.txt" });
   log("other ext:", r.output);
   check("same name, another extension", /another extension: g1\/Scripts\/Deploy\.ps1/.test(r.output));

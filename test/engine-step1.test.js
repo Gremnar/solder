@@ -168,7 +168,7 @@ test("a file written whole: the task's earlier reads of it become a line pointin
   assert.equal(sent(2, "1"), TEXTS.writtenOver("Read a.js · 400 lines"));
   assert.equal(sent(2, "2"), TEXTS.writtenOver("Read a.js · lines 10–50 of 400"));
   assert.equal(sent(2, "3"), body("b"));
-  assert.equal(sent(2, "6"), body("f"));
+  assert.equal(sent(2, "6"), body("f") + "\n\n" + TEXTS.groupChanges, "(the reply read six files: its last result says to group the changes)");
   assert.equal(sent(3, "7"), body("a"), "a read after the write is whole");
   assert.doesNotMatch(TEXTS.writtenOver("x"), /read it again/i, "it doesn't send the model back to read");
   // The write itself is sent as it came, its text and thought signature with it.

@@ -69,6 +69,8 @@ class Workspace {
     /** @type {{name: string, args: any, failed: boolean}[]} */
     this.calls = [];
     this.edits = 0;
+    /** The file the last read_file read (another than asked, when the path was wrong and one file has that name). */
+    this.lastRead = "";
     /** The files as the scenario set them up: what `changes` compares with (as git would with the last commit). */
     this.start = new Map(this.files().map((f) => [f, fs.readFileSync(f, "utf8")]));
   }
@@ -115,7 +117,10 @@ class Workspace {
       // A skill's file goes through Solder's own read (whole, kept, not twice), as it does in VS Code.
       const skill = name === "read_file" && this.skillsFolder && args?.path
         ? this.S.tools.WorkspaceTools.prototype.readSkill.call({ skillsFolders: () => [this.skillsFolder] }, this.full(args.path), ctx?.chat) : null;
-      result = skill ?? (own ? await own.call(this, args) : await this.tool(name, args));
+      // A change in a folder whose rules the model hadn't seen waits for them, as with Solder's own tools.
+      const wait = skill ? null : this.rulesFirst(name, args, ctx?.chat);
+      result = skill ?? wait ?? (own ? await own.call(this, args) : await this.tool(name, args));
+      if (!result.failed && !skill) result = this.withRules(name, args, ctx?.chat, result);
     } catch (error) {
       const e = /** @type {any} */ (error);
       result = e instanceof this.S.tools.ToolError
@@ -164,8 +169,65 @@ class Workspace {
     return this.R.nearby(this.S.tools.rankNearby(full, found).slice(0, 6).map((f) => this.shown(f)), same);
   }
 
+  /** A path that isn't there, and the workspace has one file of that name: that file (as Solder's read_file takes it). */
+  onlyOfName(/** @type {string} */ given) {
+    const full = this.full(given);
+    if (!this.R.readInstead || fs.existsSync(full) || this.shown(full).startsWith("..")) return null;
+    const name = path.basename(full).toLowerCase();
+    const found = this.files().filter((f) => path.basename(f).toLowerCase() === name);
+    return found.length === 1 ? found[0] : null;
+  }
+
+  /** The folder rules (a subfolder's AGENTS.md) for a path, as Solder's tools find them, when this src has them. @param {string} full */
+  rulesOf(full) {
+    const T = this.S.tools;
+    return T.folderRules && T.giveRules ? T.folderRules(full, this.root, ["AGENTS.md"]) : [];
+  }
+
+  /** Before edit_file or write_file: Solder's rulesFirst. @param {string} name @param {any} args @param {any} chat */
+  rulesFirst(name, args, chat) {
+    const target = name === "edit_file" || name === "write_file" ? args?.path : null; // no move_item here
+    if (!chat || !target || !this.S.tools.giveRules || !this.R.rulesFirst) return null;
+    const full = this.full(target);
+    if (name === "edit_file" && !fs.existsSync(full)) return null; // the edit's own error first
+    const rules = this.rulesOf(full).filter((/** @type {any} */ rule) => rule.key !== full.toLowerCase());
+    const { notes, fresh, pending } = this.S.tools.giveRules(rules, chat);
+    if (!fresh.length && !pending.length) return null;
+    return { output: this.R.error(this.R.rulesFirst(this.shown(full), [...fresh, ...pending], fresh.length > 0, pending.length > 0)),
+      summary: `Not changed yet: ${this.shown(full)}`, failed: true, ...(notes ? { keep: notes } : {}) };
+  }
+
+  /** A read's, search's or symbols' result with the folder rules it brings (two at most for a search or symbols). @param {string} name @param {any} args @param {any} chat @param {any} result */
+  withRules(name, args, chat, result) {
+    if (!chat || !this.S.tools.giveRules) return result;
+    /** @type {any[]} */
+    let rules = [];
+    let max = Infinity;
+    if (name === "read_file") { rules = this.rulesOf(this.lastRead || this.full(args.path)); this.lastRead = ""; }
+    else if (name === "search" || name === "symbols") {
+      max = 2;
+      const seen = new Set();
+      for (const given of [...(args?.path ? [String(args.path)] : []), ...this.S.tools.namedPaths(String(result.output ?? ""))]) {
+        const full = this.full(given);
+        if (this.shown(full).startsWith("..") || !fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
+        for (const rule of this.rulesOf(full)) if (!seen.has(rule.key)) { seen.add(rule.key); rules.push(rule); }
+      }
+    } else return result;
+    const { notes } = this.S.tools.giveRules(rules, chat, max);
+    return notes ? { ...result, keep: [result.keep, notes].filter(Boolean).join("\n\n") } : result;
+  }
+
   readFile(/** @type {any} */ args) {
-    const { full, shown } = this.mustBeFile(args.path);
+    const instead = this.onlyOfName(args.path);
+    const { full, shown } = this.mustBeFile(instead ?? args.path);
+    this.lastRead = full;
+    const head = instead ? this.R.readInstead(path.basename(String(args.path)), shown) + "\n" : "";
+    const read = this.readWhole(full, shown, args);
+    return head ? { ...read, output: head + read.output } : read;
+  }
+
+  /** @param {string} full @param {string} shown @param {any} args */
+  readWhole(full, shown, args) {
     const lines = fs.readFileSync(full, "utf8").replace(/\r\n/g, "\n").split("\n");
     if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
     const total = lines.length;
@@ -324,9 +386,38 @@ class Workspace {
     return { output: lines.join("\n"), summary: `Problems · ${lines.length}` };
   }
 
-  /** Definitions and uses for JavaScript, by declaration patterns (a stand-in for a language server). */
+  /**
+   * Definitions and uses for JavaScript, by declaration patterns (a stand-in for a language server). Other files have
+   * no language support here, as in a VS Code without it: Solder's own outline by their text, as the real tool gives.
+   */
   symbols(/** @type {any} */ args) {
     const all = this.files().filter((f) => /\.(c|m)?js$/i.test(f));
+    // Solder's text outline (src/outline.js), when the Solder under test has it.
+    const own = this.R.textOutlineHead && fs.existsSync(path.join(__dirname, "..", "src", "outline.js")) ? require(path.join(__dirname, "..", "src", "outline.js")) : null;
+    if (own && !args.name && args.path && !/\.(c|m)?js$/i.test(args.path)) {
+      const { full, shown } = this.mustBeFile(args.path);
+      const text = fs.readFileSync(full, "utf8");
+      const lines = own.outlineLines(own.textOutline(text, full) ?? []);
+      const count = text.split(/\r\n|\r|\n/).length - (/(\r\n|\r|\n)$/.test(text) ? 1 : 0);
+      if (!lines.length) return { output: this.R.noOutline(shown, count), summary: "Outline · none" };
+      return { output: this.R.textOutlineHead(shown, count) + "\n" + lines.slice(0, 400).join("\n"), summary: `Outline of ${shown} (by text)` };
+    }
+    if (own && args.name && (args.find ?? "definition") === "definition") {
+      const name = this.S.tools.plainName(String(args.name));
+      const places = args.path ? [this.mustBeFile(args.path).full] : this.files().filter((f) => own.textKind(f));
+      const blocks = [];
+      for (const f of places) {
+        const text = fs.readFileSync(f, "utf8");
+        const lines = text.split(/\r\n|\r|\n/);
+        for (const { entry, last } of own.definedIn(own.textOutline(text, f) ?? [], name, f, lines.length)) {
+          if (blocks.length >= 5) break;
+          const end = Math.min(last, entry.start + 79);
+          blocks.push(`${this.shown(f)} ${entry.start}–${last}:\n` + lines.slice(entry.start - 1, end).map((l, k) => `${entry.start + k}\t${l}`).join("\n")
+            + (end < last ? "\n" + this.R.definitionCut : ""));
+        }
+      }
+      if (blocks.length) return { output: this.R.textDefinitions(name, blocks.length) + "\n\n" + blocks.join("\n\n"), summary: `Definition of ${name} (by text)` };
+    }
     if (!args.name) {
       const { full, shown } = this.mustBeFile(args.path);
       const lines = fs.readFileSync(full, "utf8").replace(/\r\n/g, "\n").split("\n");

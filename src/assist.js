@@ -7,7 +7,7 @@
  * requests are parsed into tool_calls before they're stored, and rendered back as tool blocks when sent.
  * The parser is ported from Alloy's, tuned on months of real replies. No vscode here: tested under node.
  */
-const { TOOLS, TEXTS, ASSIST, assistText } = require("./prompt.js");
+const { TOOLS, TEXTS, RESULTS, ASSIST, assistText } = require("./prompt.js");
 
 // ================================================================ finding requests in a reply
 
@@ -442,7 +442,87 @@ function fence(text) {
 function resultMessage(label, output, failed, closing) {
   const f = fence(output);
   const lead = failed ? ASSIST.resultFailed(label) : ASSIST.resultOk(label);
-  return `${lead}\n\n${f}\n${String(output).replace(/\s+$/, "")}\n${f}` + (closing ? `\n\n${ASSIST.resultClosing}` : "");
+  // Only the line breaks at its end go: spaces or a tab at the end of its last line are the file's, and an edit that
+  // copies that line needs them.
+  return `${lead}\n\n${f}\n${String(output).replace(/[\r\n]+$/, "")}\n${f}` + (closing ? `\n\n${ASSIST.resultClosing}` : "");
+}
+
+/** Stands in for a text's variable part (a file, your note) while Solder's own lines are worked out. */
+const MARK = "\u0001";
+/** The phrases ASSIST.swaps puts in first person. */
+const SWAP_FROMS = ASSIST.swaps.map(([from]) => from);
+
+/**
+ * Solder's own lines that say "the user", each as the pattern of a whole line: every text in TEXTS and RESULTS that
+ * holds a phrase ASSIST.swaps turns into first person, line by line, with its variable parts (a file, your note) left
+ * open. A line counts only whole, with nothing before it but "Error: " (a tool's error) or, for a note in brackets, the
+ * place it's about ("src/a.js 12 (…)"): a file's lines come numbered, search hits after their place, so a line of a
+ * file that quotes Solder's words is never taken for Solder speaking.
+ */
+const OWN_LINES = (() => {
+  /** @type {string[]} */
+  const texts = [];
+  for (const group of [TEXTS, RESULTS]) {
+    for (const value of Object.values(group)) {
+      if (typeof value === "string") texts.push(value);
+      else if (typeof value === "function") {
+        try { texts.push(String(value(...Array.from({ length: Math.max(1, value.length) }, () => MARK)))); } catch { /* it takes no text there */ }
+      }
+    }
+  }
+  const lines = new Set(texts.flatMap((text) => text.split("\n")).filter((line) => SWAP_FROMS.some((from) => line.includes(from))));
+  return [...lines].map((line) => {
+    const parts = line.split(MARK);
+    const lead = line.startsWith("(") ? "(Error: |[^\\t\\n]* \\d+ )?" : "(Error: )?";
+    return { parts, pattern: new RegExp(`^${lead}${parts.map(escapeRe).join("([^\\n]*?)")}$`) };
+  });
+})();
+
+/**
+ * A tool message's text as the Assist lane sends it: Solder's own lines in first person ("I declined this."), and
+ * everything else exactly as it came (a file's text, search hits, a diff, another program's error, your own words). The
+ * whole text used to be rewritten, so a file that quoted one of those phrases reached the model changed, and an edit
+ * copying the line missed. @param {string} text
+ */
+function assistResult(text) {
+  const s = String(text);
+  if (!SWAP_FROMS.some((from) => s.includes(from))) return s;
+  return s.split("\n").map((line) => {
+    if (!SWAP_FROMS.some((from) => line.includes(from))) return line;
+    for (const own of OWN_LINES) {
+      const m = own.pattern.exec(line);
+      if (m) return (m[1] || "") + own.parts.map((part, n) => assistText(part) + (n < own.parts.length - 1 ? m[n + 2] : "")).join("");
+    }
+    return line;
+  }).join("\n");
+}
+
+/** Earlier turns' write and edit texts longer than this are left out of what's sent. */
+const LONG_ARGUMENT_CHARS = 1_500;
+/** Arguments a write or edit no longer needs in full (they're in the file). */
+const LONG_ARGUMENTS = { write_file: ["content"], edit_file: ["old_text", "new_text"] };
+
+/**
+ * A call from an earlier task without its long text arguments. They're left out whole, never replaced by a note: a
+ * note in a call's arguments reads to the model as something it wrote, and it wrote the same again as the text of a
+ * new edit (which went into the user's file). A call copied from one of these lacks a required argument, so it's
+ * refused before anything runs. What's said about it goes with the call's result instead (TEXTS.argumentsLeftOut).
+ * @param {any} call
+ */
+function shortCall(call) {
+  const fields = LONG_ARGUMENTS[/** @type {keyof LONG_ARGUMENTS} */ (call.function?.name)];
+  if (!fields || (call.function.arguments || "").length <= LONG_ARGUMENT_CHARS) return call;
+  let args;
+  try { args = JSON.parse(call.function.arguments); } catch { return call; }
+  if (!args || typeof args !== "object") return call;
+  let changed = false;
+  for (const field of fields) {
+    if (typeof args[field] === "string" && args[field].length > LONG_ARGUMENT_CHARS) {
+      delete args[field];
+      changed = true;
+    }
+  }
+  return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
 }
 
 /** A stored tool call as the ```tool block the model would have written. @param {any} call */
@@ -454,48 +534,109 @@ function requestBlock(call) {
 }
 
 /**
- * The stored chat as Assist turns: user and assistant text only. A batch's tool messages become one user message.
- * @param {any} chat @param {(message: any) => string} resultText a tool message as the model gets it (stand-ins for trimmed ones)
- * @param {number} [from] the first message to render (0: the whole chat, after any recap)
- * @returns {{role: "user" | "assistant", content: string}[]}
+ * @typedef {{role: "user" | "assistant", content: string, index: number, must?: boolean, short?: string, reduced?: string, keeps?: string[]}} Piece
+ *   One stored message (a batch of results: one piece), as the Assist lane sends it. index: its place in the chat (-1:
+ *   the recap). must: it stays in any carry-over (the recap, the request being worked on and what followed it from you).
+ *   short: shorter, for an earlier turn (long write and edit texts left out, long results a stand-in). reduced: a batch
+ *   cut to what it holds to keep (a skill, a folder's AGENTS.md, your note or message), each with its result's stand-in;
+ *   keeps: those results' call ids.
  */
-function assistOutbound(chat, resultText, from = 0) {
-  /** @type {{role: "user" | "assistant", content: string}[]} */
-  const out = [];
+
+/** Earlier turns' results longer than this are a stand-in in a carry-over that's too long (as the Tool lane cuts them). */
+const STUB_MIN_CHARS = 2_000;
+
+/**
+ * The stored chat as Assist pieces, in order.
+ * @param {any} chat @param {(message: any, earlier?: boolean) => string} resultText a tool message as the model gets it
+ *   (stand-ins for trimmed ones; earlier: from an earlier task) @param {number} current where the task in progress starts:
+ *   messages before it are earlier turns @param {number} [from] the first message (0: the whole chat, after any recap)
+ * @returns {Piece[]}
+ */
+function carryPieces(chat, resultText, current, from = 0) {
+  /** @type {Piece[]} */
+  const pieces = [];
   let start = from;
   if (chat.compaction && from <= chat.compaction.through) {
-    out.push({ role: "user", content: TEXTS.compaction }, { role: "assistant", content: chat.compaction.summary });
+    pieces.push({ role: "user", content: TEXTS.compaction, index: -1, must: true }, { role: "assistant", content: chat.compaction.summary, index: -1, must: true });
     start = chat.compaction.through;
   }
   const messages = chat.messages;
+  /** @type {Set<string>} calls whose long text an earlier turn's shorter form leaves out: their results say so */
+  const shortened = new Set();
   for (let i = start; i < messages.length; i++) {
     const m = messages[i];
     if (m.role === "user") {
-      out.push({ role: "user", content: m.meta?.sent ?? m.content });
+      pieces.push({ role: "user", content: m.meta?.sent ?? m.content, index: i, must: i >= current });
     } else if (m.role === "assistant") {
       // The model's own words as it wrote them; a Tool-lane reply is shown with its calls as tool blocks.
       const text = m.meta?.raw ?? [m.content, ...(m.tool_calls || []).map(requestBlock)].filter(Boolean).join("\n\n");
-      if (String(text).trim()) out.push({ role: "assistant", content: text });
+      if (!String(text).trim()) continue;
+      /** @type {Piece} */
+      const piece = { role: "assistant", content: text, index: i };
+      if (i < current && m.tool_calls?.length) {
+        const calls = m.tool_calls.map((/** @type {any} */ call) => shortCall(call));
+        calls.forEach((/** @type {any} */ call, /** @type {number} */ n) => { if (call !== m.tool_calls[n]) shortened.add(call.id); });
+        if (calls.some((/** @type {any} */ call, /** @type {number} */ n) => call !== m.tool_calls[n])) piece.short = [m.content, ...calls.map(requestBlock)].filter(Boolean).join("\n\n");
+      }
+      pieces.push(piece);
     } else if (m.role === "tool") {
       // Every tool message in a row is one batch: one user message, the closing line on the last result only.
+      const at = i;
       const batch = [];
       while (i < messages.length && messages[i].role === "tool") batch.push(messages[i++]);
       i--;
       // Requests of the same reply that couldn't be used are said after the results, in place of the closing line.
       const unread = batch[batch.length - 1].meta?.unread;
-      const text = batch.map((t, n) => resultMessage(t.meta?.label || t.meta?.name || "that request",
-        assistText(resultText(t)), !!t.meta?.failed, n === batch.length - 1 && !unread)).join("\n\n");
-      out.push({ role: "user", content: unread ? `${text}\n\n${unread}` : text });
+      const label = (/** @type {any} */ t) => t.meta?.label || t.meta?.name || "that request";
+      const one = (/** @type {any} */ t, /** @type {string} */ text, /** @type {boolean} */ closing) => resultMessage(label(t), assistResult(text), !!t.meta?.failed, closing);
+      const all = (/** @type {string[]} */ texts) => {
+        const body = batch.map((t, n) => one(t, texts[n], n === batch.length - 1 && !unread)).join("\n\n");
+        return unread ? `${body}\n\n${unread}` : body;
+      };
+      /** @type {Piece} */
+      const piece = { role: "user", content: all(batch.map((t) => resultText(t))), index: at };
+      if (at < current) {
+        const short = all(batch.map((t) => {
+          const left = shortened.has(t.tool_call_id) ? "\n\n" + TEXTS.argumentsLeftOut : "";
+          if (t.meta?.stub || String(t.content).length <= STUB_MIN_CHARS) return resultText(t, true) + left;
+          return TEXTS.stub(t.meta?.summary || label(t)) + (t.meta?.keep ? "\n\n" + t.meta.keep : "") + left;
+        }));
+        if (short !== piece.content) piece.short = short;
+      }
+      const kept = batch.filter((t) => t.meta?.keep);
+      if (kept.length) {
+        piece.keeps = kept.map((t) => t.tool_call_id);
+        piece.reduced = kept.map((t) => one(t, TEXTS.stub(t.meta?.summary || label(t)) + "\n\n" + t.meta.keep, false)).join("\n\n");
+      }
+      pieces.push(piece);
     }
   }
+  return pieces;
+}
+
+/**
+ * The stored chat as Assist turns: user and assistant text only. A batch's tool messages become one user message.
+ * @param {any} chat @param {(message: any, earlier?: boolean) => string} resultText a tool message as the model gets it (stand-ins for trimmed ones)
+ * @param {number} [from] the first message to render (0: the whole chat, after any recap)
+ * @returns {{role: "user" | "assistant", content: string}[]}
+ */
+function assistOutbound(chat, resultText, from = 0) {
   // Two user messages in a row (a typed message right after results, a resume note): joined, as a turn can't be
   // answered twice and the conversation goes user, assistant, user…
-  return out.reduce((acc, m) => {
+  return carryPieces(chat, resultText, 0, from).reduce((acc, m) => {
     const last = acc[acc.length - 1];
     if (last && last.role === "user" && m.role === "user") last.content += "\n\n" + m.content;
-    else acc.push({ ...m });
+    else acc.push({ role: m.role, content: m.content });
     return acc;
   }, /** @type {{role: "user" | "assistant", content: string}[]} */ ([]));
+}
+
+/** Where the task in progress starts: the latest message you typed (a "carry on" belongs to the task before). @param {any} chat */
+function taskStartOf(chat) {
+  for (let index = chat.messages.length - 1; index >= 0; index--) {
+    if (chat.messages[index].role === "user" && !chat.messages[index].meta?.resume) return index;
+  }
+  return 0;
 }
 
 // ================================================================ carrying a conversation over
@@ -524,15 +665,19 @@ const DATED = /^\([A-Z][a-z]+day, \d{1,2} [A-Z][a-z]+ \d{4}, \d{2}:\d{2}\)/;
 /**
  * When the gateway doesn't hold the conversation (a switch from the Tool lane, a fork, compaction, a session that
  * ended, another Assist model, or no sessions at all): one user message with my setup, the conversation so far and
- * the newest message. When it's too long, the newest messages are kept and how many were left out is said.
- * @param {string} setup ASSIST.setup(context) @param {{role: string, content: string}[]} rendered assistOutbound(chat)
+ * the newest message. When it's too long, earlier turns are shortened, then the oldest messages are left out (not those
+ * that must stay), and where and how many is said (carryFit).
+ * @param {string} setup ASSIST.setup(context) @param {{role: string, content: string}[]} rendered carryPieces(chat), or assistOutbound(chat)
  * @param {number} budget characters
  */
 function carryOver(setup, rendered, budget) {
-  const newest = rendered[rendered.length - 1];
-  const { history, kept, left } = carryFit(setup, rendered, budget);
-  if (!history.length) return [setup, ASSIST.messageLead, stripSetup(newest.content)].join("\n\n");
-  return [setup, ASSIST.carryOverLead, ...(left ? [ASSIST.carryOverLeftOut(left)] : []), ...kept, ASSIST.carryOverEnd, stripSetup(newest.content)].join("\n\n");
+  return carryText(setup, carryFit(setup, rendered, budget));
+}
+
+/** The carry-over message, from how the conversation fits. @param {string} setup @param {ReturnType<typeof carryFit>} fit */
+function carryText(setup, fit) {
+  if (!fit.any) return [setup, ASSIST.messageLead, fit.newest].join("\n\n");
+  return [setup, ASSIST.carryOverLead, ...fit.entries, ASSIST.carryOverEnd, fit.newest].join("\n\n");
 }
 
 // ================================================================ sessions: what goes out, and what the gateway holds
@@ -576,8 +721,9 @@ function sessionHolds(chat, model) {
  * - "carry_over": there's history the gateway doesn't hold (a switch from the Tool lane, a fork, compaction, a
  *   session that ended, another Assist model, or no sessions configured): all of it goes in one user message.
  * @param {any} chat @param {string} model @param {{assistSessionBlock?: string, compactAt: number}} settings
- * @param {any} context the setup's facts (workspace, instructions, rules, docs) @param {(message: any) => string} resultText
- * @returns {{kind: "stateful" | "fresh" | "carry_over", messages: {role: "user", content: string}[], session: {block: string, fields: Record<string, string>} | null, setup: string, single: any}}
+ * @param {any} context the setup's facts (workspace, instructions, rules, docs) @param {(message: any, earlier?: boolean) => string} resultText
+ * @returns {{kind: "stateful" | "fresh" | "carry_over", messages: {role: "user", content: string}[], session: {block: string, fields: Record<string, string>} | null, setup: string, single: any,
+ *   left?: number, leftOut?: string[]}} left, leftOut: a carry-over's (carryFit)
  */
 function sessionPlan(chat, model, settings, context, resultText) {
   const record = chat.assist;
@@ -602,27 +748,73 @@ function sessionPlan(chat, model, settings, context, resultText) {
     const content = rendered[0].content.startsWith(ASSIST.lead) ? rendered[0].content : setup + "\n\n" + ASSIST.messageLead + "\n\n" + rendered[0].content;
     return { kind: "fresh", messages: [{ role: "user", content }], session: null, setup, single: only.length === 1 ? only[0] : null };
   }
-  return { kind: "carry_over", messages: [{ role: "user", content: carryOver(setup, rendered, carryBudget(settings)) }], session: null, setup, single: null };
+  const fit = carryFit(setup, carryPieces(chat, resultText, taskStartOf(chat)), carryBudget(settings));
+  return { kind: "carry_over", messages: [{ role: "user", content: carryText(setup, fit) }], session: null, setup, single: null, left: fit.left, leftOut: fit.leftOut };
 }
 
 /**
- * How a conversation fits a carry-over: every earlier message as it's written out (history), the newest of them that
- * fit the budget (kept), how many are left out, and how long the whole would be (chars), all of it kept.
- * @param {string} setup @param {{role: string, content: string}[]} rendered @param {number} budget characters
+ * How a conversation fits a carry-over. The newest messages from you (the last pieces, your message or results) always
+ * go. When the whole is over the budget: first earlier turns are shortened, oldest first (their long write and edit
+ * texts left out, as the Tool lane leaves them out, and long results a stand-in); then the oldest messages are left out,
+ * but never one that must stay (the recap, the request being worked on and what you said after it), and a batch that
+ * holds something to keep (a skill, a folder's AGENTS.md, your note or message) keeps that with its result's stand-in;
+ * last, if that's still too long, those kept texts go too, oldest first, and leftOut names their results (a skill left
+ * out can then be read again). It used to keep the newest messages that fit in a row, so a task's long results could
+ * push out the request itself, while room shortening would have made went unused.
+ * @param {string} setup @param {{role: string, content: string, index?: number, must?: boolean, short?: string, reduced?: string, keeps?: string[]}[]} rendered
+ *   carryPieces(chat), or assistOutbound(chat) (nothing marked: the oldest simply go first) @param {number} budget characters
+ * @returns {{entries: string[], newest: string, any: boolean, left: number, chars: number, first: boolean, leftOut: string[]}}
+ *   entries: the conversation as written out, notes of what's left out in their places; any: there's a conversation
+ *   before the newest; left: how many messages are left out or cut to what they keep; chars: how long the whole would
+ *   be; first: the chat's first message is among those left out
  */
 function carryFit(setup, rendered, budget) {
-  const newest = rendered[rendered.length - 1];
-  const history = rendered.slice(0, -1).map((m) => (m.role === "user" ? "Me" : "You") + ":\n" + stripSetup(m.content).trim());
-  const base = setup.length + ASSIST.carryOverLead.length + ASSIST.carryOverEnd.length + stripSetup(newest?.content ?? "").length + 200;
-  let used = base;
+  let cut = rendered.length;
+  while (cut > 0 && rendered[cut - 1].role === "user") cut--;
+  const newest = stripSetup(rendered.slice(cut).map((m) => m.content).join("\n\n"));
+  const history = rendered.slice(0, cut);
+  /** @typedef {"full" | "short" | "reduced" | "out"} Mode */
+  const textOf = (/** @type {any} */ m, /** @type {Mode} */ mode) =>
+    mode === "out" ? "" : stripSetup(mode === "short" ? m.short ?? m.content : mode === "reduced" ? m.reduced : m.content).trim();
+  const sizeOf = (/** @type {any} */ m, /** @type {Mode} */ mode) => mode === "out" ? 0 : textOf(m, mode).length + 6; // "Me:\n", the blank line after
+  /** @type {Mode[]} */
+  const modes = history.map(() => "full");
+  const sizes = history.map((m) => sizeOf(m, "full"));
+  const base = setup.length + ASSIST.carryOverLead.length + ASSIST.carryOverEnd.length + newest.length + 200;
+  let used = base + sizes.reduce((sum, size) => sum + size, 0);
+  const chars = used;
+  const note = ASSIST.carryOverLeftOut(1000).length + 2;
+  const over = () => used + modes.filter((mode, i) => mode === "out" && modes[i - 1] !== "out").length * note > budget;
+  const set = (/** @type {number} */ i, /** @type {Mode} */ mode) => {
+    const size = sizeOf(history[i], mode);
+    used += size - sizes[i];
+    sizes[i] = size;
+    modes[i] = mode;
+  };
+  for (let i = 0; i < history.length && over(); i++) if (history[i].short !== undefined) set(i, "short");
+  for (let i = 0; i < history.length && over(); i++) if (!history[i].must) set(i, history[i].reduced ? "reduced" : "out");
   /** @type {string[]} */
-  const kept = [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (used + history[i].length + 2 > budget) break;
-    kept.unshift(history[i]);
-    used += history[i].length + 2;
+  const leftOut = [];
+  for (let i = 0; i < history.length && over(); i++) {
+    if (modes[i] === "reduced") { set(i, "out"); leftOut.push(...(history[i].keeps || [])); }
   }
-  return { history, kept, left: history.length - kept.length, chars: base + history.reduce((sum, text) => sum + text.length + 2, 0) };
+  /** @type {string[]} */
+  const entries = [];
+  let run = 0;
+  let joinable = false;
+  history.forEach((m, i) => {
+    if (modes[i] === "out") { run++; joinable = false; return; }
+    if (run) { entries.push(ASSIST.carryOverLeftOut(run)); run = 0; }
+    const text = textOf(m, modes[i]);
+    // Your messages in a row are one turn, as assistOutbound joins them.
+    if (joinable && m.role === "user") entries[entries.length - 1] += "\n\n" + text;
+    else entries.push((m.role === "user" ? "Me" : "You") + ":\n" + text);
+    joinable = m.role === "user";
+  });
+  if (run) entries.push(ASSIST.carryOverLeftOut(run));
+  const left = modes.filter((mode) => mode === "out" || mode === "reduced").length;
+  const first = history.some((m, i) => (m.index ?? i) === 0 && modes[i] === "out");
+  return { entries, newest, any: history.length > 0, left, chars, first, leftOut };
 }
 
 /**
@@ -636,13 +828,14 @@ function carryFit(setup, rendered, budget) {
  */
 function wouldLeaveOut(chat, model, settings, context, resultText) {
   if (String(settings.assistSessionBlock || "").trim() && sessionHolds(chat, model)) return null;
-  // What would go: the conversation, then your next message (not typed yet: it's the small part).
-  const rendered = [...assistOutbound(chat, resultText), { role: "user", content: "" }];
-  if (rendered.length < 2) return null;
+  // What would go, as sessionPlan would carry it over: the conversation (all of it earlier turns by then), then your next
+  // message (not typed yet: it's the small part).
+  const pieces = [...carryPieces(chat, resultText, chat.messages.length), { role: "user", content: "", index: chat.messages.length, must: true }];
+  if (pieces.length < 2) return null;
   const budget = carryBudget(/** @type {any} */ (settings));
-  const fit = carryFit(ASSIST.setup(context), rendered, budget);
+  const fit = carryFit(ASSIST.setup(context), pieces, budget);
   if (!fit.left) return null;
-  return { tokens: Math.ceil(fit.chars / 4), budget: Math.floor(budget / 4), left: fit.left, first: !chat.compaction };
+  return { tokens: Math.ceil(fit.chars / 4), budget: Math.floor(budget / 4), left: fit.left, first: !chat.compaction && fit.first };
 }
 
 /** What a carry-over holds when the setting doesn't say: tokens, at about four characters each. */
@@ -668,17 +861,33 @@ function holdSession(chat, model, plan, reply, sessionId) {
   const old = chat.assist || {};
   const now = Date.now();
   const held = { held: chat.messages.length, heldHash: prefixHash(chat.messages, chat.messages.length), told: sha(plan.setup), usedAt: now, model };
+  // The results whose kept text (a skill) a carry-over left out: the model hasn't got them, so reading one again isn't
+  // "already in this chat". A session that carries on keeps the list of the carry-over it started from.
+  /** @type {string[]} */
+  const leftOut = plan.kind === "carry_over" ? (/** @type {any} */ (plan).leftOut || []) : plan.kind === "stateful" ? (old.leftOut || []) : [];
+  const keep = leftOut.length ? { leftOut } : {};
   if (!reply.session) {
     // No session in the answer: the one sent still holds it (stateful), or there's none (fresh, carry-over).
     if (plan.kind === "stateful") { chat.assist = { ...old, ...held }; return `continued ${fp(sessionId(old.fields || {}))}`; }
-    chat.assist = { lost: true, why: "none", since: now };
+    chat.assist = { lost: true, why: "none", since: now, ...keep };
     return "no session";
   }
   const id = sessionId(reply.session.fields);
   const same = !!old.fields && sessionId(old.fields) === id;
-  chat.assist = { fields: reply.session.fields, startedAt: same ? old.startedAt : now, ...held };
+  chat.assist = { fields: reply.session.fields, startedAt: same ? old.startedAt : now, ...held, ...keep };
   if (plan.kind === "stateful" && !same) return `replaced ${fp(sessionId(old.fields || {}))} by ${fp(id)} after ${Math.round((now - (old.startedAt || now)) / 60000)} min`;
   return same ? `continued ${fp(id)}, ${Math.round((now - (old.startedAt || now)) / 60000)} min old` : `started ${fp(id)} (${plan.kind})`;
+}
+
+/**
+ * A request sent in the session whose reply was cut off partway (the cut reply is stored at `count`): the session was
+ * sent everything before it, so it holds that, and a carry-on sends only what's new. It used to send the results the
+ * session already had again. @param {any} chat @param {{kind: string, setup: string}} plan @param {number} count
+ */
+function heldThroughCut(chat, plan, count) {
+  const record = chat.assist;
+  if (plan.kind !== "stateful" || !record?.fields || record.lost) return;
+  chat.assist = { ...record, held: count, heldHash: prefixHash(chat.messages, count), told: sha(plan.setup), usedAt: Date.now() };
 }
 
 /** JSON with object keys in order at every level, to tell two requests apart. @param {any} value @returns {string} */
@@ -689,4 +898,5 @@ function stableJson(value) {
 }
 
 module.exports = { findRequests, parseReply, promisesAction, visibleText, draftingRequests, ALIASES, decode, salvage, pathsAsWritten, canonical, fence, resultMessage, requestBlock,
-  assistOutbound, carryOver, carryFit, wouldLeaveOut, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };
+  assistOutbound, carryPieces, carryOver, carryFit, wouldLeaveOut, stripSetup, sessionPlan, holdSession, heldThroughCut, prefixHash, canonicalOf, carryBudget, fp,
+  assistResult, shortCall, LONG_ARGUMENT_CHARS };

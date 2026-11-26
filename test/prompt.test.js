@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, PROBE, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "68aa6094d3774a4f";
+const PINNED = "83beb1371f6cc8cd";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
@@ -31,6 +31,9 @@ const RESULT_SAMPLES = {
   folderHas: [[["lib/", "a.js"], 2], [["a.js"], 150]], searchTimedOut: [[30]], searchIncomplete: [[30]], reindented: [["4 spaces", true], ["1 tab", false]], notApplied: [["a.js"]], edited: [["a.js", 1, 1, 5], ["a.js", 3, 0, 9]], searchAround: [["src/a.js", 3, 9]], searchAroundCapped: [[1], [12]], editedAll: [["a.js", 1, [4]], ["a.js", 14, [1, 2, 2, 9, 12, 13, 20, 21, 22, 30, 31, 40]]],
   written: [[true, "a.js", 1], [false, "b.js", 40]], newProblems: [["a.js", ["- line 3: X"], 0], ["a.js", ["- line 3: X"], 2]],
   problemsNow: [["a.ts", ["- line 3: X"], 0], ["a.ts", ["- line 3: X"], 2]], changeNotChecked: [["run.ps1"]],
+  rulesFirst: [["src/plant/pump.js", ["src/plant/AGENTS.md"], true, false], ["a.js", ["x/AGENTS.md", "AGENTS.md"], false, true], ["a.js", ["x/AGENTS.md"], true, true]],
+  readInstead: [["greet.js", "src/greet.js"]],
+  textOutlineHead: [["a.ps1", 1500], ["b.st", 1]], textDefinitions: [["Get-Thing", 1], ["Get-Thing", 2]], retabbed: [[4, true], [2, false]],
   noProblems: [[""], ["a.js"]], alsoText: [["total"]], pastEnd: [["a.js", 18], ["b.js", 1]], changedOnDisk: [["a.js"]], notChecked: [["src/x.ts"]], notReported: [["src/x.ps1"]], notSaved: [["a.js"]], notWritable: [["a.js"]], sameContent: [["a.js"]], moveExists: [["b.js"]], moveUnsaved: [["a.js"]], moveMentions: [["old-helpers", ["src/app.js:1: require('./old-helpers')"]]], moved: [[false, "a.js", "lib/a.js", null], [true, "src", "backup/src", 12]], moreProblems: [[4]], removeNoTrash: [["big"]], removed: [["a.js", null], ["src", 1], ["src", 1200]],
 };
 
@@ -140,7 +143,7 @@ test("the notes read right", () => {
 // ================================================================ the Assist lane, pinned on its own
 
 /** The Assist lane's fingerprint: a change to its texts moves this one, never the Tool lane's (and the reverse). */
-const ASSIST_PINNED = "1bbb2b397d862b30";
+const ASSIST_PINNED = "c98c9c875be7e660";
 
 function assistEverything() {
   return {
@@ -155,6 +158,7 @@ function assistEverything() {
     changed: ASSIST.setupChanged("SETUP"),
     results: [ASSIST.resultOk("read_file a.js"), ASSIST.resultFailed("read_file a.js"), ASSIST.resultClosing],
     unread: [ASSIST.unread("PROBLEM", 0), ASSIST.unread("PROBLEM", 1), ASSIST.unread("PROBLEM", 3)],
+    cut: [ASSIST.dropped, ASSIST.restLost],
     carry: [ASSIST.carryOverLead, ASSIST.carryOverLeftOut(1), ASSIST.carryOverLeftOut(4), ASSIST.carryOverEnd],
     repairs: [ASSIST.repair("PROBLEM"), ASSIST.unknownTool("x", ["a", "b"]), ASSIST.cutOff, ASSIST.gaveUp],
     swaps: ASSIST.swaps,

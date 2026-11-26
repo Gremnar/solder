@@ -17,6 +17,7 @@ const { RESULTS, TEXTS } = require("./prompt.js");
 const { DocsIndex, EmbedBudget, EmbedCache, meaningFloor, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
 const { describe } = require("./review.js");
+const { textKind, textOutline, outlineLines, definedIn } = require("./outline.js");
 
 const MAX_READ_LINES = 2000;
 const MAX_OUTPUT_CHARS = 30_000;
@@ -60,6 +61,10 @@ const OUTLINE_WAITS_MS = [500, 1000, 1500];
 /** How long a definition or reference lookup may take before it counts as "found nothing". */
 const LOOKUP_MS = 15_000;
 const MAX_DEFINITIONS = 5;
+/** Files a name's text matches are in that Solder's own outline looks through for its definition (no language support). */
+const TEXT_LOOKUP_FILES = 20;
+/** A file this long that gets no outline from a language at all: that language has none, so it isn't waited for again. */
+const SILENT_LINES = 50;
 const MAX_DEFINITION_LINES = 80;
 const MAX_REFERENCES = 100;
 const MAX_CHANGED = 200;
@@ -93,6 +98,8 @@ const MISS_PLACES = 3;
 /** A missing path: at most this many files suggested in its place, found within this long. */
 const NEARBY_MAX = 6;
 const NEARBY_MS = 3_000;
+/** A search or symbols result brings at most this many folder rules files the chat hasn't been given. */
+const MAX_RULES_A_RESULT = 2;
 /** A folder given as a file: at most this many of its entries listed. */
 const FOLDER_ENTRIES_MAX = 100;
 /** A content search stops after this long. */
@@ -110,6 +117,8 @@ class WorkspaceTools {
     this._rg = undefined;
     /** Languages whose symbol provider has answered: an empty outline from them is real, not a slow start. */
     this._outlined = new Set();
+    /** Languages that gave no outline after the whole wait: asked again each time, but not waited for. */
+    this._silent = new Set();
     /** @type {DocsIndex | null | undefined} the docs index, once opened (null: no SQLite here) */
     this._docs = undefined;
     /** Languages whose diagnostics VS Code has reported: an edit there is worth waiting for. */
@@ -264,14 +273,15 @@ class WorkspaceTools {
     try {
       switch (name) {
         case "read_file": return await this.readFile(args, ctx.chat);
-        case "symbols": return await this.symbols(args, ctx.signal);
+        // The folder rules of the files a search or symbols result names come with it (a few at most).
+        case "symbols": return this.withFolderRules(await this.symbols(args, ctx.signal), ctx.chat, args.path ? [String(args.path)] : []);
         case "changes": return await this.changes(args, ctx.signal);
-        case "search": return await this.search(args, ctx.signal);
+        case "search": return args.docs ? await this.search(args, ctx.signal) : this.withFolderRules(await this.search(args, ctx.signal), ctx.chat, []);
         case "find_files": return await this.findFiles(args);
         case "edit_file": return await this.editFile(args, ctx.chat, ctx.edit);
         case "write_file": return await this.writeFile(args, ctx.chat, ctx.edit);
         case "remove_item": return await this.removeItem(args, ctx.chat);
-        case "move_item": return await this.moveItem(args);
+        case "move_item": return await this.moveItem(args, ctx.chat);
         case "problems": return await this.problems(args);
         default: throw new ToolError(RESULTS.noTool(name));
       }
@@ -284,8 +294,49 @@ class WorkspaceTools {
   // ------------------------------------------------------------------ read_file --
 
   async readFile(/** @type {any} */ args, /** @type {any} */ chat) {
-    const file = this.resolve(args.path);
+    let file = this.resolve(args.path);
+    // Not there, and the workspace has just one file of that name: that one is read, and the result says so.
+    const instead = await this.onlyOfName(file);
+    if (instead) file = instead;
     await this.mustBeFile(file);
+    const head = instead ? RESULTS.readInstead(path.basename(String(args.path).trim().replace(/^["']|["']$/g, "")), file.shown) + "\n" : "";
+    const read = await this.readResolved(file, args, chat);
+    return head ? { ...read, output: head + read.output } : read;
+  }
+
+  /**
+   * For read_file of a path that isn't there: the one file in the workspace with that name (any case, the same
+   * extension), resolved as any read is, when reading it needs no approval. null when the path is there, when there
+   * are none or several, or when the path asked for is outside the workspace. Never used for a change.
+   * @param {any} file resolve()'s @returns {Promise<any>}
+   */
+  async onlyOfName(file) {
+    if (!file.inside) return null;
+    try { await vscode.workspace.fs.stat(file.uri); return null; } catch { /* not there */ }
+    const name = path.basename(file.full);
+    if (!name || /[*?[\]{}]/.test(name)) return null;
+    /** @type {string[]} */
+    const found = [];
+    for (const root of this.roots()) {
+      try {
+        const uris = await deadline(vscode.workspace.findFiles(new vscode.RelativePattern(root, caseless("**/" + name)), "**/node_modules/**", 2), NEARBY_MS);
+        if (!Array.isArray(uris)) return null; // it didn't answer in time: another file of that name may be there
+        for (const uri of uris) {
+          if (!found.some((other) => other.toLowerCase() === uri.fsPath.toLowerCase())) found.push(uri.fsPath);
+        }
+      } catch { return null; } // the search didn't answer: as today, the error with what it can suggest
+      if (found.length > 1) return null;
+    }
+    if (found.length !== 1 || path.basename(found[0]).toLowerCase() !== name.toLowerCase()) return null;
+    let other;
+    try { other = this.resolve(found[0]); } catch { return null; }
+    if (!other.inside || this.needsApproval("read_file", { path: other.full }) !== null) return null;
+    try { if (!fs.statSync(other.full).isFile()) return null; } catch { return null; }
+    return other;
+  }
+
+  /** read_file, once the file is known to be there. @param {any} file @param {any} args @param {any} chat */
+  async readResolved(file, args, chat) {
     const skill = this.readSkill(file.full, chat);
     if (skill) return skill;
     /** @type {{lineCount: number, lineAt: (index: number) => {text: string}, getText: () => string}} */
@@ -367,7 +418,9 @@ class WorkspaceTools {
     if (!skill.text) return null;
     const keep = RESULTS.skillText(skill.name, skill.when, skill.text);
     const since = chat?.compaction?.through ?? 0;
-    const held = (chat?.messages || []).slice(since).some((/** @type {any} */ m) => m.role === "tool" && String(m.meta?.keep ?? "").includes(keep));
+    // A result an Assist carry-over had to leave out isn't in the chat the model has: the skill goes again.
+    const leftOut = new Set(chat?.assist?.leftOut || []);
+    const held = (chat?.messages || []).slice(since).some((/** @type {any} */ m) => m.role === "tool" && !leftOut.has(m.tool_call_id) && String(m.meta?.keep ?? "").includes(keep));
     if (held) return { output: RESULTS.skillAgain(skill.name), summary: `Skill ${skill.name} · already in this chat` };
     return { output: RESULTS.skillRead(skill.name, skill.cut ? skills.MAX_SKILL_CHARS : 0), summary: `Read the skill ${skill.name}`, keep };
   }
@@ -414,27 +467,52 @@ class WorkspaceTools {
   /** The first read in a folder with its own AGENTS.md brings that file along (the nearest one wins). */
   nestedAgents(/** @type {any} */ file, /** @type {any} */ chat) {
     const root = this.rootOf(file.full);
-    if (!file.inside || !root) return "";
-    const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
-    chat.agentsSeen = chat.agentsSeen || [];
-    let folder = path.dirname(file.full);
-    const notes = [];
-    // A drive root (Z:\) already ends in its separator; the root folder itself is never walked (its own is read already).
-    const inRoot = (root.endsWith(path.sep) ? root : root + path.sep).toLowerCase();
-    while (folder.length > inRoot.length && folder.toLowerCase().startsWith(inRoot)) {
-      for (const name of names) {
-        const candidate = path.join(folder, name);
-        const key = candidate.toLowerCase();
-        if (chat.agentsSeen.includes(key) || !ownFile(candidate, root)) continue;
-        chat.agentsSeen.push(key);
-        try {
-          const text = fs.readFileSync(candidate, "utf8").slice(0, 20_000).trim();
-          if (text) notes.push(RESULTS.folderAgents(path.relative(root, candidate).split(path.sep).join("/"), text));
-        } catch { /* unreadable: skip */ }
-      }
-      folder = path.dirname(folder);
+    if (!file.inside || !root || !chat) return "";
+    return giveRules(folderRules(file.full, root, ruleNames()), chat).notes;
+  }
+
+  /**
+   * A search or symbols result, with the folder rules of the files it names that this chat hasn't been given (at most
+   * MAX_RULES_A_RESULT of them: a broad search would bring many; the rest come before a change, see rulesFirst).
+   * @param {any} result @param {any} chat @param {string[]} first paths to take first (the file a symbols call named)
+   */
+  withFolderRules(result, chat, first) {
+    if (!result || result.failed || !chat) return result;
+    const names = ruleNames();
+    /** @type {{key: string, file: string, shown: string}[]} */
+    const rules = [];
+    const folders = new Set();
+    for (const given of [...first, ...namedPaths(String(result.output ?? ""))]) {
+      if (folders.size >= 100) break;
+      let file;
+      try { file = this.resolve(given); } catch { continue; }
+      const root = this.rootOf(file.full);
+      const folder = path.dirname(file.full).toLowerCase();
+      if (!file.inside || !root || folders.has(folder)) continue;
+      try { if (!fs.statSync(file.full).isFile()) continue; } catch { continue; }
+      folders.add(folder);
+      for (const rule of folderRules(file.full, root, names)) if (!rules.some((other) => other.key === rule.key)) rules.push(rule);
     }
-    return notes.join("\n\n");
+    const { notes } = giveRules(rules, chat, MAX_RULES_A_RESULT);
+    return notes ? { ...result, keep: [result.keep, notes].filter(Boolean).join("\n\n") } : result;
+  }
+
+  /**
+   * Before a change (edit, write, a move's destination) in a folder whose rules the model hadn't seen when it wrote
+   * the call: the change isn't made, and the rules come back (marked given), so the call is made again with them.
+   * Rules given earlier in the same reply count as unseen: that reply's calls were written before them. Rules the
+   * chat's record says were given are given, even if compaction has since summarised them (no loop). null: go ahead.
+   * @param {any} file resolve()'s @param {any} chat
+   */
+  rulesFirst(file, chat) {
+    const root = this.rootOf(file.full);
+    if (!chat || !file.inside || !root) return null;
+    // The rules file being changed isn't one to read first.
+    const rules = folderRules(file.full, root, ruleNames()).filter((rule) => rule.key !== file.full.toLowerCase());
+    const { notes, fresh, pending } = giveRules(rules, chat);
+    if (!fresh.length && !pending.length) return null;
+    return { output: RESULTS.error(RESULTS.rulesFirst(file.shown, [...fresh, ...pending], fresh.length > 0, pending.length > 0)),
+      summary: `Not changed yet: ${file.shown} · its folder's rules first`, failed: true, ...(notes ? { keep: notes } : {}) };
   }
 
   // -------------------------------------------------------------------- symbols --
@@ -459,7 +537,7 @@ class WorkspaceTools {
         && s.name.replace(/\s*\(.*\)$/, "") === name && s.location?.uri?.scheme === "file");
       const exact = all.filter((s, i) => all.findIndex((o) => o.location.uri.toString() === s.location.uri.toString()
         && o.location.range.start.line === s.location.range.start.line) === i);
-      if (!exact.length) return this.textMatches(name, signal);
+      if (!exact.length) return this.textFallback(name, find, signal);
       // Declared in several places: every definition (up to the cap), or the first's uses with the others named.
       if (exact.length > 1 && find === "definition") return this.definitions(name, exact.map((s) => s.location));
       if (exact.length > 1) others = exact.slice(1, 1 + MAX_DEFINITIONS).map((s) => `${this.shown(s.location.uri.fsPath)} ${s.location.range.start.line + 1}`);
@@ -470,6 +548,11 @@ class WorkspaceTools {
     let document;
     try { document = await vscode.workspace.openTextDocument(file.uri); } catch { throw new ToolError(RESULTS.notText(file.shown)); }
     const symbols = await this.symbolsOf(document); // also gives a cold language server its moment
+    // No language support: Solder's own outline of the text knows where a function or block starts and ends.
+    if (!symbols.length && find === "definition") {
+      const own = this.textDefinitions(name, [{ full: file.full, document }]);
+      if (own) return own;
+    }
     const position = positionOf(document, symbols, name, args.line);
     // Not in the file given: the whole workspace, as with no path (saves a search and a second call).
     if (!position) {
@@ -480,7 +563,7 @@ class WorkspaceTools {
     }
     const command = find === "definition" ? "vscode.executeDefinitionProvider" : "vscode.executeReferenceProvider";
     const found = locations(await deadline(vscode.commands.executeCommand(command, document.uri, position), LOOKUP_MS));
-    if (!found.length) return this.textMatches(name, signal);
+    if (!found.length) return this.textFallback(name, find, signal);
     if (find === "definition") return this.definitions(name, found);
     const uses = await this.references(name, found, signal);
     return others.length ? { ...uses, output: uses.output + "\n\n" + RESULTS.alsoDefined(name, others) } : uses;
@@ -586,6 +669,61 @@ class WorkspaceTools {
       summary: `${short(name)} · ${lines.length}${more ? "+" : ""} text matches` };
   }
 
+  /**
+   * No language support answered. For a definition, the files the name appears in that Solder outlines by their text
+   * (PowerShell, Structured Text, batch, …): where one defines it, its body. Else whole-word text matches.
+   */
+  async textFallback(/** @type {string} */ name, /** @type {string} */ find, /** @type {AbortSignal} */ signal) {
+    if (find === "definition") {
+      const lines = await this.wordMatches(name, signal).catch(() => []);
+      const files = [...new Set(lines.map((line) => /^(.+?):\d+:/.exec(line)?.[1] ?? "").filter((p) => p && textKind(p)))].slice(0, TEXT_LOOKUP_FILES);
+      /** @type {{full: string, document: vscode.TextDocument}[]} */
+      const places = [];
+      for (const shown of files) {
+        try {
+          const file = this.resolve(shown);
+          if (!this.mayRead(file.full)) continue;
+          places.push({ full: file.full, document: await vscode.workspace.openTextDocument(file.uri) });
+        } catch { /* gone, or not text: left out */ }
+      }
+      const own = this.textDefinitions(name, places);
+      if (own) return own;
+    }
+    return this.textMatches(name, signal);
+  }
+
+  /**
+   * Where Solder's outline of these files' text defines `name`, with its body (to its end, or to the next definition
+   * when its end can't be told), as definitions() shows a language server's; null when none does.
+   * @param {string} name @param {{full: string, document: vscode.TextDocument}[]} places
+   */
+  textDefinitions(name, places) {
+    /** @type {{full: string, document: vscode.TextDocument, first: number, last: number}[]} */
+    const found = [];
+    for (const { full, document } of places) {
+      const entries = textOutline(document.getText(), full);
+      if (!entries) continue;
+      for (const { entry, last } of definedIn(entries, name, full, document.lineCount)) found.push({ full, document, first: entry.start - 1, last: Math.min(last, document.lineCount) - 1 });
+    }
+    if (!found.length) return null;
+    const blocks = [];
+    for (const { full, document, first, last } of found.slice(0, MAX_DEFINITIONS)) {
+      const end = Math.min(last, first + MAX_DEFINITION_LINES - 1);
+      const lines = [];
+      let size = 0;
+      let cut = end < last;
+      for (let line = first; line <= end; line++) {
+        const text = `${line + 1}\t${document.lineAt(line).text}`;
+        if (size + text.length > MAX_DEFINITION_CHARS) { lines.push(text.slice(0, Math.max(200, MAX_DEFINITION_CHARS - size))); cut = true; break; }
+        lines.push(text);
+        size += text.length + 1;
+      }
+      blocks.push(`${this.shown(full)} ${first + 1}–${last + 1}:\n${lines.join("\n")}` + (cut ? "\n" + RESULTS.definitionCut : ""));
+    }
+    return { output: RESULTS.textDefinitions(name, found.length) + "\n\n" + blocks.join("\n\n"),
+      summary: `Definition of ${short(name)} · ${found.length === 1 ? this.shown(found[0].full) : found.length + " places"} (by text)` };
+  }
+
   // -------------------------------------------------------------------- changes --
 
   /** What's changed in git since the last commit: the files, or one file's or folder's diff. */
@@ -668,7 +806,15 @@ class WorkspaceTools {
     const symbols = await this.symbolsOf(document);
     const entries = outlineEntries(symbols, (kind) => vscode.SymbolKind[kind] ?? "Symbol");
     if (!entries.length) {
-      return { output: RESULTS.noOutline(file.shown, document.lineCount), summary: `Outline of ${file.shown} · none` };
+      // No language support for it: Solder's own outline of its text (PowerShell, Structured Text, batch, …), so a big
+      // file still needn't be read whole.
+      const own = textOutline(document.getText(), file.full);
+      const lines = own ? outlineLines(own) : [];
+      if (!lines.length) return { output: RESULTS.noOutline(file.shown, document.lineCount), summary: `Outline of ${file.shown} · none` };
+      const first = lines.slice(0, MAX_OUTLINE);
+      return { output: RESULTS.textOutlineHead(file.shown, document.lineCount) + "\n" + first.join("\n")
+        + (lines.length > first.length ? "\n" + RESULTS.outlineCapped(lines.length - first.length) : ""),
+        summary: `Outline of ${file.shown} · ${lines.length} entr${lines.length === 1 ? "y" : "ies"} (by text)` };
     }
     const shown = entries.slice(0, MAX_OUTLINE);
     const more = entries.length - shown.length;
@@ -677,9 +823,13 @@ class WorkspaceTools {
       summary: `Outline of ${file.shown} · ${entries.length} entr${entries.length === 1 ? "y" : "ies"}` };
   }
 
-  /** The document's symbols from VS Code's providers, giving a cold language server a few seconds. */
+  /**
+   * The document's symbols from VS Code's providers, giving a cold language server a few seconds. A language that
+   * gave nothing after the whole wait, for a file Solder outlines by its text or a long one, isn't waited for again in
+   * this window (asked once each time still, so one that starts late is used when it does).
+   */
   async symbolsOf(/** @type {vscode.TextDocument} */ document) {
-    const ready = this._outlined.has(document.languageId) || document.languageId === "plaintext";
+    const ready = this._outlined.has(document.languageId) || this._silent.has(document.languageId) || document.languageId === "plaintext";
     for (let attempt = 0; ; attempt++) {
       /** @type {any} */
       let result;
@@ -688,7 +838,11 @@ class WorkspaceTools {
       } catch { result = undefined; }
       if (Array.isArray(result) && result.length) {
         this._outlined.add(document.languageId);
+        this._silent.delete(document.languageId);
         return result;
+      }
+      if (!ready && attempt >= OUTLINE_WAITS_MS.length && (textKind(document.uri.fsPath ?? "") || document.lineCount >= SILENT_LINES)) {
+        this._silent.add(document.languageId);
       }
       if (ready || attempt >= OUTLINE_WAITS_MS.length) return [];
       await new Promise((resolve) => setTimeout(resolve, OUTLINE_WAITS_MS[attempt]));
@@ -1230,6 +1384,9 @@ class WorkspaceTools {
    */
   async editFile(args, chat, hint) {
     const { file, document, text, old, found } = await this.plannedEdit(args);
+    // A folder with rules the model hadn't seen when it wrote this: they come back, and the edit waits for its next call.
+    const rules = this.rulesFirst(file, chat);
+    if (rules) return rules;
     const { start, length, replaced } = found;
     const shiftNote = found.note;
     const before = this.baseline(file, hint);
@@ -1302,6 +1459,8 @@ class WorkspaceTools {
     const previous = exists ? (open ? open.getText() : decodeText(/** @type {Buffer} */ (raw))) : "";
     if (previous === null) throw new ToolError(RESULTS.notText(file.shown)); // a binary file: no text to keep for Undo
     if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
+    const rules = this.rulesFirst(file, chat); // as an edit's
+    if (rules) return rules;
     const backup = exists ? await this.backup(chat, file, previous) : "";
     // A new file had no problems before: every one it has is this change's.
     const before = this.baseline(file, hint, !exists);
@@ -1509,7 +1668,7 @@ class WorkspaceTools {
   // ------------------------------------------------------------------ move_item --
 
   /** Move, rename or copy a file or folder; never overwrites. Undo moves it back, or removes the copy. */
-  async moveItem(/** @type {any} */ args) {
+  async moveItem(/** @type {any} */ args, /** @type {any} */ chat) {
     const source = this.resolve(args.from);
     const root = this.root();
     let stat;
@@ -1529,6 +1688,9 @@ class WorkspaceTools {
     // The file on disk is what moves: an editor's unsaved changes would be left behind.
     const dirty = vscode.workspace.textDocuments.find((doc) => doc.isDirty && doc.uri.scheme === "file" && within(doc.uri.fsPath, source.full));
     if (dirty) throw new ToolError(RESULTS.moveUnsaved(this.shown(dirty.uri.fsPath)));
+    // Where it lands may have rules of its own (names, layout): as an edit's, given first.
+    const rules = this.rulesFirst(target, chat);
+    if (rules) return rules;
     const copy = !!args.copy;
     const madeFolder = firstMissing(path.dirname(target.full));
     await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target.full)));
@@ -2331,6 +2493,104 @@ function ownFile(full, folder) {
   try { return fs.statSync(full).isFile() && within(realPath(full), realPath(folder)); } catch { return false; }
 }
 
+/** The instruction file names from the settings (plain names only). */
+function ruleNames() {
+  return plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
+}
+
+/**
+ * The folder rules for a path in a workspace folder: the instruction files of each folder from the path's own up to
+ * the workspace folder, not including it (its own are in the system prompt). Nearest first. A folder's own file only
+ * (ownFile): a link by that name to elsewhere isn't used. The path itself needn't exist (a new file).
+ * @param {string} full @param {string} root @param {string[]} names
+ * @returns {{key: string, file: string, shown: string}[]}
+ */
+function folderRules(full, root, names) {
+  /** @type {{key: string, file: string, shown: string}[]} */
+  const out = [];
+  let folder = path.dirname(full);
+  // A drive root (Z:\) already ends in its separator; the root folder itself is never walked (its own is read already).
+  const inRoot = (root.endsWith(path.sep) ? root : root + path.sep).toLowerCase();
+  while (folder.length > inRoot.length && folder.toLowerCase().startsWith(inRoot)) {
+    for (const name of names) {
+      const file = path.join(folder, name);
+      if (ownFile(file, root)) out.push({ key: file.toLowerCase(), file, shown: path.relative(root, file).split(path.sep).join("/") });
+    }
+    const up = path.dirname(folder);
+    if (up === folder) break;
+    folder = up;
+  }
+  return out;
+}
+
+/**
+ * Rules given during a reply that's still running, by that reply's message: its calls were written before the model
+ * saw them. Kept in memory only: once the reply is over, everything the chat was given counts as seen.
+ * @type {WeakMap<object, Set<string>>}
+ */
+const GIVEN_IN_REPLY = new WeakMap();
+
+/** The reply being run: the chat's last message from the model. @param {any} chat @returns {object | null} */
+function currentReply(chat) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  for (let index = messages.length - 1; index >= 0; index--) if (messages[index]?.role === "assistant") return messages[index];
+  return null;
+}
+
+/**
+ * Of these folder rules, gives the chat those it hasn't been given (read now, up to `max` with text, and marked given in
+ * `chat.agentsSeen`), and says which were given in the reply now running (`pending`). The record is the chat's: what it
+ * says was given counts as given, even after compaction summarised the text away.
+ * @param {{key: string, file: string, shown: string}[]} rules @param {any} chat @param {number} [max]
+ * @returns {{notes: string, fresh: string[], pending: string[]}}
+ */
+function giveRules(rules, chat, max = Infinity) {
+  chat.agentsSeen = Array.isArray(chat.agentsSeen) ? chat.agentsSeen : [];
+  const reply = currentReply(chat);
+  const inReply = reply ? GIVEN_IN_REPLY.get(reply) : undefined;
+  /** @type {string[]} */
+  const notes = [];
+  /** @type {string[]} */
+  const fresh = [];
+  /** @type {string[]} */
+  const pending = [];
+  for (const rule of rules) {
+    if (chat.agentsSeen.includes(rule.key)) {
+      if (inReply?.has(rule.key)) pending.push(rule.shown);
+      continue;
+    }
+    if (fresh.length >= max) continue;
+    let text = "";
+    try { text = fs.readFileSync(rule.file, "utf8").slice(0, 20_000).trim(); } catch { /* unreadable: skip */ }
+    chat.agentsSeen.push(rule.key);
+    if (!text) continue;
+    notes.push(RESULTS.folderAgents(rule.shown, text));
+    fresh.push(rule.shown);
+    if (reply) {
+      if (!GIVEN_IN_REPLY.has(reply)) GIVEN_IN_REPLY.set(reply, new Set());
+      /** @type {Set<string>} */ (GIVEN_IN_REPLY.get(reply)).add(rule.key);
+    }
+  }
+  return { notes: notes.join("\n\n"), fresh, pending };
+}
+
+/**
+ * The paths a search or symbols result names at the start of its lines ("path:12:text", "path (3)", "path 4–9:",
+ * "path (lines 3–9):"), in order, once each. Some may be nothing of the kind: the caller checks each is a file.
+ * @param {string} output @returns {string[]}
+ */
+function namedPaths(output) {
+  /** @type {string[]} */
+  const out = [];
+  for (const line of output.split("\n").slice(0, 2000)) {
+    const match = /^(.+?):\d+[:\s]/.exec(line) || /^(.+?) \(lines \d+–\d+\):$/.exec(line) || /^(.+?) \(\d+\)$/.exec(line)
+      || /^(.+?) \d+(?:–\d+)?:?(?: \(|$)/.exec(line);
+    const found = match?.[1].trim();
+    if (found && !/^\d+\t/.test(found) && !out.includes(found)) out.push(found);
+  }
+  return out;
+}
+
 /** The instruction file names that are plain names (no folders, no ..), so a setting can't point outside. @param {unknown} names */
 function plainNames(names) {
   return (Array.isArray(names) ? names : []).filter((name) => typeof name === "string" && /^[^\\/:]+$/.test(name) && name !== "." && name !== "..");
@@ -2670,6 +2930,13 @@ function planEdit(shown, text, args, eol) {
     const again = plain === null ? null : locate(shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);
     if (again) found = { ...again, note: " " + RESULTS.numbersLeftOut + again.note };
   }
+  if (!found) {
+    // Written with spaces against a file indented with tabs, or the other way round: one tab for the same number of
+    // spaces on every line, new_text changed the same way, when that gives one place and one reading only.
+    const plainNew = plain !== null && numberedLines(replacement, eol) === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement;
+    const turned = retabbedMatch(shown, text, plain ?? old, plainNew, eol);
+    if (turned) found = { ...turned, note: (plain !== null ? " " + RESULTS.numbersLeftOut : "") + turned.note };
+  }
   if (!found) throw notFound(shown, text, plain ?? old, eol);
   return { old, found };
 }
@@ -2840,6 +3107,57 @@ function shiftLines(/** @type {string} */ text, /** @type {{add?: string, remove
   return out.join(eol);
 }
 
+/**
+ * old_text indented with spaces where the file has tabs, or with tabs where it has spaces: found by reading one tab as
+ * 4 or 2 spaces (tabs to spaces: the file's own unit only), with new_text's indentation changed the same way. Every
+ * indented line of both must convert (no mixes, no odd counts). Several readings that place it differently, or one
+ * that matches several places, is a guess, and null, as when nothing matches.
+ * @returns {{start: number, length: number, replaced: string, note: string} | null}
+ */
+function retabbedMatch(/** @type {string} */ shown, /** @type {string} */ text, /** @type {string} */ old, /** @type {string} */ replacement, /** @type {string} */ eol) {
+  const indents = old.split(eol).filter((line) => line.trim()).map(indentOf).filter(Boolean);
+  if (!indents.length) return null;
+  const toTabs = indents.every((indent) => /^ +$/.test(indent));
+  if (!toTabs && !indents.every((indent) => /^\t+$/.test(indent))) return null;
+  let widths = [4, 2];
+  if (!toTabs) {
+    // The file's own unit: every line it indents with spaces by a multiple of 4, else of 2.
+    const counts = text.split(eol).filter((line) => line.trim()).map(indentOf).filter((indent) => /^ +$/.test(indent)).map((indent) => indent.length);
+    widths = !counts.length ? [] : counts.every((n) => n % 4 === 0) ? [4] : counts.every((n) => n % 2 === 0) ? [2] : [];
+  }
+  /** @type {({width: number, start: number, length: number, replaced: string, note: string} | null)[]} */
+  const hits = [];
+  for (const width of widths) {
+    const was = retabLines(old, eol, width, toTabs);
+    if (was === null || was === old) continue;
+    const now = retabLines(replacement, eol, width, toTabs);
+    let hit;
+    try { hit = locate(shown, text, was, now ?? was, eol); } catch { hits.push(null); continue; } // in several places
+    if (!hit) continue;
+    hits.push(now === null ? null : { width, ...hit }); // new_text that can't be changed the same way: not a guess to make
+  }
+  if (!hits.length || hits.includes(null)) return null;
+  const sure = /** @type {{width: number, start: number, length: number, replaced: string, note: string}[]} */ (hits);
+  // Two readings (4 spaces a tab, or 2 and a level less): the one that needs no shift on top, or both the same edit.
+  const plain = sure.filter((hit) => !hit.note);
+  const pick = sure.length === 1 ? sure[0] : plain.length === 1 ? plain[0]
+    : sure.every((hit) => hit.start === sure[0].start && hit.length === sure[0].length && hit.replaced === sure[0].replaced) ? sure[0] : null;
+  if (!pick) return null;
+  return { start: pick.start, length: pick.length, replaced: pick.replaced, note: " " + RESULTS.retabbed(pick.width, toTabs) + pick.note };
+}
+
+/** Each line's leading spaces as tabs (`width` a tab) or its tabs as spaces; blank lines left alone; null when a line can't be. */
+function retabLines(/** @type {string} */ text, /** @type {string} */ eol, /** @type {number} */ width, /** @type {boolean} */ toTabs) {
+  const out = [];
+  for (const line of text.split(eol)) {
+    const indent = indentOf(line);
+    if (!indent || !line.trim()) { out.push(line); continue; }
+    if (toTabs ? !/^ +$/.test(indent) || indent.length % width : !/^\t+$/.test(indent)) return null;
+    out.push((toTabs ? "\t".repeat(indent.length / width) : " ".repeat(indent.length * width)) + line.slice(indent.length));
+  }
+  return out.join(eol);
+}
+
 /** @param {{add?: string, remove?: string}} shift @returns {[string, boolean]} the amount, in words, and whether old_text had less */
 function describeShift(shift) {
   const chars = shift.add ?? shift.remove ?? "";
@@ -2861,4 +3179,4 @@ function short(/** @type {string} */ text, limit = 40) {
   return line.length > limit ? line.slice(0, limit - 1) + "…" : line;
 }
 
-module.exports = { encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, planEdit, withContext, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };
+module.exports = { folderRules, giveRules, namedPaths, encodedLike, WorkspaceTools, ToolError, plainName, treeStamp, shiftedMatch, shiftLines, looseMatch, notFound, aroundPlaces, locate, withoutLineNumbers, rankNearby, rgGlob, folderEntries, plainNames, ownFile, runsPrograms, followedLater, planEdit, withContext, realPath, withoutSignatureLines, diskTextIfNewer, caseless, globPattern, walkFiles, around, aroundLongMatches, outlineEntries, parseStatus, parseNumstat, runGit, locations, positionOf };

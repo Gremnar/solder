@@ -838,4 +838,130 @@ SCENARIOS.push({
   },
 });
 
+// ---------------------------------------------------------------- a subfolder's rules, reached without a read --
+
+const PLANT_RULES = "# Rules for src/plant\n\nEvery function you add in this folder gets a comment line `// Owner: plant-ops` directly above it. (Older functions don't have it yet: leave them as they are.)\n";
+const PUMP = "function startPump(id) {\n  return \"started \" + id;\n}\n\nfunction pumpState(id) {\n  return { id, running: true };\n}\n\nmodule.exports = { startPump, pumpState };\n";
+/** The function's declaration has the owner line right above it (blank lines aside). @param {string} text @param {string} name */
+const owned = (text, name) => new RegExp(`// Owner: plant-ops[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)?[ \\t]*(?:export\\s+)?(?:async\\s+)?(?:function\\s+${name}\\b|(?:const|let)\\s+${name}\\s*=)`).test(text);
+
+SCENARIOS.push({
+  name: "folder-rules-edit",
+  about: "a subfolder's AGENTS.md reaches the model through a search, or before its first change there: the new function follows it",
+  setup: (w) => {
+    w("src/plant/AGENTS.md", PLANT_RULES);
+    w("src/plant/pump.js", PUMP);
+    w("src/app.js", "const { startPump } = require(\"./plant/pump\");\nconsole.log(startPump(1));\n");
+  },
+  task: "Next to startPump, add a stopPump(id) function that returns \"stopped \" + id, and export it.",
+  check: ({ read, load }) => {
+    const text = read("src/plant/pump.js");
+    if (!/stopPump/.test(text)) return "no stopPump";
+    if (!owned(text, "stopPump")) return "stopPump has no `// Owner: plant-ops` line above it";
+    if (/Owner: plant-ops[^\n]*\n[^\n]*function (startPump|pumpState)/.test(text)) return "an older function was given the owner line";
+    try { return load("src/plant/pump.js").stopPump(3) === "stopped 3" ? "" : "stopPump returns the wrong thing"; }
+    catch (e) { return "doesn't run: " + /** @type {any} */ (e).message; }
+  },
+});
+
+SCENARIOS.push({
+  name: "folder-rules-new-file",
+  about: "a new file in a subfolder with its own AGENTS.md, written without reading anything there: the rules come first",
+  setup: (w) => {
+    w("src/plant/AGENTS.md", PLANT_RULES);
+    w("src/plant/pump.js", PUMP);
+  },
+  task: "Create src/plant/valve.js with a function openValve(id) that returns \"open \" + id, exported with module.exports.",
+  check: ({ read, load }) => {
+    let text;
+    try { text = read("src/plant/valve.js"); } catch { return "no src/plant/valve.js"; }
+    if (!owned(text, "openValve")) return "openValve has no `// Owner: plant-ops` line above it";
+    // Exported by name or as the module itself: the task says only "exported with module.exports".
+    try { const made = load("src/plant/valve.js"); return (typeof made === "function" ? made : made.openValve)(2) === "open 2" ? "" : "openValve returns the wrong thing"; }
+    catch (e) { return "doesn't run: " + /** @type {any} */ (e).message; }
+  },
+});
+
+// ---------------------------------------------------------------- a big script with no language support --
+// VS Code often has no PowerShell support installed: Solder's outline by the text has to stand in, so the model finds
+// the one function it needs without reading 1,500 lines (resent with every later step).
+
+const BIG_FUNCTIONS = ["Get-ServerList", "Test-ServerOnline", "Get-ServiceState", "Restart-StoppedService", "Get-EventSummary",
+  "Clear-TempFolder", "Get-PatchLevel", "Test-PendingReboot", "Get-ScheduledTaskState", "Export-InventoryCsv", "Get-CertificateExpiry",
+  "Test-BackupAge", "Get-ShareUsage", "Get-LocalAdmins", "Test-TimeSync", "Get-NetworkAdapterState", "Get-FreeSpacePercent",
+  "Get-PrinterQueue", "Test-DnsRecord", "Get-IisSiteState", "Get-SqlServiceState", "Write-MaintenanceLog", "Send-MaintenanceMail",
+  "Get-UptimeReport", "Invoke-NightlyMaintenance"];
+const FREE_SPACE = [
+  "function Get-FreeSpacePercent {",
+  "    param(",
+  "        [Parameter(Mandatory)][string]$ComputerName,",
+  "        [string]$Drive = 'C:'",
+  "    )",
+  "    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -ComputerName $ComputerName -Filter \"DeviceID = '$Drive'\"",
+  "    if (-not $disk -or -not $disk.Size) { return $null }",
+  "    # The share of the drive that is still free, in percent.",
+  "    $percent = ($disk.Size - $disk.FreeSpace) / $disk.Size * 100",
+  "    [math]::Round($percent, 1)",
+  "}",
+];
+/** A plain function of about 58 lines: steps that each work something out, with strings, hashtables and a here-string. @param {string} name @param {number} k */
+const bigFunction = (name, k) => {
+  const lines = [
+    `function ${name} {`,
+    "    [CmdletBinding()]",
+    "    param(",
+    "        [Parameter(Mandatory)][string]$ComputerName,",
+    `        [int]$TimeoutSeconds = ${20 + k}`,
+    "    )",
+    `    Write-Verbose "${name}: starting on $ComputerName"`,
+    `    $result = [ordered]@{ Name = '${name}'; Computer = $ComputerName; Started = Get-Date }`,
+  ];
+  for (let step = 1; step <= 8; step++) {
+    lines.push(`    # Step ${step}: part ${step} of what ${name} reports`,
+      `    $part${step} = @{ Step = ${step}; Value = ($TimeoutSeconds * ${step + k}) % 7 }`,
+      `    if ($part${step}.Value -gt 3) {`,
+      `        Write-Verbose "step ${step} is high: $($part${step}.Value) {of 7}"`,
+      "    }",
+      `    $result['Step${step}'] = $part${step}.Value`);
+  }
+  if (k % 5 === 0) lines.push("    $note = @\"", `${name} finished on $ComputerName.`, "Steps: $($result.Keys -join ', ')", "\"@", "    Write-Verbose $note");
+  lines.push("    [pscustomobject]$result", "}", "");
+  return lines;
+};
+const MAINTENANCE = crlf([
+  "# Nightly maintenance for the servers in servers.txt. Run as a scheduled task.",
+  "#Requires -Version 5.1",
+  "",
+  ...BIG_FUNCTIONS.flatMap((name, k) => name === "Get-FreeSpacePercent" ? [...FREE_SPACE, ""] : bigFunction(name, k)),
+  "Invoke-NightlyMaintenance -ComputerName $env:COMPUTERNAME -Verbose",
+]);
+
+SCENARIOS.push({
+  name: "ps-big",
+  about: "a one-line fix in a 1,500-line PowerShell script with 25 functions and no language support: found by the outline or a search, not read whole",
+  setup: (w) => w("Scripts/Maintenance.ps1", MAINTENANCE),
+  task: "In Scripts/Maintenance.ps1, Get-FreeSpacePercent reports the used space instead of the free space: a drive with 10 GB free of 100 GB gives 90 instead of 10. Fix it.",
+  check: ({ read, ws }) => {
+    const text = read("Scripts/Maintenance.ps1");
+    const before = MAINTENANCE.split("\r\n");
+    const at = before.indexOf(FREE_SPACE[0]);
+    const after = text.split("\r\n");
+    const start = after.indexOf(FREE_SPACE[0]);
+    if (start < 0) return "Get-FreeSpacePercent is gone";
+    const end = after.indexOf("}", start);
+    const body = after.slice(start, end + 1).join("\n");
+    if (/\$disk\.Size\s*-\s*\$disk\.FreeSpace/.test(body) || !/\$disk\.FreeSpace\s*\/\s*\$disk\.Size|\$disk\.FreeSpace\s*\*\s*100\s*\/\s*\$disk\.Size/.test(body)) return "not fixed: " + body.replace(/\s+/g, " ").slice(0, 200);
+    // Everything around the function as it was.
+    if (after.slice(0, start).join("\n") !== before.slice(0, at).join("\n")) return "changed lines before Get-FreeSpacePercent";
+    if (after.slice(end + 1).join("\n") !== before.slice(at + FREE_SPACE.length).join("\n")) return "changed lines after Get-FreeSpacePercent";
+    const lines = before.length - 1;
+    for (const call of ws.calls.filter((/** @type {any} */ c) => c.name === "read_file" && /Maintenance\.ps1$/i.test(String(c.args.path || "")))) {
+      const from = Number(call.args.start_line) || 1;
+      const to = Math.min(lines, Number(call.args.end_line) || from + 1999);
+      if (to - from + 1 > 300) return `read ${to - from + 1} lines of the script at once (${from}–${to})`;
+    }
+    return endings(text, "Maintenance.ps1");
+  },
+});
+
 module.exports = { SCENARIOS };

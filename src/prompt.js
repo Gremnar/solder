@@ -228,6 +228,8 @@ or give your answer.)",
     ? "That was the last reply with tool calls allowed for this message, so answer now: say what's done and what's still left."
     : `${left} more ${left === 1 ? "reply" : "replies"} with tool calls left for this message: finish up, then say what's done.`,
   steer: (/** @type {string} */ text) => `Also, a message from the user while you were working:\n\n${text}`,
+  /** On the last result of a Tool-lane reply that read three or more files and changed nothing: once a task. */
+  groupChanges: "If the changes you now need don't depend on each other, make them together in one reply.",
   /** After the result of an earlier task's write or edit whose long text isn't sent again (never inside the call itself). */
   argumentsLeftOut: "(Solder left this call's long text out of this copy of the chat to save space. Read the file for what's there now.)",
   /** A change whose text is the note Solder used to put in old calls: refused, so it can't reach a file. */
@@ -280,6 +282,11 @@ const RESULTS = {
   noOutline: (/** @type {string} */ file, /** @type {number} */ lines) => `VS Code has no outline for ${file} (no \
 language support for this kind of file, or nothing in it to list). It has ${lines.toLocaleString("en-US")} \
 line${lines === 1 ? "" : "s"}: read it, or a range of it.`,
+  textOutlineHead: (/** @type {string} */ file, /** @type {number} */ lines) => `${file}: \
+${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}. VS Code has no outline for this kind of file, so this is \
+Solder's outline by its text. Each entry: kind, name, lines (one line number: where it starts, its end not known).`,
+  textDefinitions: (/** @type {string} */ name, /** @type {number} */ count) => `VS Code's language support found \
+nothing for ${name}. By Solder's outline of the text, it's defined in ${count === 1 ? "one place" : `${count} places`}:`,
   badFind: 'find must be "definition" or "references".',
   symbolsNeedsPath: "symbols needs a path (for an outline) or a name.",
   alsoText: (/** @type {string} */ name) => `Also, whole-word text matches for ${name} that VS Code didn't count as uses (comments, \
@@ -342,6 +349,14 @@ code, so only its start is shown. Search for the names you need instead: that sh
     `(${name} is also defined in ${places.join(", ")}: these are the uses of the first. Give path and line for another's.)`,
   folderAgents: (/** @type {string} */ file, /** @type {string} */ text) =>
     `This folder's ${file} says (it applies to files under it):\n${text}`,
+  /** A change in a folder whose rules the model hadn't seen when it wrote the call: not made, the rules given. */
+  rulesFirst: (/** @type {string} */ file, /** @type {string[]} */ rules, /** @type {boolean} */ below, /** @type {boolean} */ earlier) =>
+    `Nothing was changed yet: the rules in ${rules.join(" and ")} apply to ${file}, and you hadn't seen them when you wrote \
+this call. They're ${below && earlier ? "below and with an earlier result in this reply" : below ? "below" : "with an earlier result in this reply"}. \
+Make the call again, following them.`,
+  /** read_file of a path that isn't there, when the workspace has exactly one file of that name: that file is read. */
+  readInstead: (/** @type {string} */ name, /** @type {string} */ real) =>
+    `${name} isn't at that path; this is ${real}, the only file of that name in the workspace.`,
   skillRead: (/** @type {string} */ name, /** @type {number} */ cutAt) => `The skill ${name}, whole, is below. It stays in \
 this chat, so you needn't read it again: follow it for this task.` + (cutAt ? ` (The file is longer than a skill may be: \
 only its first ${cutAt.toLocaleString("en-US")} characters are here.)` : ""),
@@ -381,6 +396,9 @@ isn't an answer either way: narrow it with a glob or a more specific query.`,
   searchIncomplete: (/** @type {number} */ seconds) => `(The search stopped after ${seconds} seconds, so there may be more \
 matches than these: narrow it with a glob to be sure.)`,
   reindented: (/** @type {string} */ amount, /** @type {boolean} */ less) => `old_text was indented ${amount} ${less ? "less" : "more"} than the file there, so it was matched with that difference and new_text was shifted the same way.`,
+  retabbed: (/** @type {number} */ width, /** @type {boolean} */ toTabs) => `old_text was indented with \
+${toTabs ? "spaces" : "tabs"} and the file with ${toTabs ? "tabs" : "spaces"}, so it was matched as one tab for ${width} \
+spaces, and new_text's indentation was changed the same way.`,
   notApplied: (/** @type {string} */ file) => `VS Code didn't apply the change to ${file}.`,
   /** A replace_all: how many places, and the lines they're on (the first few). */
   editedAll: (/** @type {string} */ file, /** @type {number} */ count, /** @type {number[]} */ lines) =>
@@ -624,6 +642,11 @@ now; please go by this from now on:\n\n${setup})`,
   /** After a reply's results: a later request of that reply couldn't be used, so it and the ones after it weren't run. */
   unread: (/** @type {string} */ why, /** @type {number} */ after) => `Those are the only requests my extension ran. It couldn't use your next one (${why}), so it didn't run it` +
     (after ? `, or the ${after === 1 ? "one" : after} after it` : "") + `. Please send ${after ? "them" : "it"} again.`,
+  /** Why a request of a reply cut off partway couldn't be used (in unread). */
+  dropped: "the connection dropped before your reply ended",
+  /** After the results of a reply cut off partway, when every request that arrived could be used. */
+  restLost: "Those are the requests of yours that reached my extension: the connection dropped before the rest of your \
+reply arrived. If you meant to send more, please send them again.",
   carryOverLead: "Here's our conversation so far, as my extension saved it, so you can pick up where we left off. \
 \"Me\" is me, including the results my extension sent you, and \"You\" is you.",
   carryOverLeftOut: (/** @type {number} */ count) => `(${count} earlier message${count === 1 ? " is" : "s are"} left out here.)`,

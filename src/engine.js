@@ -16,7 +16,8 @@
 const { Cancelled, sessionId } = require("./gateway.js");
 const { READ_ONLY, TEXTS, TOOLS, RESULTS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
-const { sessionPlan, holdSession, parseReply, promisesAction, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten } = require("./assist.js");
+const { sessionPlan, holdSession, heldThroughCut, parseReply, promisesAction, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten,
+  shortCall } = require("./assist.js");
 
 /** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
 const MAX_REPAIRS = 2;
@@ -38,8 +39,6 @@ const MAX_FOCUS_CHARS = 500;
 const IN_TASK_CEILING = 2;
 /** No single result is longer than this (a read is capped lower; this catches everything else). */
 const MAX_RESULT_CHARS = 40_000;
-/** Earlier turns' write and edit texts longer than this are left out of what's sent. */
-const LONG_ARGUMENT_CHARS = 1_500;
 /** Results this short are never cut. */
 const STUB_MIN_CHARS = 2_000;
 /**
@@ -59,6 +58,12 @@ const READS_AT_ONCE = 4;
 const TOGETHER = new Set(["read_file", "symbols", "search", "find_files", "changes"]);
 /** Changes whose problems check waits for the reply's other changes, and is made once for them all (settleEdits). */
 const GROUPED = new Set(["edit_file", "write_file"]);
+/** A reply that read this many different files (and changed nothing) gets the cue to group the changes that follow. */
+const GROUP_CUE_FILES = 3;
+/** In a batch's failed files: a change refused whose file can't be told, so any later change may have been built on it. */
+const ANY_FILE = "\u0000any";
+/** Shown (not sent to the model) when a reply's text reached the output limit: Resume carries on. */
+const CUT_AT_LIMIT = "The reply reached the model's output limit before it ended. Resume asks it to carry on from there.";
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -361,9 +366,11 @@ class Engine {
       const assistLane = laneOf(model, settings) === "assist";
       if (assistLane) {
         // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
+        /** @type {any} */
         let step;
         try {
           step = await this._assistStep(chat, model, settings, signal, repairs);
+          carried = false;
         } catch (error) {
           // Cut off partway (the stream ended, the connection dropped, it went quiet): what Resume would do is done
           // here, once. Nothing is billed on this lane, and a reply here nearly always starts with words, so the one
@@ -371,14 +378,18 @@ class Engine {
           if (carried || !cutOffPartway(chat, error, signal)) throw error;
           carried = true;
           this.emit({ type: "retrying", chat: chat.id, why: /** @type {any} */ (error).message, carriedOn: true });
-          chat.messages.push({ role: "user", content: `${timeNote(this.now())}
+          // The requests that arrived whole run, and the model is told the rest didn't arrive (asked to carry on, it
+          // wrote them again, or took them for done). With none, it's asked to carry on.
+          step = partwayStep(chat);
+          if (!step) {
+            chat.messages.push({ role: "user", content: `${timeNote(this.now())}
 
 ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
-          await this._save(chat);
-          this.emit({ type: "message", chat: chat.id });
-          continue;
+            await this._save(chat);
+            this.emit({ type: "message", chat: chat.id });
+            continue;
+          }
         }
-        carried = false;
         if (step.repair) { repairs++; continue; }
         repairs = 0; // the allowance of asking again is for each request, not the whole turn
         ({ reply, assistant } = step);
@@ -388,6 +399,8 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         // earlier turns are summarised: this one's calls carry thought signatures some models check.
         await this._compactIfDue(chat, signal, taskStart(chat));
         trim(chat, settings.compactAt);
+        // What an Assist carry-over left out (assist.js carryFit) is sent here: every kept text goes on this lane.
+        if (chat.assist?.leftOut) delete chat.assist.leftOut;
         const system = await this.host.systemPrompt(chat);
         const messages = outbound(chat, system);
         const made = breakdown(chat, system, tools); // what this request is made of, as it goes out
@@ -416,6 +429,15 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       if (!reply.calls.length) {
         // Its answer after the last reply with calls allowed: the turn ends here, paused (you choose whether to go on).
         const atLimit = rounds >= maxRounds;
+        if (reply.finishReason === "length" && String(reply.content || "").trim()) {
+          // Cut at the output limit: not an answer that's done. Kept, marked as cut off, and the turn ends as a failed one
+          // does, with Resume (its "carry on"). Never carried on by itself: on the Tool lane each request is billed.
+          assistant.meta = { ...assistant.meta, incomplete: true, finish: "length" };
+          if (atLimit) chat.limitHit = true;
+          await this._save(chat);
+          this.emit({ type: "message", chat: chat.id });
+          throw new Error(CUT_AT_LIMIT);
+        }
         // An Assist reply that only says what it will do next ("I'll inspect processOrders first.") and holds no
         // request: nothing ran, and the turn would end as if done. Asked once a turn to send it. Not at the step limit,
         // and not when a message of yours is waiting (it goes next anyway).
@@ -462,14 +484,21 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     this.emit({ type: "thinking", chat: chat.id });
     /** @type {any} */
     let reply;
+    // A reply cut off partway in the session: the session has what was sent, so a carry-on sends only what's new (it
+    // used to send the results it had already been given again).
+    const before = chat.messages.length;
+    const cut = (/** @type {any} */ error) => {
+      const last = chat.messages[chat.messages.length - 1];
+      if (!(error instanceof Cancelled) && chat.messages.length === before + 1 && last.role === "assistant" && last.meta?.incomplete) heldThroughCut(chat, plan, before);
+    };
     try {
       reply = await send(plan);
     } catch (error) {
-      if (!(plan.kind === "stateful" && /** @type {any} */ (error)?.status === 502)) throw error;
+      if (!(plan.kind === "stateful" && /** @type {any} */ (error)?.status === 502)) { cut(error); throw error; }
       this.emit({ type: "assist", chat: chat.id, kind: "ended", chars: 0, note: "the session ended (HTTP 502): carrying the conversation over" });
       chat.assist = { lost: true, why: "ended", since: Date.now() };
       plan = sessionPlan(chat, model, settings, context, resultText);
-      reply = await send(plan);
+      try { reply = await send(plan); } catch (again) { cut(again); throw again; }
     }
     // What actually went out, kept beside what's shown: the history renders as it was sent.
     if (plan.single && (plan.kind === "fresh" || plan.messages[0].content !== (plan.single.meta?.sent ?? plan.single.content))) {
@@ -491,12 +520,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       completion: reply.usage?.completion_tokens || 0, finish: reply.finishReason || "", calls: parsed.calls.length });
     /** @type {Stored} */
     const assistant = { role: "assistant", content: parsed.visible, meta: { lane: "assist", raw: reply.content } };
-    if (parsed.calls.length) {
-      const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
-      const stamp = Date.now().toString(36);
-      assistant.tool_calls = parsed.calls.map((call, n) => ({ id: unique(`assist_${stamp}_${n}`, used), type: "function",
-        function: { name: call.name, arguments: JSON.stringify(call.args) } })); // no extra_content: Assist has no signatures
-    }
+    if (parsed.calls.length) assistant.tool_calls = assistCalls(chat, parsed.calls);
     chat.messages.push(assistant);
     const note = holdSession(chat, model, plan, reply, sessionId);
     this.emit({ type: "assist", chat: chat.id, kind: plan.kind, chars: plan.messages[0].content.length, note });
@@ -514,7 +538,9 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     // model is told with the results (it used to hear nothing, and reported the task done with only part of it made).
     const unread = parsed.calls.length && parsed.problem
       ? ASSIST.unread(reply.finishReason === "length" ? "your reply was cut off at the length limit before it ended" : parsed.problem, parsed.after) : "";
-    return { reply: { content: parsed.visible, calls: assistant.tool_calls || [], finishReason: "", usage: reply.usage }, assistant, unread };
+    // "length" only for a reply with no requests: words cut at the output limit (_loop ends the turn with Resume).
+    const finishReason = !parsed.calls.length && reply.finishReason === "length" ? "length" : "";
+    return { reply: { content: parsed.visible, calls: assistant.tool_calls || [], finishReason, usage: reply.usage }, assistant, unread };
   }
 
   /**
@@ -577,6 +603,8 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       const label = labelOf(name, parsed.args);
       /** @type {ToolResult} */
       let result;
+      // Refused before it ran (its arguments, a stand-in for text): a change refused so is a change that failed.
+      let refused = false;
       if (signal.aborted) skip = TEXTS.notRunStopped;
       if (skip) {
         result = { output: skip, summary: "Not run: " + label, failed: true };
@@ -590,15 +618,19 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       } else if (!READ_ONLY.has(name) && standInArgument(parsed.args)) {
         // A note Solder once put in old calls, sent back as the text of a change: never run (it went into a file once).
         result = { output: TEXTS.standInArgument, summary: "Not run: " + label, failed: true };
+        refused = true;
       } else if (this._readOnlyNow(name)) {
         // Read-only mode: a change isn't run, even if the model asks for one it wasn't offered. Looked at now, for
         // each call: your organization can turn it on while an earlier call of this reply is still running.
         result = { output: TEXTS.readOnly, summary: "Not run (read-only mode): " + label, failed: true };
       } else if (parsed.problem) {
         result = { output: parsed.problem, summary: "Not run: " + label, failed: true };
+        refused = true;
       } else if (seen.has(fingerprint(name, parsed.args))) {
         result = { output: TEXTS.repeat, summary: "Not run again: " + label, failed: true };
       } else if (failedFiles.size && (name === "move_item" || name === "remove_item")) {
+        result = { output: TEXTS.notRun, summary: "Not run: " + label, failed: true };
+      } else if ((name === "edit_file" || name === "write_file") && failedFiles.has(ANY_FILE)) {
         result = { output: TEXTS.notRun, summary: "Not run: " + label, failed: true };
       } else if ((name === "edit_file" || name === "write_file") && failedFiles.has(pathKey(parsed.args.path))) {
         result = { output: TEXTS.notRunSameFile, summary: "Not run: " + label, failed: true };
@@ -623,6 +655,12 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
           else failedFiles.add(pathKey(parsed.args.path));
         }
         if (signal.aborted) skip = TEXTS.notRunStopped;
+      }
+      if (refused && Object.hasOwn(TOOLS, name) && !READ_ONLY.has(name) && !signal.aborted) {
+        // As if it had run and failed: what was built on it is skipped (a reviewer found it went ahead). An edit or write
+        // whose file can't be told (arguments that aren't JSON) stops every later change, as any file may be its.
+        if (name === "edit_file" || name === "write_file") failedFiles.add(pathKey(parsed.args.path) || ANY_FILE);
+        else skip = TEXTS.notRun;
       }
       // `keep` (a folder's AGENTS.md, your note) isn't tool output: it survives the result being cut.
       const output = capped(result.output);
@@ -663,6 +701,9 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     }
     if (last) {
       const notes = [];
+      // A Tool-lane reply that read several files: the edits that follow came one a reply (seven steps for five files,
+      // each resending the chat), so the model is told once a task that independent ones can go together.
+      if (!signal.aborted && this._groupCue(chat, calls, added, parsedAll)) { notes.push(TEXTS.groupChanges); last.meta.groupCue = true; }
       if (roundsLeft <= WRAP_UP_ROUNDS && !signal.aborted) notes.push(TEXTS.wrapUp(roundsLeft)); // not on a step you stopped
       if (this.steers.length && !signal.aborted) {
         const queued = this._queued();
@@ -678,6 +719,23 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         await this._save(chat);
       }
     }
+  }
+
+  /**
+   * Whether a reply's results get TEXTS.groupChanges: the Tool lane, changes allowed, a reply that only looked and read
+   * GROUP_CUE_FILES or more different files (reads that worked), and not yet said in this task.
+   * @param {Chat} chat @param {any[]} calls @param {Stored[]} added @param {{args: any}[]} parsedAll
+   */
+  _groupCue(chat, calls, added, parsedAll) {
+    const settings = this.settings();
+    if (settings.readOnly || laneOf(modelOf(chat, settings), settings) === "assist") return false;
+    if (!calls.every((call) => READ_ONLY.has(call.function.name))) return false;
+    // A read that waits (the reply's results were full), was declined or not run: getting it comes next, not changes.
+    if (added.some((m) => /^(Not run|Declined)/.test(String(m.meta?.summary)))) return false;
+    const read = new Set(added.filter((m) => m.meta?.name === "read_file" && !m.meta.failed)
+      .map((m) => pathKey(parsedAll[calls.findIndex((c) => c.id === m.tool_call_id)]?.args?.path)).filter(Boolean));
+    if (read.size < GROUP_CUE_FILES) return false;
+    return !chat.messages.slice(taskStart(chat)).some((m) => m.meta?.groupCue);
   }
 
   /** Whether this tool changes files and read-only mode is on, as the settings are this moment. @param {string} name */
@@ -1196,6 +1254,34 @@ function taskStart(chat) {
   return 0;
 }
 
+/**
+ * An Assist reply's requests as stored tool calls, with ids not used yet in this chat (no extra_content: Assist has no
+ * signatures). @param {Chat} chat @param {{name: string, args: any}[]} calls
+ */
+function assistCalls(chat, calls) {
+  const used = new Set(chat.messages.flatMap((m) => (m.tool_calls || []).map((/** @type {any} */ c) => c.id)));
+  const stamp = Date.now().toString(36);
+  return calls.map((call, n) => ({ id: unique(`assist_${stamp}_${n}`, used), type: "function",
+    function: { name: call.name, arguments: JSON.stringify(call.args) } }));
+}
+
+/**
+ * An Assist reply cut off partway (the chat's last message, kept as incomplete): the requests in it that arrived whole,
+ * read as one cut at the length limit is (a last one that had to be pieced together isn't run), become its tool calls,
+ * to run as any reply's do. With them goes what the model is told: the request that broke off (and any after it), or that
+ * the rest of the reply didn't arrive. Null when none arrived whole. @param {Chat} chat
+ */
+function partwayStep(chat) {
+  const cut = chat.messages[chat.messages.length - 1];
+  const parsed = parseReply(cut.meta?.raw ?? cut.content, { cutOff: true });
+  if (!parsed.calls.length) return null;
+  cut.content = parsed.visible;
+  cut.tool_calls = assistCalls(chat, parsed.calls);
+  // A request that couldn't be used with none after it is the one the cut broke off; one further back was wrong as written.
+  const unread = parsed.problem ? ASSIST.unread(parsed.after ? parsed.problem : ASSIST.dropped, parsed.after) : ASSIST.restLost;
+  return { reply: { content: parsed.visible, calls: cut.tool_calls, finishReason: "" }, assistant: cut, unread };
+}
+
 /** Whether this turn has already asked for a request a reply only described (ASSIST.promised). @param {Chat} chat */
 function nudged(chat) {
   return chat.messages.slice(taskStart(chat)).some((m) => m.role === "user" && m.meta?.nudge);
@@ -1205,32 +1291,6 @@ function nudged(chat) {
 function lastUser(chat) {
   for (let index = chat.messages.length - 1; index >= 0; index--) if (chat.messages[index].role === "user") return index;
   return 0;
-}
-
-/** Arguments a write or edit no longer needs in full (they're in the file). */
-const LONG_ARGUMENTS = { write_file: ["content"], edit_file: ["old_text", "new_text"] };
-
-/**
- * A call from an earlier task without its long text arguments. They're left out whole, never replaced by a note: a
- * note in a call's arguments reads to the model as something it wrote, and it wrote the same again as the text of a
- * new edit (which went into the user's file). A call copied from one of these lacks a required argument, so it's
- * refused before anything runs. What's said about it goes with the call's result instead (outbound).
- * @param {any} call
- */
-function shortCall(call) {
-  const fields = LONG_ARGUMENTS[/** @type {keyof LONG_ARGUMENTS} */ (call.function?.name)];
-  if (!fields || (call.function.arguments || "").length <= LONG_ARGUMENT_CHARS) return call;
-  let args;
-  try { args = JSON.parse(call.function.arguments); } catch { return call; }
-  if (!args || typeof args !== "object") return call;
-  let changed = false;
-  for (const field of fields) {
-    if (typeof args[field] === "string" && args[field].length > LONG_ARGUMENT_CHARS) {
-      delete args[field];
-      changed = true;
-    }
-  }
-  return changed ? { ...call, function: { ...call.function, arguments: JSON.stringify(args) } } : call;
 }
 
 /**

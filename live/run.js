@@ -175,7 +175,9 @@ async function once(scenario, run) {
     maxChanges: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => !S.prompt.READ_ONLY.has(c.function.name)).length)),
     // The Assist lane's recoveries: a request asked for again, a cut-off reply carried on from, later requests said not to have run,
     // a reply that only said what it would do asked for its request.
-    repairs: chat.messages.filter((/** @type {any} */ m) => m.meta?.repair).length, carriedOn: chat.messages.filter((/** @type {any} */ m) => m.meta?.auto && !m.meta?.nudge).length,
+    // A cut reply is carried on from with a "carry on", or (when requests in it arrived whole) by running those.
+    repairs: chat.messages.filter((/** @type {any} */ m) => m.meta?.repair).length, carriedOn: chat.messages.filter((/** @type {any} */ m) => (m.meta?.auto && !m.meta?.nudge)
+      || (m.role === "assistant" && m.meta?.incomplete && m.tool_calls?.length)).length,
     nudged: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
     unread: chat.messages.filter((/** @type {any} */ m) => m.meta?.unread).length,
     // Reads of lines already read in the same task: still in the chat (avoidable), or after the first was cut.

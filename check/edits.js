@@ -153,4 +153,29 @@ async function main() {
     && /missingTwo/.test(mixed.find((m) => m.path === "f2.ts")?.text || ""), JSON.stringify(mixed));
   check("F: ... once", (await tools.settleEdits("g5")).length === 0);
   check("F: ... and no tab left open", JSON.stringify(tabNames()) === startTabs, JSON.stringify(tabNames()));
+
+  // G. read_file of a wrong folder (VS Code's own findFiles): the one file of that name is read; two of them, the error.
+  fs.mkdirSync(path.join(ws, "g", "src"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "g", "src", "greetOnly.js"), "function greet() {}\n");
+  const g1 = await tools.run("read_file", { path: "greetOnly.js" }, { chat, signal: AbortSignal.timeout(30000) });
+  log("G:", g1.output.split("\n")[0], "|", g1.summary);
+  check("G: the one file of that name is read, and said so", !g1.failed && /^greetOnly\.js isn't at that path; this is g\/src\/greetOnly\.js/.test(g1.output) && /^Read g\/src\/greetOnly\.js/.test(g1.summary), g1.output);
+  fs.mkdirSync(path.join(ws, "g", "lib"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "g", "lib", "greetOnly.js"), "x\n");
+  const g2 = await tools.run("read_file", { path: "greetOnly.js" }, { chat, signal: AbortSignal.timeout(30000) });
+  check("G: two of that name: the error, with both suggested", g2.failed && /doesn't exist/.test(g2.output) && /g\/lib\/greetOnly\.js/.test(g2.output), g2.output);
+
+  // H. A subfolder's AGENTS.md: a search (VS Code's ripgrep) brings it; an edit there in the same reply waits; the next reply's goes through.
+  fs.mkdirSync(path.join(ws, "h", "plant"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "h", "plant", "AGENTS.md"), "Every new function gets `// Owner: plant-ops` above it.\n");
+  fs.writeFileSync(path.join(ws, "h", "plant", "pumpH.js"), "function startPumpH(id) {\n  return id;\n}\n");
+  const hChat = { id: "c-h", messages: [{ role: "user", content: "go" }, { role: "assistant", content: "" }] };
+  const h1 = await tools.run("search", { query: "startPumpH" }, { chat: hChat, signal: AbortSignal.timeout(30000) });
+  check("H: a search brings the folder's rules", /Owner: plant-ops/.test(h1.keep || ""), JSON.stringify(h1));
+  const hEdit = { path: "h/plant/pumpH.js", old_text: "  return id;", new_text: "  return id + 1;" };
+  const h2 = await tools.run("edit_file", hEdit, { chat: hChat, signal: AbortSignal.timeout(30000) });
+  check("H: an edit in the same reply waits", h2.failed && /hadn't seen them/.test(h2.output) && /return id;/.test(fs.readFileSync(path.join(ws, "h", "plant", "pumpH.js"), "utf8")), h2.output);
+  hChat.messages.push({ role: "tool", content: "…" }, { role: "assistant", content: "" });
+  const h3 = await tools.run("edit_file", hEdit, { chat: hChat, signal: AbortSignal.timeout(30000) });
+  check("H: the next reply's goes through", !h3.failed && /return id \+ 1;/.test(fs.readFileSync(path.join(ws, "h", "plant", "pumpH.js"), "utf8")), h3.output);
 }
