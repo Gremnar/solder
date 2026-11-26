@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.15 (2026-11-25)
 
 Fixes from an eight-reviewer bug hunt (2026-11-25). Nothing looks or works differently, except that these no longer happen.
 
