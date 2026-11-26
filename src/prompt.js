@@ -113,14 +113,16 @@ defined, with its code, or (find: references) every place it's used; give a file
     find: { type: "string", enum: ["definition", "references"], description: "What to find for name: definition (the default) or references." },
     line: { type: "integer", description: "The line where name appears, when it appears more than once in the file." },
   }, []],
-  search: ["Searches file contents in the workspace (respecting .gitignore) and returns matching lines as \
-path:line: text, up to 200.", {
+  search: ["Searches file contents in the workspace (respecting .gitignore), or in one file or folder, and returns \
+matching lines as path:line: text, up to 200.", {
     query: { type: "string", description: "The text to find." },
+    path: { type: "string", description: `Only this file or folder (an attached file or saved paste too): ${RELATIVE}.` },
     regex: { type: "boolean", description: "True to read query as a regular expression." },
     glob: { type: "string", description: "Only search files matching this, such as src/**/*.ts or *.py." },
+    files_only: { type: "boolean", description: "True to list just the matching files, each with its count of matching lines, up to 300." },
     context_lines: { type: "integer", description: "Also show this many lines before and after each match (1 to 5), numbered as read_file numbers them, when it's the code around a match you need rather than the whole file." },
     docs: { type: "boolean", description: "True to search the user's docs folders (see Docs) instead: the best \
-passages for the query (a few key words, or a short question), in any order (regex, glob and context_lines don't apply)." },
+passages for the query (a few key words, or a short question), in any order (the other arguments don't apply)." },
   }, ["query"]],
   find_files: ["Lists workspace files whose paths match a glob (respecting .gitignore and files.exclude), \
 up to 300.", {
@@ -238,6 +240,9 @@ it's left out here to save space. Read it again, narrowed down, if you still nee
   /** An earlier read_file result whose lines a later read in the same task brought back: the later copy is the one to use. */
   superseded: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}). You have since read these lines again, \
 further down in this chat: use that later copy. This one is left out to save space.`,
+  /** An earlier read_file result of a file the same task has since written whole: the write holds the file's text. */
+  writtenOver: (/** @type {string} */ summary) => `Solder ran this earlier (${summary}). You have since written this whole \
+file: your write_file call further down in this chat holds its text. This copy is left out to save space.`,
   compaction: "Before we continue, please write a summary of our conversation so far that could stand in for the \
 full history. Keep my goals and preferences, key facts, decisions and conclusions, open questions, and any code, \
 file names, numbers or exact values that may matter later. Note which files were changed and how. Be concise but \
@@ -386,6 +391,12 @@ matches than these: narrow it with a glob to be sure.)`,
     `${existed ? "Wrote" : "Created"} ${file} (${lines} line${lines === 1 ? "" : "s"}).`,
   newProblems: (/** @type {string} */ file, /** @type {string[]} */ lines, /** @type {number} */ more) =>
     `\n\nNew problems in ${file} now:\n${lines.join("\n")}` + (more > 0 ? `\n- and ${more} more` : ""),
+  /** A changed file that wasn't open in a tab: no check from before the change to compare with. */
+  problemsNow: (/** @type {string} */ file, /** @type {string[]} */ lines, /** @type {number} */ more) =>
+    `\n\nErrors in ${file} now (it wasn't checked before your change, so some may be older; fix the ones you caused):\n${lines.join("\n")}`
+    + (more > 0 ? `\n- and ${more} more` : ""),
+  /** A changed file of a kind nothing in VS Code has reported problems in: its silence isn't "no errors". */
+  changeNotChecked: (/** @type {string} */ file) => `\n\n(${file} wasn't checked for errors: nothing in VS Code has reported problems in this kind of file.)`,
   noProblems: (/** @type {string} */ file) => file ? `No errors or warnings in ${file}.`
     : "No errors or warnings in the files VS Code has checked (mostly the open ones). To check a file that isn't open, give its path.",
   moreProblems: (/** @type {number} */ more) => `(${more} more)`,
@@ -451,10 +462,10 @@ const CONTEXT = {
     `(Attached file ${file}, ${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}:)\n${fence}\n${text}\n${fence}`,
   /** A file too long to send whole: where it is, for the model to read what it needs (reading it needs no approval). */
   attachedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
-    `(Attached file ${file}, ${lines.toLocaleString("en-US")} lines: too long to send whole. Read the parts you need with read_file, which takes a range of lines.)`,
+    `(Attached file ${file}, ${lines.toLocaleString("en-US")} lines: too long to send whole. To find something in it, search with this path; read the parts you need with read_file, which takes a range of lines.)`,
   /** Pasted text too long to send whole with everything else attached: saved, and read from there (no approval needed). */
   pastedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
-    `(Pasted text, ${lines.toLocaleString("en-US")} lines: too long to send whole. It's saved as ${file}. Read the parts you need with read_file, which takes a range of lines.)`,
+    `(Pasted text, ${lines.toLocaleString("en-US")} lines: too long to send whole. It's saved as ${file}. To find something in it, search with this path; read the parts you need with read_file, which takes a range of lines.)`,
   /** Sent as your message when you attach something and type nothing. */
   attachedOnly: "(See what I've attached.)",
   undid: (/** @type {string} */ file, /** @type {string} */ step) => `(I undid your change to ${file}: ${step}.)`,
@@ -628,6 +639,9 @@ without a tool if none of them fits.`,
   cutOff: "My extension couldn't use that request: your reply was cut off at the length limit before it ended, so the \
 content was incomplete. Could you send it in smaller parts? For a big file, write_file with the first part, then \
 edit_file to add each of the rest.",
+  /** A short reply that said what it would do next, but held no request: nothing ran. Sent once a turn. */
+  promised: "You said what you'd do next, but your reply had no tool request, so my extension didn't run anything. \
+Send the request now, or give me your answer if you're done.",
   /** Shown to the user (not the model) after asking twice. */
   gaveUp: "Solder couldn't read the tool request in this reply, even after asking again, so nothing was run.",
   /** The Tool lane's texts that say "the user", with their first-person versions. */

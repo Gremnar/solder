@@ -2,7 +2,8 @@
 "use strict";
 // One of Solder's checks inside a real VS Code: run with `node check/run.js edits` (see check/README.md).
 // Runs inside a real VS Code extension host: edit_file's indentation shift, misses with the file's lines, and one
-// problems check for several edits to a file in a reply.
+// problems check for several edits to a file in a reply; a file with no tab checked in a background tab; an edit and a
+// write in one reply settled together.
 const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -123,4 +124,33 @@ async function main() {
   check("D: neither edit waited for its own check or reported anything", d1.output.split("\n").length === 1 && d2.output.split("\n").length === 1 && waited < 2000, `${waited} ms`);
   check("D: the files are checked together at the end: the error that's left is found, in its file", both.length === 1 && both[0].path === "tax.ts" && /nope/.test(both[0].text), JSON.stringify(both));
   check("D: ... and the break the second edit fixed (a missing argument) isn't reported", !/Expected 2 arguments/.test(JSON.stringify(both)), JSON.stringify(both));
+
+  // E. A file with no tab: TypeScript checks only files in one, so the check opens it in a background tab, says the
+  // errors as found now (nothing checked it before the change), and closes the tab again.
+  const tabNames = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs).map((t) => t.label);
+  await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file), { preview: false });
+  const startTabs = JSON.stringify(tabNames());
+  const closed = path.join(ws, "closed.ts");
+  fs.writeFileSync(closed, "export const c: number = 1;\n");
+  began = Date.now();
+  const e1 = await tools.run("edit_file", { path: "closed.ts", old_text: "= 1;", new_text: "= notDefinedAnywhere;" }, { chat, signal: AbortSignal.timeout(30000) });
+  log("E:", e1.output, `(${Date.now() - began} ms)`);
+  check("E: an edit that breaks a .ts file with no tab is reported", /notDefinedAnywhere/.test(e1.output) && /wasn't checked before your change/.test(e1.output), e1.output);
+  check("E: ... the view as it was, no tab left open", JSON.stringify(tabNames()) === startTabs && vscode.window.activeTextEditor?.document.fileName.toLowerCase() === file.toLowerCase(), JSON.stringify(tabNames()));
+
+  // F. One reply that edits a file and writes another: neither waits for its own check; the reply's check settles
+  // both once, in background tabs that are closed again.
+  fs.writeFileSync(path.join(ws, "f1.ts"), "export const f: number = 1;\n");
+  began = Date.now();
+  const f1 = await tools.run("edit_file", { path: "f1.ts", old_text: "= 1;", new_text: "= missingOne;" }, { chat, signal: AbortSignal.timeout(30000), edit: { group: "g5", more: true } });
+  const f2 = await tools.run("write_file", { path: "f2.ts", content: "export const g: number = missingTwo;\n" }, { chat, signal: AbortSignal.timeout(30000), edit: { group: "g5", more: true } });
+  const quick = Date.now() - began;
+  const mixed = await tools.settleEdits("g5");
+  log("F:", f1.output, "|", f2.output, "|", JSON.stringify(mixed), `(changes ${quick} ms, all ${Date.now() - began} ms)`);
+  check("F: neither change waited for its own check", f1.output.split("\n").length === 1 && f2.output.split("\n").length === 1 && quick < 2000, `${quick} ms`);
+  check("F: the reply's check found both files' errors", mixed.length === 2 && /missingOne/.test(mixed.find((m) => m.path === "f1.ts")?.text || "")
+    && /missingTwo/.test(mixed.find((m) => m.path === "f2.ts")?.text || ""), JSON.stringify(mixed));
+  check("F: ... once", (await tools.settleEdits("g5")).length === 0);
+  check("F: ... and no tab left open", JSON.stringify(tabNames()) === startTabs, JSON.stringify(tabNames()));
 }

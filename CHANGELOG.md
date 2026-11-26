@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+From an eight-reviewer engine review (2026-11-25), step 1:
+
+- **Assist models: a reply that says what it will do but sends nothing is asked once to send it.** An Assist model sometimes ends with "I'll inspect the function first." and no request, so nothing ran and the turn ended as if done: the most common way an Assist task failed in the live tests. Solder now answers such a reply once a turn, for free, asking for the request (or the answer, if it's done). Never after Stop, at the step limit, or with a message of yours waiting.
+- **The problems check after a change tells the truth.**
+  - A file that isn't open in a tab is checked too, in a background tab that's closed again: some languages (TypeScript among them) check only files in a tab, so a broken edit there used to look clean.
+  - A reply's edits and writes are checked together, once, after the last of them, so several writes no longer wait one after another, and a file isn't checked before the rest of the reply is written.
+  - A code file that nothing in VS Code checks (a PowerShell script with no PowerShell extension, say) says so once, so the model doesn't take silence for "no errors".
+- **search takes a file or folder (`path`), and can list just the matching files (`files_only`).** A long attached file or paste is saved outside the workspace, where search couldn't reach it: finding one line in a 5,000-line log took several reads. Now it's one search, with the same approval rules as reading.
+- **A file written whole replaces the task's earlier reads of it**, so the old copy isn't sent again with every later step (fewer tokens on the Tool lane).
+- **Search around a match in minified code shows the match**, not the first 300 characters of the line.
+- **Fix: two Undo backups made at the same moment for files of the same name** (in different folders) could overwrite each other, so one Undo put back the other file's text.
+- **Fix: symbols never found a PowerShell `$variable`** by name, and `Get-Uptime` also matched inside `My-Get-Uptime`.
+
 ## 0.3.15 (2026-11-25)
 
 Fixes from an eight-reviewer bug hunt (2026-11-25). Nothing looks or works differently, except that these no longer happen.

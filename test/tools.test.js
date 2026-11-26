@@ -681,6 +681,13 @@ test("search with the lines around each match: a stretch a place, numbered as re
   // A very long line is cut, so a minified file can't fill the result.
   const long = withContext(["m.js:1:x"], () => ["x".repeat(5000)], 1, 200);
   assert.ok(long.length < 400 && long.endsWith("…"));
+  // A long line that matched is shown around its match, as the search found it, not by its start (minified code:
+  // the match can be thousands of characters in). Its neighbours are still cut at their start.
+  const minified = "x".repeat(3000) + 'registerCommand("ext.hello")' + "y".repeat(3000);
+  const shown = withContext(['dist/m.js:2:…xxx registerCommand("ext.hello") yyy…'], () => ["z".repeat(1000), minified, "short"], 1, 200);
+  assert.match(shown, /\n2\t…xxx registerCommand\("ext\.hello"\) yyy…\n/);
+  assert.match(shown, /\n1\tz{300}…\n/);
+  assert.ok(shown.length < 800, String(shown.length));
   // What an edit can then be made from: old_text copied with these numbers is read without them (as from read_file).
   const { planEdit } = require("../src/tools.js");
   const text = files["src/a.js"].join("\n");

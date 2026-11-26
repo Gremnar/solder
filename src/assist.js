@@ -362,6 +362,27 @@ function parseReply(reply, { cutOff = false } = {}) {
   return { calls: unique, problem, unknown, found: found.length > 0, visible, after };
 }
 
+/** A reply that says it's done, not what it will do. */
+const DONE_WORDS = /^(?:done|saved|updated|fixed|changed|renamed|added|removed|created)\b/i;
+/** "I'll inspect…", "Let me first check…": what it says it will do next in the workspace. */
+const WILL_ACT = /\b(?:i'll|i will|let me|i'm going to|i am going to|next i'll|now i'll)(?:\s+[\w-]+){0,3}?\s+(?:inspect|read|check|look|locate|find|search|open|edit|update|change|add|rename|fix|write|create|move|remove|apply|implement|make)\b/i;
+/** Waiting on you (an offer, or something you're asked to do first), not a step it means to take now. */
+const OFFER = /\b(?:if you|let me know|want me|would you|you'd like|happy to)\b/i;
+
+/**
+ * Whether an Assist reply with no request only says what it will do next ("I'll inspect `processOrders` first."): a
+ * short reply, no question, no code, not a report of what's done, whose last sentence is a step in the workspace it
+ * means to take. Such a reply ended the turn with nothing done. Kept narrow: an answer must never read as one.
+ * @param {string} text the reply's visible text
+ */
+function promisesAction(text) {
+  const s = String(text || "").replace(/[\u2018\u2019]/g, "'").trim();
+  if (!s || s.length > 450 || s.includes("?") || s.includes("```") || DONE_WORDS.test(s.replace(/^[^\w]+/, ""))) return false;
+  // Sentences end at . ! : ; or a line break, or run together ("first.I'll check") as some models write them.
+  const last = s.split(/(?<=[.!:;])\s+|\n+|(?<=[.!])(?=[A-Z])/).map((part) => part.trim()).filter(Boolean).pop() || "";
+  return WILL_ACT.test(last) && !OFFER.test(s);
+}
+
 /**
  * While a reply streams: only the words before a request (from the first ``` that opens a tool or json block, or a
  * line starting {"tool"; and a half-typed fence at the very end is held back too).
@@ -667,5 +688,5 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-module.exports = { findRequests, parseReply, visibleText, draftingRequests, ALIASES, decode, salvage, pathsAsWritten, canonical, fence, resultMessage, requestBlock,
+module.exports = { findRequests, parseReply, promisesAction, visibleText, draftingRequests, ALIASES, decode, salvage, pathsAsWritten, canonical, fence, resultMessage, requestBlock,
   assistOutbound, carryOver, carryFit, wouldLeaveOut, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };

@@ -139,7 +139,7 @@ async function main() {
       asked.length = 0;
       await panel.send({ text: "what do these say?" });
       const context = asked[0]?.extra.context || "";
-      const saved = /It's saved as (.+?\.txt)\. Read the parts you need/.exec(context)?.[1] || "";
+      const saved = /It's saved as (.+?\.txt)\. /.exec(context)?.[1] || "";
       check("sent: what fits goes whole, in the order attached; the paste that doesn't is saved and goes by its path",
         context.includes("first 0: ") && context.includes("note 0: ") && !context.includes("second 0: ") && /\(Pasted text, 600 lines: too long to send whole\./.test(context)
         && !!saved && fs.existsSync(saved) && fs.readFileSync(saved, "utf8") === second, [context.length, saved]);

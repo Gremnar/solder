@@ -16,7 +16,7 @@
 const { Cancelled, sessionId } = require("./gateway.js");
 const { READ_ONLY, TEXTS, TOOLS, RESULTS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
-const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten } = require("./assist.js");
+const { sessionPlan, holdSession, parseReply, promisesAction, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten } = require("./assist.js");
 
 /** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
 const MAX_REPAIRS = 2;
@@ -57,6 +57,8 @@ const MAX_BATCH = 50;
  */
 const READS_AT_ONCE = 4;
 const TOGETHER = new Set(["read_file", "symbols", "search", "find_files", "changes"]);
+/** Changes whose problems check waits for the reply's other changes, and is made once for them all (settleEdits). */
+const GROUPED = new Set(["edit_file", "write_file"]);
 const WRAP_UP_ROUNDS = 3;
 const RETRY_DELAYS_MS = [2000];
 /** The chat is named after these answers (Alloy's rhythm: a first guess, then a better one). */
@@ -356,7 +358,8 @@ class Engine {
       /** @type {Stored} */
       let assistant;
       let unread = "";
-      if (laneOf(model, settings) === "assist") {
+      const assistLane = laneOf(model, settings) === "assist";
+      if (assistLane) {
         // The Assist lane: plain text, the gateway's session, tool requests written in the reply (assist.js).
         let step;
         try {
@@ -413,6 +416,15 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       if (!reply.calls.length) {
         // Its answer after the last reply with calls allowed: the turn ends here, paused (you choose whether to go on).
         const atLimit = rounds >= maxRounds;
+        // An Assist reply that only says what it will do next ("I'll inspect processOrders first.") and holds no
+        // request: nothing ran, and the turn would end as if done. Asked once a turn to send it. Not at the step limit,
+        // and not when a message of yours is waiting (it goes next anyway).
+        if (assistLane && !atLimit && !signal.aborted && !this.steers.length && promisesAction(reply.content) && !nudged(chat)) {
+          chat.messages.push({ role: "user", content: ASSIST.promised, meta: { typed: "Asked for the request it described", resume: true, auto: true, nudge: true } });
+          await this._save(chat);
+          this.emit({ type: "message", chat: chat.id });
+          continue;
+        }
         if (atLimit) { chat.limitHit = true; await this._save(chat); }
         this.emit({ type: "done", chat: chat.id, ...(atLimit ? { limit: maxRounds } : {}) });
         this._title(chat);
@@ -526,13 +538,13 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     const added = [];
     let batchChars = 0;
     const batchLimit = MAX_BATCH_RESULT_CHARS / Math.max(1, chat.tokenRatio || 1);
-    // Several edits in a reply: their files' problems are checked once, together, after the last of them. (One file's
-    // check waits a moment for its language server; one after each edit made twenty edits twenty waits, and reported
-    // the errors a half-made change always has.)
+    // Several edits and writes in a reply: their files' problems are checked once, together, after the last of them.
+    // (One file's check waits a moment for its language server; one after each change made twenty changes twenty
+    // waits, checked files before the rest were written, and reported the errors a half-made change always has.)
     const group = calls[0]?.id || "";
     const parsedAll = calls.map((call, index) => parseArguments(call.function.name, call.function.arguments, cutOff && index === calls.length - 1));
     // By the arguments as they're run (another agent's name for path, a call's slips forgiven), not as written.
-    const editsTo = calls.map((other, index) => other.function.name === "edit_file" ? pathKey(parsedAll[index].args.path) : "");
+    const editsTo = calls.map((other, index) => GROUPED.has(other.function.name) ? pathKey(parsedAll[index].args.path) : "");
     // Reads started ahead of their turn (see READS_AT_ONCE): the call's place in the reply, and its result on the way.
     /** @type {Map<number, Promise<ToolResult>>} */
     const ahead = new Map();
@@ -595,7 +607,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         const more = !!editsTo[index] && editsTo.filter((other, at) => other && within[at]).length > 1;
         // This one first (they start in the order asked), then the looks that follow it, to run beside it.
         const started = ahead.get(index);
-        const work = started ?? this._runOne(chat, call.id, name, parsed.args, label, signal, name === "edit_file" ? { group, more } : undefined);
+        const work = started ?? this._runOne(chat, call.id, name, parsed.args, label, signal, GROUPED.has(name) ? { group, more } : undefined);
         if (started || together(index)) startAhead(index);
         if (started) this.emit({ type: "running", chat: chat.id, id: call.id, label }); // the one now waited for
         result = await work;
@@ -625,10 +637,10 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
     }
-    // A file's problems still waiting (its later edit failed or didn't run) go with its last edit that ran.
+    // A file's problems still waiting (its later change failed or didn't run) go with its last edit or write that ran.
     let settled = false;
     for (const left of this.host.settleEdits ? await this.host.settleEdits(group) : []) {
-      const message = [...added].reverse().find((m) => m.meta?.name === "edit_file" && !m.meta.failed
+      const message = [...added].reverse().find((m) => GROUPED.has(m.meta?.name) && !m.meta.failed
         && editsTo[calls.findIndex((c) => c.id === m.tool_call_id)] === pathKey(left.path));
       if (!message) continue;
       message.content += left.text;
@@ -639,8 +651,8 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       await this._save(chat);
       this.emit({ type: "message", chat: chat.id });
     }
-    // A file read again in this task: its older copy is cut (the newer one holds the same lines).
-    if (added.some((m) => m.meta?.name === "read_file" && !m.meta.failed) && supersedeReads(chat)) await this._save(chat);
+    // A file read again in this task: its older copy is cut (the newer one holds the same lines). A file written whole in this task: its earlier reads are cut too (the write's call holds its text).
+    if (added.some((m) => (m.meta?.name === "read_file" || m.meta?.name === "write_file") && !m.meta.failed) && supersedeReads(chat)) await this._save(chat);
     // Notes ride on the last result: the step limit near, and anything you typed meanwhile.
     const last = added[added.length - 1];
     if (last && unread) {
@@ -970,7 +982,7 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
       out.push({ role: "assistant", content: message.content, ...(calls?.length ? { tool_calls: calls } : {}) });
     } else if (message.role === "tool") {
       out.push({ role: "tool", tool_call_id: message.tool_call_id,
-        content: resultText(message) + (shortened.has(message.tool_call_id) ? "\n\n" + TEXTS.argumentsLeftOut : "") });
+        content: resultText(message, start + offset < current) + (shortened.has(message.tool_call_id) ? "\n\n" + TEXTS.argumentsLeftOut : "") });
     }
   }
   // A recap's kept part may start with results whose calls were summarised away: drop those.
@@ -1014,7 +1026,7 @@ function breakdown(chat, system, tools) {
         parts.calls += JSON.stringify(sent).length - signature;
       }
     } else if (message.role === "tool" && offered.has(message.tool_call_id)) {
-      const sent = resultText(message).length;
+      const sent = resultText(message, start + offset < current).length;
       const keep = Math.min(sent, String(message.meta?.keep ?? "").length);
       parts[message.meta?.stub ? "standIns" : "results"] += sent - keep;
       parts.kept += keep;
@@ -1184,6 +1196,11 @@ function taskStart(chat) {
   return 0;
 }
 
+/** Whether this turn has already asked for a request a reply only described (ASSIST.promised). @param {Chat} chat */
+function nudged(chat) {
+  return chat.messages.slice(taskStart(chat)).some((m) => m.role === "user" && m.meta?.nudge);
+}
+
 /** Where the current turn starts, as the API counts turns: the latest user message (Resume's included). @param {Chat} chat */
 function lastUser(chat) {
   for (let index = chat.messages.length - 1; index >= 0; index--) if (chat.messages[index].role === "user") return index;
@@ -1224,11 +1241,17 @@ function standInArgument(args) {
   return Object.values(args || {}).some((value) => typeof value === "string" && /^\s*\[Solder: [\d,.]+ lines?, left out of this copy of the chat\b/.test(value));
 }
 
-/** A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept. @param {Stored} message */
-function resultText(message) {
+/**
+ * A result as the model gets it: whole, or (once cut) its stand-in plus what must be kept.
+ * @param {Stored} message @param {boolean} [earlier] it's from an earlier task, whose long write texts aren't sent again
+ */
+function resultText(message, earlier = false) {
   if (!message.meta?.stub) return message.content;
-  // Cut because a later read covers it: the stand-in points at that copy, and doesn't say to read again.
-  return (message.meta.superseded ? TEXTS.superseded(message.meta.summary) : TEXTS.stub(message.meta.summary)) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
+  // Cut because a later read covers it, or a later write_file holds the file's text: the stand-in points at that, and
+  // doesn't say to read again. In an earlier task the write's text may be left out (shortCall): then it's a plain stub.
+  const stand = message.meta.superseded ? TEXTS.superseded(message.meta.summary)
+    : message.meta.writtenOver && !earlier ? TEXTS.writtenOver(message.meta.summary) : TEXTS.stub(message.meta.summary);
+  return stand + (message.meta.keep ? "\n\n" + message.meta.keep : "");
 }
 
 /**
@@ -1253,6 +1276,8 @@ const SHORTENED_LINE = new RegExp([true, false].map((readable) => RESULTS.longLi
  * cuts, this one can't send the model back to read again: what it reads is still there, once.
  * Only within the task in progress; only a read the newer one covers whole; never a result that carries something to
  * keep (a skill, a folder's AGENTS.md), nor on the strength of a read that was itself cut short.
+ * A write_file of the whole file does the same for every read of it before: the write's call, sent with the task,
+ * holds the file's text now.
  * @param {Chat} chat @returns {number} how many older copies were cut
  */
 function supersedeReads(chat) {
@@ -1265,9 +1290,21 @@ function supersedeReads(chat) {
     for (const call of message.tool_calls || []) calls.set(call.id, { name: call.function?.name, args: argumentsOf(call) });
     if (message.role !== "tool" || message.meta?.failed) continue;
     const call = calls.get(String(message.tool_call_id));
-    if (!call || call.name !== "read_file") continue;
+    if (!call || (call.name !== "read_file" && call.name !== "write_file")) continue;
     const key = pathKey(call.args.path);
     if (!key) continue;
+    if (call.name === "write_file") {
+      // The whole file written: what the task read of it before is out of date, and the write's call holds the text.
+      // (The call itself stays whole: this task's calls are sent as they came.)
+      for (const old of seen.get(key) || []) {
+        if (old.message.meta?.stub || old.message.meta?.keep || old.message.content.length <= STUB_MIN_CHARS) continue;
+        old.message.meta.stub = true;
+        old.message.meta.writtenOver = true;
+        cut++;
+      }
+      seen.delete(key);
+      continue;
+    }
     const now = linesRead(message);
     if (!now) continue; // no lines of the file came back (past its end, a skill): it covers nothing
     const before = seen.get(key) || [];

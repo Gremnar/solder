@@ -173,8 +173,10 @@ async function once(scenario, run) {
     // The most calls one reply made, and the most changes among them (how far a model batches).
     maxCalls: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.length)),
     maxChanges: Math.max(0, ...withCalls.map((/** @type {any} */ m) => m.tool_calls.filter((/** @type {any} */ c) => !S.prompt.READ_ONLY.has(c.function.name)).length)),
-    // The Assist lane's recoveries: a request asked for again, a cut-off reply carried on from, later requests said not to have run.
-    repairs: chat.messages.filter((/** @type {any} */ m) => m.meta?.repair).length, carriedOn: chat.messages.filter((/** @type {any} */ m) => m.meta?.auto).length,
+    // The Assist lane's recoveries: a request asked for again, a cut-off reply carried on from, later requests said not to have run,
+    // a reply that only said what it would do asked for its request.
+    repairs: chat.messages.filter((/** @type {any} */ m) => m.meta?.repair).length, carriedOn: chat.messages.filter((/** @type {any} */ m) => m.meta?.auto && !m.meta?.nudge).length,
+    nudged: chat.messages.filter((/** @type {any} */ m) => m.meta?.nudge).length,
     unread: chat.messages.filter((/** @type {any} */ m) => m.meta?.unread).length,
     // Reads of lines already read in the same task: still in the chat (avoidable), or after the first was cut.
     rereads: S.repeatReads ? S.repeatReads(chat).again : undefined, rereadsAfterCut: S.repeatReads ? S.repeatReads(chat).afterCut : undefined,
@@ -189,7 +191,7 @@ async function once(scenario, run) {
   fs.rmSync(root, { recursive: true, force: true });
   if (skillsFolder) fs.rmSync(skillsFolder, { recursive: true, force: true });
   console.log(`${row.ok ? "pass" : "FAIL"}  ${scenario.name.padEnd(18)} #${run}  ${(row.tokens / 1000).toFixed(0).padStart(5)}k tok  ${String(requests).padStart(3)} req` +
-    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.editCalls ? `  edits ${row.editCalls - row.editFails}/${row.editCalls}` + (row.editsAll ? ` (${row.editsAll} every place)` : "") : "") + (row.searchesAround ? `  ${row.searchesAround} of ${row.searches} searches with lines around` : "") + (row.reads ? `  ${row.reads} reads` : "") + (row.maxChanges > 1 ? `  ${row.maxChanges} changes in a reply` : "") + (row.repairs ? `  asked again ${row.repairs}` : "") + (row.carriedOn ? `  carried on ${row.carriedOn}` : "") + (row.unread ? `  told of unrun requests ${row.unread}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
+    (row.rereads || row.rereadsAfterCut ? `  re-reads ${row.rereads || 0}+${row.rereadsAfterCut || 0}` : "") + (row.editCalls ? `  edits ${row.editCalls - row.editFails}/${row.editCalls}` + (row.editsAll ? ` (${row.editsAll} every place)` : "") : "") + (row.searchesAround ? `  ${row.searchesAround} of ${row.searches} searches with lines around` : "") + (row.reads ? `  ${row.reads} reads` : "") + (row.maxChanges > 1 ? `  ${row.maxChanges} changes in a reply` : "") + (row.repairs ? `  asked again ${row.repairs}` : "") + (row.carriedOn ? `  carried on ${row.carriedOn}` : "") + (row.nudged ? `  asked for a described request ${row.nudged}` : "") + (row.unread ? `  told of unrun requests ${row.unread}` : "") + (row.skillsRead ? `  skills read: ${row.skillsRead.join(",") || "none"}` : "") + (row.why ? `  — ${row.why}` : ""));
   return row;
 }
 

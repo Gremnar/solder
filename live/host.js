@@ -205,16 +205,31 @@ class Workspace {
     const glob = args.glob ? String(args.glob).trim().replace(/\\/g, "/").replace(/^\.\//, "") : "";
     const pattern = glob ? this.S.tools.globPattern(glob.includes("/") ? glob : "**/" + glob) : null;
     const hits = [];
-    for (const f of this.files()) {
-      const rel = this.shown(f);
+    // One file or folder (path), as Solder's own search takes it: a file outside the workspace (an attached log) too.
+    let files = this.files();
+    if (args.path) {
+      const at = this.full(args.path);
+      if (!fs.existsSync(at)) throw new this.S.tools.ToolError(this.R.missing(String(args.path)));
+      if (fs.statSync(at).isDirectory()) {
+        const inside = at.toLowerCase() + path.sep;
+        files = files.filter((file) => file.toLowerCase().startsWith(inside));
+      } else files = [at];
+    }
+    const counts = new Map();
+    for (const f of files) {
+      const rel = this.shown(f).startsWith("..") ? f : this.shown(f);
       if (pattern && !pattern.test(rel) && !(glob && !/[*?[\]{}]/.test(glob) && rel.toLowerCase().startsWith(glob.replace(/\/+$/, "").toLowerCase() + "/"))) continue;
       const text = fs.readFileSync(f, "utf8");
       if (text.includes("\0")) continue;
       text.replace(/\r\n/g, "\n").split("\n").forEach((line, i) => {
-        if (re.test(line)) hits.push(`${rel}:${i + 1}:${line.length > 300 ? this.S.tools.around(line, re) : line}`);
+        if (re.test(line)) { hits.push(`${rel}:${i + 1}:${line.length > 300 ? this.S.tools.around(line, re) : line}`); counts.set(rel, (counts.get(rel) || 0) + 1); }
       });
     }
     if (!hits.length) return { output: this.R.noMatches(query, args.glob || ""), summary: "no matches" };
+    if (args.files_only === true || args.files_only === "true") {
+      const listed = [...counts].sort((a, b) => a[0].localeCompare(b[0])).slice(0, 300).map(([file, n]) => `${file} (${n})`);
+      return { output: listed.join("\n"), summary: `${counts.size} files` };
+    }
     // With the lines around each match, as Solder's own search gives them (when this src has it).
     const around = Math.min(5, Math.max(0, Math.round(Number(args.context_lines) || 0)));
     if (around && this.S.tools.withContext) {

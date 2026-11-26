@@ -41,6 +41,15 @@ const PROBLEMS_WAIT_MS = 1500;
 /** ... and for a file opened just for the check: its language server may be starting (shorter where it never reports). */
 const PROBLEMS_COLD_MS = 4000;
 const PROBLEMS_UNKNOWN_MS = 2000;
+/** A reply's changed files that aren't in a tab are opened in a background tab for their check: at most this many. */
+const MAX_CHECK_TABS = 8;
+/** Code VS Code itself checks (JavaScript, TypeScript, JSON, CSS): worth a background tab for the check. */
+const CODE_FILE = /\.(m?[jt]sx?|c[jt]s|jsonc?|css|scss|less)$/i;
+/**
+ * Code only an extension checks. A change to one, where nothing has reported problems in its kind of file, says it
+ * wasn't checked: silence there isn't "no errors". Plain text, Markdown, JSON, logs and the like get no such note.
+ */
+const NEEDS_EXTENSION = /\.(ps1|psm1|psd1|bat|cmd|st|scl|xml|sql|py|cs|vb|java|c|h|cc|cpp|hpp|go|rs|rb|php|sh|lua|pl|r|kt|swift|dart)$/i;
 /** A definition's code: at most this many characters (a minified line can be enormous). */
 const MAX_DEFINITION_CHARS = 8_000;
 /** Whole-word text matches added to references the language server didn't count. */
@@ -115,6 +124,8 @@ class WorkspaceTools {
     this.folder = "";
     /** Edits whose problems check waits for a later edit to the same file in the same reply. @type {Map<string, any>} */
     this._pendingProblems = new Map();
+    /** Files already said to be unchecked, each once a task ("task|path"). @type {Set<string>} */
+    this._notChecked = new Set();
   }
 
   /** The first workspace folder ("" when none is open). */
@@ -193,14 +204,15 @@ class WorkspaceTools {
       if (!from.inside || !to.inside) return args.copy ? "It copies to or from outside the workspace folder." : "It moves something into or out of the workspace folder.";
       return this.followed(from.full) || this.followed(to.full) || null;
     }
-    if (name === "read_file" || name === "symbols" || name === "problems") {
-      if (!args.path) return null;
+    if (name === "read_file" || name === "symbols" || name === "problems" || name === "search") {
+      if (!args.path || (name === "search" && args.docs)) return null;
       let file;
       try { file = this.resolve(args.path); } catch { return null; }
       if (file.inside || this.inReferenceFolder(file.full)) return null;
-      // A file you attached to a message yourself (too long to send whole): reading it is what you asked for.
-      if (name === "read_file" && this.attached.has(file.full.toLowerCase())) return null;
-      return "It reads a file outside the workspace folder, your docs folders and your skills folders.";
+      // A file you attached to a message yourself (too long to send whole): reading or searching it is what you asked for.
+      if ((name === "read_file" || name === "search") && this.attached.has(file.full.toLowerCase())) return null;
+      return name === "search" ? "It searches outside the workspace folder, your docs folders and your skills folders."
+        : "It reads a file outside the workspace folder, your docs folders and your skills folders.";
     }
     if (name === "changes" && args.path) {
       let target;
@@ -257,7 +269,7 @@ class WorkspaceTools {
         case "search": return await this.search(args, ctx.signal);
         case "find_files": return await this.findFiles(args);
         case "edit_file": return await this.editFile(args, ctx.chat, ctx.edit);
-        case "write_file": return await this.writeFile(args, ctx.chat);
+        case "write_file": return await this.writeFile(args, ctx.chat, ctx.edit);
         case "remove_item": return await this.removeItem(args, ctx.chat);
         case "move_item": return await this.moveItem(args);
         case "problems": return await this.problems(args);
@@ -557,7 +569,9 @@ class WorkspaceTools {
   async wordMatches(/** @type {string} */ name, /** @type {AbortSignal} */ signal) {
     const root = this.base();
     if (!root) return [];
-    const query = "\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b";
+    // No lookarounds: ripgrep's own engine has none. The character either side is matched instead (or a line's end).
+    const edge = nameChars(name);
+    const query = `(?:^|[^${edge}])${escapeRegex(name)}(?:$|[^${edge}])`;
     const rg = this.ripgrep();
     return rg ? this.searchWithRipgrep(rg, root, query, true, undefined, signal, true) : this.searchInJs(root, query, true, undefined, true);
   }
@@ -685,30 +699,56 @@ class WorkspaceTools {
 
   async search(/** @type {any} */ args, /** @type {AbortSignal} */ signal) {
     if (args.docs) return this.searchDocs(String(args.query), signal);
-    const roots = this.searchRoots();
-    if (!roots.length) throw new ToolError(RESULTS.noWorkspace);
-    const rg = this.ripgrep();
     const query = String(args.query);
+    const filesOnly = !!args.files_only;
+    /**
+     * Where to look: the folder ripgrep runs in, and what it searches there ("." for all of it). With a path, that
+     * file or folder only (an attached file or a paste is outside the workspace), resolved as read_file resolves it.
+     * @type {{root: string, target: string}[]}
+     */
+    let places;
+    let where = "";
+    if (args.path) {
+      const scope = this.resolve(args.path);
+      let stat;
+      try { stat = fs.statSync(scope.full); } catch { throw new ToolError(RESULTS.missing(scope.shown), await this.nearby(scope)); }
+      if (!stat.isDirectory() && isOffice(scope.full)) return this.searchOffice(scope, query, !!args.regex, filesOnly);
+      places = [stat.isDirectory() ? { root: scope.full, target: "." } : { root: path.dirname(scope.full), target: path.basename(scope.full) }];
+      where = scope.shown;
+    } else {
+      places = this.searchRoots().map((root) => ({ root, target: "." }));
+      if (!places.length) throw new ToolError(RESULTS.noWorkspace);
+    }
+    const rg = this.ripgrep();
     const base = this.base();
+    const limit = filesOnly ? MAX_FOUND : MAX_SEARCH_LINES;
     /** @type {string[]} */
     let lines = [];
     let incomplete = false;
-    for (const root of roots) {
-      const found = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal)
-        : await this.searchInJs(root, query, !!args.regex, args.glob);
+    for (const { root, target } of places) {
+      const options = { target, count: filesOnly };
+      const found = rg ? await this.searchWithRipgrep(rg, root, query, !!args.regex, args.glob, signal, false, options)
+        : await this.searchInJs(root, query, !!args.regex, args.glob, false, options);
       if (/** @type {any} */ (found).incomplete) incomplete = true;
       // ripgrep's paths are relative to where it ran: as the model sees paths, for the other folders.
       lines.push(...(root === base || !rg || /** @type {any} */ (found).shownPaths ? found : found.map((line) => {
         const cut = line.indexOf(":");
         return cut > 0 ? this.shown(path.join(root, line.slice(0, cut))) + line.slice(cut) : line;
       })));
-      if (lines.length > MAX_SEARCH_LINES) break;
+      if (lines.length > limit) break;
     }
     const count = lines.length;
     if (!count) {
-      return { output: RESULTS.noMatches(query, args.glob || ""), summary: `Searched "${short(query)}" · no matches` };
+      return { output: RESULTS.noMatches(query, [where, args.glob].filter(Boolean).join(", ")), summary: `Searched "${short(query)}" · no matches` };
     }
     let note = incomplete ? "\n\n" + RESULTS.searchIncomplete(SEARCH_MS / 1000) : "";
+    if (filesOnly) {
+      // Each file once, with how many of its lines match: path (N).
+      const files = lines.map((line) => { const cut = line.lastIndexOf(":"); return `${line.slice(0, cut)} (${line.slice(cut + 1)})`; })
+        .sort((a, b) => a.localeCompare(b));
+      return { output: files.slice(0, MAX_FOUND).join("\n") + (count > MAX_FOUND ? "\n\n" + RESULTS.filesCapped(MAX_FOUND) : "") + note,
+        summary: `Searched "${short(query)}" · ${count > MAX_FOUND ? MAX_FOUND + "+" : count} file${count === 1 ? "" : "s"}` };
+    }
     // With the lines around each match: read from the files as the editor has them (unsaved changes included).
     const around = Math.min(5, Math.max(0, Math.round(Number(args.context_lines) || 0)));
     if (around) {
@@ -1017,16 +1057,45 @@ class WorkspaceTools {
     return this._rg;
   }
 
-  /** @returns {Promise<string[]>} */
+  /**
+   * A Word, Excel or PowerPoint file given as search's path: its text as read_file and the docs index read it, so the
+   * line numbers fit read_file's. @param {any} file @param {string} query @param {boolean} regex @param {boolean} filesOnly
+   */
+  async searchOffice(file, query, regex, filesOnly) {
+    const text = await documentText(file.full).catch(() => null);
+    if (text === null) throw new ToolError(RESULTS.notText(file.shown));
+    const lines = await this.searchInJs(path.dirname(file.full), query, regex, undefined, false, { count: filesOnly, text: { file: file.full, text } });
+    if (!lines.length) return { output: RESULTS.noMatches(query, file.shown), summary: `Searched "${short(query)}" · no matches` };
+    if (filesOnly) {
+      const cut = lines[0].lastIndexOf(":");
+      return { output: `${lines[0].slice(0, cut)} (${lines[0].slice(cut + 1)})`, summary: `Searched "${short(query)}" · 1 file` };
+    }
+    const more = lines.length > MAX_SEARCH_LINES;
+    return { output: lines.slice(0, MAX_SEARCH_LINES).join("\n") + (more ? "\n\n" + RESULTS.searchCapped(MAX_SEARCH_LINES) : ""),
+      summary: `Searched "${short(query)}" · ${more ? MAX_SEARCH_LINES + "+" : lines.length} lines` };
+  }
+
+  /**
+   * @param {{target?: string, count?: boolean}} [options] what to search in root ("." for all of it, else one file
+   * there), and whether to count each file's matching lines (path:count) instead of listing them
+   * @returns {Promise<string[]>}
+   */
   searchWithRipgrep(/** @type {string} */ rg, /** @type {string} */ root, /** @type {string} */ query,
-    /** @type {boolean} */ regex, /** @type {string | undefined} */ glob, /** @type {AbortSignal} */ signal, caseSensitive = false) {
-    const args = ["--line-number", "--no-heading", "--color", "never", caseSensitive ? "--case-sensitive" : "--smart-case", "--max-columns", "300",
-      "--max-columns-preview", "--max-filesize", "5M", "--max-count", "50", "--no-messages"];
+    /** @type {boolean} */ regex, /** @type {string | undefined} */ glob, /** @type {AbortSignal} */ signal, caseSensitive = false, options = {}) {
+    const target = options.target || ".";
+    const one = target !== ".";
+    const args = ["--line-number", "--no-heading", "--with-filename", "--color", "never", caseSensitive ? "--case-sensitive" : "--smart-case", "--max-columns", "300",
+      "--max-columns-preview", "--no-messages"];
+    // A file asked for by name is searched whatever its size, and as far as the line limit (a long log); in a folder,
+    // big files are skipped and each file gives at most 50 lines, so one can't crowd out the rest. A count counts all.
+    if (!one) args.push("--max-filesize", "5M");
+    if (options.count) args.push("--count");
+    else args.push("--max-count", one ? String(MAX_SEARCH_LINES + 1) : "50");
     if (!regex) args.push("--fixed-strings");
     // As find_files reads a glob: any case, backslashes as slashes, and a folder (or "folder/") as everything in it.
-    if (glob) args.push("--glob-case-insensitive", "--glob", rgGlob(root, String(glob)));
+    if (glob && !one) args.push("--glob-case-insensitive", "--glob", rgGlob(root, String(glob)));
     // Paths printed with "/" (only the paths: a matched line's own backslashes are its text, kept as they are).
-    args.push("--path-separator", "/", "--regexp", query, "--", ".");
+    args.push("--path-separator", "/", "--regexp", query, "--", target);
     return new Promise((resolve, reject) => {
       const child = spawn(rg, args, { cwd: root, windowsHide: true, signal });
       let out = "";
@@ -1045,7 +1114,7 @@ class WorkspaceTools {
         fallingBack = true;
         if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
         this._rg = null; // blocked or missing: fall back from now on
-        this.searchInJs(root, query, regex, glob, caseSensitive).then((lines) => { /** @type {any} */ (lines).shownPaths = true; resolve(lines); }, reject);
+        this.searchInJs(root, query, regex, glob, caseSensitive, options).then((lines) => { /** @type {any} */ (lines).shownPaths = true; resolve(lines); }, reject);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
@@ -1062,16 +1131,21 @@ class WorkspaceTools {
         // Stopped at the time limit: what it found so far isn't the whole answer, and nothing found isn't "none".
         if (timedOut && !out.trim()) { reject(new ToolError(RESULTS.searchTimedOut(SEARCH_MS / 1000))); return; }
         const lines = out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, ""));
-        const shown = lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines;
+        const shown = !options.count && lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines;
         if (timedOut) /** @type {any} */ (shown).incomplete = true;
         resolve(shown);
       });
     });
   }
 
-  /** @returns {Promise<string[]>} */
+  /**
+   * The search with no ripgrep. Paths come out as the model sees them.
+   * @param {{target?: string, count?: boolean, text?: {file: string, text: string}}} [options] as searchWithRipgrep's;
+   * text: search this text, as this file's, instead of reading files
+   * @returns {Promise<string[]>}
+   */
   async searchInJs(/** @type {string} */ root, /** @type {string} */ query, /** @type {boolean} */ regex,
-    /** @type {string | undefined} */ glob, caseSensitive = false) {
+    /** @type {string | undefined} */ glob, caseSensitive = false, options = {}) {
     let pattern;
     const flags = caseSensitive || /[A-Z]/.test(query) ? "" : "i";
     try {
@@ -1079,17 +1153,29 @@ class WorkspaceTools {
     } catch (error) {
       throw new ToolError(RESULTS.badRegex);
     }
-    const files = await this.listFiles(root, globOf(glob ? rgGlob(root, glob) : "**/*"), 5000);
+    const one = options.text ? options.text.file : options.target && options.target !== "." ? path.join(root, options.target) : "";
+    const files = one ? [{ fsPath: one }] : await this.listFiles(root, globOf(glob ? rgGlob(root, glob) : "**/*"), 5000);
     const lines = [];
     for (const uri of files) {
+      /** @type {string | null} */
       let text;
-      try {
-        if (fs.statSync(uri.fsPath).size > 1_000_000) continue;
-        text = fs.readFileSync(uri.fsPath, "utf8");
-      } catch { continue; }
-      if (text.includes("\u0000")) continue;
+      if (options.text) text = options.text.text;
+      else {
+        try {
+          // A file asked for by name is read whatever its size (up to read_file's limit), in its own encoding.
+          if (fs.statSync(uri.fsPath).size > (one ? 20 * 1024 * 1024 : 1_000_000)) continue;
+          text = one ? decodeText(fs.readFileSync(uri.fsPath)) : fs.readFileSync(uri.fsPath, "utf8");
+        } catch { continue; }
+        if (text === null || text.includes("\u0000")) continue;
+      }
       const shown = this.shown(uri.fsPath);
-      text.split(/\r?\n/).forEach((line, index) => {
+      if (options.count) {
+        const matching = text.split(/\r\n|\r|\n/).filter((line) => pattern.test(line)).length;
+        if (matching) lines.push(`${shown}:${matching}`);
+        if (lines.length > MAX_FOUND) break;
+        continue;
+      }
+      text.split(/\r\n|\r|\n/).forEach((line, index) => {
         if (lines.length <= MAX_SEARCH_LINES && pattern.test(line)) lines.push(`${shown}:${index + 1}:${line.length > 300 ? around(line, pattern) : line}`);
       });
       if (lines.length > MAX_SEARCH_LINES) break;
@@ -1146,9 +1232,7 @@ class WorkspaceTools {
     const { file, document, text, old, found } = await this.plannedEdit(args);
     const { start, length, replaced } = found;
     const shiftNote = found.note;
-    const key = file.full.toLowerCase();
-    const waiting = hint && this._pendingProblems.get(key);
-    const before = waiting && waiting.group === hint.group ? waiting.before : problemKeys(file.uri);
+    const before = this.baseline(file, hint);
     const backup = await this.backup(chat, file, text);
     const edit = new vscode.WorkspaceEdit();
     edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replaced);
@@ -1159,12 +1243,7 @@ class WorkspaceTools {
     const after = hash(document.getText());
     const removed = lineCount(old);
     const added = lineCount(replaced);
-    let problems = { text: "", summary: "" };
-    if (hint?.more) this._pendingProblems.set(key, { group: hint.group, before, file, given: String(args.path) });
-    else {
-      this._pendingProblems.delete(key);
-      problems = await this.newProblems(file, before);
-    }
+    const problems = await this.problemsAfter(file, before, hint, chat, String(args.path));
     const result = this._edited(file, after, text, backup, removed, added, start, shiftNote, problems);
     // Every place at once (replace_all): how many, and where, in place of the one range.
     if (found.places) {
@@ -1200,7 +1279,8 @@ class WorkspaceTools {
 
   // ----------------------------------------------------------------- write_file --
 
-  async writeFile(/** @type {any} */ args, /** @type {any} */ chat) {
+  /** @param {any} args @param {any} chat @param {{group: string, more: boolean}} [hint] as editFile's */
+  async writeFile(args, chat, hint) {
     const file = this.resolve(args.path);
     const content = String(args.content);
     let exists = false;
@@ -1223,7 +1303,8 @@ class WorkspaceTools {
     if (previous === null) throw new ToolError(RESULTS.notText(file.shown)); // a binary file: no text to keep for Undo
     if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
     const backup = exists ? await this.backup(chat, file, previous) : "";
-    const before = exists ? problemKeys(file.uri) : new Set();
+    // A new file had no problems before: every one it has is this change's.
+    const before = this.baseline(file, hint, !exists);
     const madeFolder = exists ? "" : firstMissing(path.dirname(file.full));
     /** @type {Buffer | null} what went to disk, for a file that wasn't open */
     let written = null;
@@ -1246,7 +1327,7 @@ class WorkspaceTools {
       await vscode.workspace.openTextDocument(file.uri).then(() => {}, () => {}); // lets language servers look
     }
     const lines = lineCount(content);
-    const problems = await this.newProblems(file, before);
+    const problems = await this.problemsAfter(file, before, hint, chat, String(args.path));
     return { output: RESULTS.written(exists, file.shown, lines) + problems.text + (exists && SIGNED.test(previous) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
       change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder, after } };
@@ -1315,24 +1396,99 @@ class WorkspaceTools {
    * @param {string} group @returns {Promise<{path: string, text: string, summary: string}[]>}
    */
   async settleEdits(group) {
-    // Every file's check at once: each waits on its own language server, not on the others.
     const waiting = [...this._pendingProblems].filter(([, pending]) => pending.group === group);
     for (const [key] of waiting) this._pendingProblems.delete(key);
-    const found = await Promise.all(waiting.map(async ([, pending]) => ({ path: pending.given, ...(await this.newProblems(pending.file, pending.before)) })));
-    return found.filter((problems) => problems.text);
+    const found = await this.checkChanged(waiting.map(([, pending]) => pending));
+    return found.map((problems, index) => ({ path: waiting[index][1].given, ...problems })).filter((problems) => problems.text);
   }
 
-  /** The file's errors that weren't there before the change (VS Code's language servers need a moment). */
-  async newProblems(/** @type {any} */ file, /** @type {Set<string>} */ before) {
-    // A language that has never reported diagnostics (plain JavaScript, Markdown) isn't worth the full wait.
-    const doc = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath.toLowerCase() === file.full.toLowerCase());
-    await this.diagnosticsFor(file, doc && this._diagnosed.has(doc.languageId) ? DIAGNOSTICS_WAIT_MS : DIAGNOSTICS_SHORT_MS);
+  /**
+   * A file's problems before a change, to tell the change's own errors from older ones: taken before the reply's
+   * first change to it (a later change in the same reply keeps that). `checked` says whether they're worth comparing
+   * with: the file was in a tab (where language servers check it), had problems reported, or is new.
+   * @param {any} file @param {{group: string, more: boolean}} [hint] @param {boolean} [created] a new file
+   * @returns {{keys: Set<string>, checked: boolean}}
+   */
+  baseline(file, hint, created = false) {
+    const waiting = hint && this._pendingProblems.get(file.full.toLowerCase());
+    if (waiting && waiting.group === hint.group) return waiting.before;
+    if (created) return { keys: new Set(), checked: true };
+    const keys = problemKeys(file.uri);
+    return { keys, checked: keys.size > 0 || shownInEditor(file.full) };
+  }
+
+  /**
+   * After a change: its problems check now, or, when the reply changes more files (hint.more), kept for settleEdits,
+   * which checks them all together at the end. @param {any} file @param {{keys: Set<string>, checked: boolean}} before
+   * @param {{group: string, more: boolean} | undefined} hint @param {any} chat @param {string} given the path as the model gave it
+   * @returns {Promise<{text: string, summary: string}>}
+   */
+  async problemsAfter(file, before, hint, chat, given) {
+    const key = file.full.toLowerCase();
+    const pending = { group: hint?.group ?? "", before, file, given, task: taskOf(chat) };
+    if (hint?.more) { this._pendingProblems.set(key, pending); return { text: "", summary: "" }; }
+    this._pendingProblems.delete(key);
+    return (await this.checkChanged([pending]))[0];
+  }
+
+  /**
+   * Changed files' errors, checked all at once (each waits on its own language server). VS Code checks only open
+   * files, and some language servers (TypeScript's) only those in a tab: a changed file that isn't in one is opened
+   * in a background tab as problems does, up to MAX_CHECK_TABS at a time, and closed again whatever happens.
+   * @param {{file: any, before: {keys: Set<string>, checked: boolean}, task: string}[]} entries
+   * @returns {Promise<{text: string, summary: string}[]>}
+   */
+  async checkChanged(entries) {
+    let tabs = 0;
+    const plans = entries.map((entry) => {
+      const doc = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath.toLowerCase() === entry.file.full.toLowerCase());
+      const language = doc?.languageId ?? "";
+      const reports = this._diagnosed.has(language);
+      // Only where something may check it: plain text gets no tab.
+      const tab = !!doc && language !== "plaintext" && (reports || CODE_FILE.test(entry.file.full) || NEEDS_EXTENSION.test(entry.file.full))
+        && tabs < MAX_CHECK_TABS && !shownInEditor(entry.file.full);
+      if (tab) tabs++;
+      // A language that has never reported diagnostics (Markdown) isn't worth the full wait; a file opened for the
+      // check gives its language server time to start.
+      const ms = tab ? (reports ? PROBLEMS_COLD_MS : PROBLEMS_UNKNOWN_MS) : reports ? DIAGNOSTICS_WAIT_MS : DIAGNOSTICS_SHORT_MS;
+      return { ...entry, language, tab, ms };
+    });
+    // Listening first, then the tabs: problems reported as a tab opens aren't missed.
+    const heard = plans.map((plan) => this.diagnosticsFor(plan.file, plan.ms));
+    /** @type {any[]} */
+    const opened = [];
+    try {
+      for (const plan of plans) if (plan.tab && await openInBackground(plan.file)) opened.push(plan.file);
+      const changed = await Promise.all(heard);
+      // Read before the tabs close (a closed file's problems may be cleared).
+      return plans.map((plan, index) => this.errorsAfter(plan, changed[index]));
+    } finally {
+      for (const file of opened) await closeTab(file);
+    }
+  }
+
+  /**
+   * A changed file's errors the change brought (all of them, said so, when it wasn't checked before); or, where
+   * nothing has ever reported problems in its kind of file, that it wasn't checked, so silence isn't read as none.
+   * @param {{file: any, before: {keys: Set<string>, checked: boolean}, task: string, language: string}} plan
+   * @param {boolean} heard whether its problems changed during the check
+   */
+  errorsAfter(plan, heard) {
+    const { file, before } = plan;
     const fresh = vscode.languages.getDiagnostics(file.uri)
-      .filter((d) => d.severity === vscode.DiagnosticSeverity.Error && !before.has(keyOf(d)));
-    if (!fresh.length) return { text: "", summary: "" };
-    const lines = fresh.slice(0, 10).map((d) => `- line ${d.range.start.line + 1}: ${d.message.split("\n")[0]}` + (d.source ? ` (${d.source})` : ""));
-    return { text: RESULTS.newProblems(file.shown, lines, fresh.length - 10),
-      summary: ` · ${fresh.length} new problem${fresh.length === 1 ? "" : "s"}` };
+      .filter((d) => d.severity === vscode.DiagnosticSeverity.Error && !before.keys.has(keyOf(d)));
+    if (fresh.length) {
+      const lines = fresh.slice(0, 10).map((d) => `- line ${d.range.start.line + 1}: ${d.message.split("\n")[0]}` + (d.source ? ` (${d.source})` : ""));
+      const count = `${fresh.length}${before.checked ? " new" : ""} problem${fresh.length === 1 ? "" : "s"}`;
+      return { text: (before.checked ? RESULTS.newProblems : RESULTS.problemsNow)(file.shown, lines, fresh.length - 10), summary: ` · ${count}` };
+    }
+    // Code only an extension checks, in a kind nothing has reported on: once a task for each file.
+    if (heard || this._diagnosed.has(plan.language) || !NEEDS_EXTENSION.test(file.full)) return { text: "", summary: "" };
+    const noted = `${plan.task}|${file.full.toLowerCase()}`;
+    if (this._notChecked.has(noted)) return { text: "", summary: "" };
+    if (this._notChecked.size > 1000) this._notChecked.clear();
+    this._notChecked.add(noted);
+    return { text: RESULTS.changeNotChecked(file.shown), summary: " · not checked for errors" };
   }
 
   // -------------------------------------------------------------- undo / review --
@@ -1342,10 +1498,12 @@ class WorkspaceTools {
     const folder = path.join(this.backupsRoot(), chat.id);
     this.pruneSoon();
     fs.mkdirSync(folder, { recursive: true });
-    const name = `${Date.now().toString(36)}-${path.basename(file.full)}`;
-    const target = path.join(folder, name);
-    fs.writeFileSync(target, text, "utf8");
-    return target;
+    // Made only if no file has that name ("wx"): two files of the same name never share one backup.
+    for (;;) {
+      const target = backupPath(folder, file.full);
+      try { fs.writeFileSync(target, text, { encoding: "utf8", flag: "wx" }); return target; }
+      catch (error) { if (/** @type {any} */ (error).code !== "EEXIST") throw error; }
+    }
   }
 
   // ------------------------------------------------------------------ move_item --
@@ -1416,8 +1574,8 @@ class WorkspaceTools {
       const store = path.join(this.backupsRoot(), chat.id);
       this.pruneSoon();
       fs.mkdirSync(store, { recursive: true });
-      backup = path.join(store, `${Date.now().toString(36)}-${path.basename(target.full)}`);
-      fs.cpSync(target.full, backup, { recursive: true });
+      do backup = backupPath(store, target.full); while (fs.existsSync(backup));
+      fs.cpSync(target.full, backup, { recursive: true, errorOnExist: true, force: false });
     }
     try {
       await vscode.workspace.fs.delete(target.uri, { recursive: true, useTrash: true });
@@ -1686,7 +1844,8 @@ function outlineEntries(symbols, kindName) {
  */
 function positionOf(document, symbols, name, line) {
   if (!name) return null;
-  const word = new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w$])`);
+  const edge = nameChars(name);
+  const word = new RegExp(`(?<![${edge}])${escapeRegex(name)}(?![${edge}])`);
   const on = (/** @type {number} */ index) => {
     if (index < 0 || index >= document.lineCount) return null;
     const match = word.exec(document.lineAt(index).text);
@@ -1716,6 +1875,20 @@ function positionOf(document, symbols, name, line) {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * The characters that make a match part of a longer name, as a regex class's inside: letters, digits, _ and $ (a
+ * PowerShell $variable, JavaScript's $el), and - when the name has one, as PowerShell's commands do (Get-Uptime isn't
+ * found inside My-Get-Uptime; total still is in total-1). @param {string} name
+ */
+function nameChars(name) {
+  return name.includes("-") ? "\\w$-" : "\\w$";
+}
+
+/** @param {string} text */
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Location and LocationLink results as {uri, range}, without repeats. @param {any} result */
@@ -1921,6 +2094,20 @@ async function saveOrRevert(/** @type {vscode.TextDocument} */ document, /** @ty
   throw new ToolError(RESULTS.notSaved(file.shown));
 }
 
+/**
+ * A name for a backup in a chat's backups folder: the time, a random part, then the file's own name (so Review shows
+ * it as that kind of file). The random part keeps apart two files of the same name backed up in the same moment
+ * (src/a/config.js and src/b/config.js in one reply). @param {string} folder @param {string} full
+ */
+function backupPath(folder, full) {
+  return path.join(folder, `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}-${path.basename(full)}`);
+}
+
+/** Which task a change is in: the chat, and how many messages you've sent in it. @param {any} chat */
+function taskOf(chat) {
+  return `${chat?.id ?? ""}:${(chat?.messages ?? []).filter((/** @type {any} */ m) => m.role === "user").length}`;
+}
+
 /** @param {string} text */
 function hash(text) {
   return crypto.createHash("sha1").update(String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")).digest("hex");
@@ -1980,7 +2167,7 @@ function folderEntries(full) {
 
 function shownInEditor(full) {
   const key = full.toLowerCase();
-  return vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => {
+  return (vscode.window?.tabGroups?.all ?? []).some((group) => group.tabs.some((tab) => {
     const input = /** @type {any} */ (tab.input);
     const uri = input?.uri ?? input?.modified;
     return !!uri && uri.scheme === "file" && uri.fsPath.toLowerCase() === key;
@@ -2522,9 +2709,17 @@ function withContext(matches, linesOf, around, max) {
       const last = stretches[stretches.length - 1];
       if (last && from <= last[1] + 1) { last[1] = Math.max(last[1], to); last[2]++; } else stretches.push([from, to, 1]);
     }
+    // A long matching line (minified code) is shown around its match, as search found it, not by its start: that
+    // could be thousands of characters before the match.
+    /** @type {Map<number, string>} */
+    const found = new Map(entry.bare.map((match) => {
+      const at = /^(.*?):(\d+):/.exec(match);
+      return [Number(at?.[2]), at ? match.slice(at[0].length) : ""];
+    }));
     for (const [from, to, count] of stretches) {
       if (used >= max) { left += count; continue; }
-      const shown = text.slice(from - 1, to).map((line, k) => `${from + k}\t${line.length > 300 ? line.slice(0, 300) + "…" : line}`);
+      const shown = text.slice(from - 1, to).map((line, k) => `${from + k}\t${line.length <= 300 ? line
+        : /^…|…$/.test(found.get(from + k) ?? "") ? /** @type {string} */ (found.get(from + k)) : line.slice(0, 300) + "…"}`);
       out.push(RESULTS.searchAround(file, from, to) + "\n" + shown.join("\n"));
       used += shown.length + 1;
     }
