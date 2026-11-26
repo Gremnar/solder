@@ -449,7 +449,7 @@ test("a change whose text is Solder's old 'left out' note is refused, never run:
   assert.equal(other.ran.length, 1);
 });
 
-test("earlier tasks' big writes go without their text (said with the result, never inside the call); this task's whole, a Resume included", async () => {
+test("earlier tasks' big writes go as they came (some models copied the shortened ones); this task's too, a Resume included", async () => {
   const write = (id) => ({ id, type: "function", function: { name: "write_file",
     arguments: JSON.stringify({ path: id + ".js", content: "line\n".repeat(2000) }) } });
   const chat = Engine.newChat();
@@ -458,9 +458,10 @@ test("earlier tasks' big writes go without their text (said with the result, nev
     { role: "user", content: "write b", meta: { typed: "x" } }, { role: "assistant", content: "", tool_calls: [write("b")] },
     { role: "tool", tool_call_id: "b", content: "Wrote b.js.", meta: {} });
   const sent = outbound(chat, "S");
-  assert.deepEqual(JSON.parse(sent[2].tool_calls[0].function.arguments), { path: "a.js" }, "the long text is left out whole: no note in its place to copy");
-  assert.ok(!JSON.stringify(sent.filter((m) => m.role === "assistant")).includes("left out"), "nothing Solder wrote sits in the model's own turns");
-  assert.equal(sent[3].content, "Wrote a.js.\n\n" + TEXTS.argumentsLeftOut, "the result says so instead");
+  // Left out, such a model sent its next write_file the same way, with no content (a round trip lost each time).
+  assert.equal(sent[2].tool_calls[0], chat.messages[1].tool_calls[0], "an earlier task's call goes as it came");
+  assert.ok(!JSON.stringify(sent).includes("left out"), "nothing says it was left out");
+  assert.equal(sent[3].content, "Wrote a.js.");
   assert.equal(sent[6].tool_calls[0], chat.messages[5].tool_calls[0], "this turn's call goes as it came");
   assert.equal(sent[7].content, "Wrote b.js.");
   // After a Resume's "carry on" it's still the same task: its calls stay whole.

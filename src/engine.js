@@ -58,6 +58,15 @@ const READS_AT_ONCE = 4;
 const TOGETHER = new Set(["read_file", "symbols", "search", "find_files", "changes"]);
 /** Changes whose problems check waits for the reply's other changes, and is made once for them all (settleEdits). */
 const GROUPED = new Set(["edit_file", "write_file"]);
+
+/**
+ * Whether an earlier task's long write_file and edit_file texts are left out of what's sent (the call goes with its
+ * path only). Off since 2026-11-26: some models copy the shape of their own earlier calls, and sent a later
+ * write_file with no content, which failed and cost a round trip each time. Measured on such a model (big-writes, 4 runs
+ * each): left out, 0 of 4 passed at 8.5 requests and ~33k input tokens a run; sent whole, 4 of 4 at 6 requests and
+ * ~25k. A long chat is still kept in bounds by compaction.
+ */
+const SHORTEN_EARLIER_CALLS = false;
 /** A reply that read this many different files (and changed nothing) gets the cue to group the changes that follow. */
 const GROUP_CUE_FILES = 3;
 /** In a batch's failed files: a change refused whose file can't be told, so any later change may have been built on it. */
@@ -1027,12 +1036,11 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
     if (message.role === "user") out.push({ role: "user", content: message.content });
     else if (message.role === "assistant") {
       if (!message.content && !message.tool_calls?.length) continue;
-      // An earlier task's big writes and edits are on disk now: sent again in full they'd cost their
-      // size on every step. (This task's are sent as they came.)
+      // An earlier task's big writes and edits are sent as they came (SHORTEN_EARLIER_CALLS, below, says why).
       // Plan calls from before plans were taken out (0.2.14): left out, their results with them (below).
       const kept = message.tool_calls?.filter((/** @type {any} */ c) => c.function.name !== "plan");
       if (!message.content && !kept?.length) continue;
-      const calls = start + offset < current ? kept?.map((/** @type {any} */ call) => {
+      const calls = SHORTEN_EARLIER_CALLS && start + offset < current ? kept?.map((/** @type {any} */ call) => {
         const short = shortCall(call);
         if (short !== call) shortened.add(call.id);
         return short;
@@ -1077,7 +1085,7 @@ function breakdown(chat, system, tools) {
     else if (message.role === "assistant") {
       parts.text += message.content.length;
       for (const call of message.tool_calls || []) {
-        const sent = start + offset < current ? shortCall(call) : call;
+        const sent = SHORTEN_EARLIER_CALLS && start + offset < current ? shortCall(call) : call;
         const signature = sent.extra_content === undefined ? 0 : JSON.stringify(sent.extra_content).length;
         offered.add(call.id);
         parts.signatures += signature;
@@ -1549,7 +1557,7 @@ function estimateMessages(/** @type {any[]} */ messages) {
 /** One stored message's size as it's sent (a cut result as its stand-in). @param {Stored} message */
 function sizeOf(message) {
   return estimate(message.role === "tool" ? resultText(message) : message.content)
-    + estimate(JSON.stringify(message.tool_calls?.map(shortCall) || "")) + 4; // as earlier turns' calls are sent
+    + estimate(JSON.stringify((SHORTEN_EARLIER_CALLS ? message.tool_calls?.map(shortCall) : message.tool_calls) || "")) + 4; // as earlier turns' calls are sent
 }
 
 /**

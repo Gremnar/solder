@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: some models sent a second whole-file write with no text.** To save tokens, Solder sent an earlier task's long `write_file` and `edit_file` calls without their text. Some models copy the shape of their own earlier calls, so in a follow-up turn they sent `write_file` with a path and no content: it failed, and cost a round trip each time. Those calls now go as they came. Measured on such a model, a chat that writes two files and then changes the first: before, 0 of 4 runs passed, at 8.5 requests and about 33k input tokens; now 4 of 4, at 6 requests and about 25k. A long chat is still kept in bounds by its summary.
+
 ## 0.3.16 (2026-11-26)
 
 From an eight-reviewer engine review (2026-11-25), step 1:
