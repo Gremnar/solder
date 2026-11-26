@@ -2,7 +2,7 @@
   "name": "solder",
   "displayName": "Solder",
   "description": "A lean coding agent in a side panel, for any OpenAI-compatible endpoint: models with tool calling, and models without it as Assist models. Organizations can enforce its settings with Group Policy or Intune.",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "publisher": "gremnar",
   "license": "MIT",
   "icon": "media/icon.png",

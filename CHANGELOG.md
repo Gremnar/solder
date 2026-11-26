@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.16 (2026-11-26)
 
 From an eight-reviewer engine review (2026-11-25), step 1:
 
