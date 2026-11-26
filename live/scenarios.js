@@ -1008,4 +1008,42 @@ SCENARIOS.push({
   },
 });
 
+// ---------------------------------------------------------------- a long session: earlier reads trimmed --
+// Six turns over six large files (about 9k tokens each): past about 40k tokens of earlier tasks' results, the oldest
+// are cut to stand-ins. The later turns need what the early ones read, so a cut either costs a re-read or a wrong edit.
+
+const SESSION = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"].map((name, i) => {
+  const lines = [`// The ${name} service: ${["billing", "shipping", "audit", "search", "mail", "reports"][i]}.`,
+    `const RATE_LIMIT = ${(i + 2) * 7};`, `const TIMEOUT_MS = ${[4500, 1200, 9800, 3100, 7700, 2600][i]};`, `const REGION = "${["north", "south", "east", "west", "central", "coast"][i]}";`, ""];
+  for (let f = 0; f < 140; f++) {
+    lines.push(`/** Step ${f} of the ${name} pipeline: scales and clamps a reading. */`,
+      `function step${f}(value, options = {}) {`, `  const scaled = value * ${(f % 9) + 1} + ${f};`,
+      `  const limit = options.limit ?? RATE_LIMIT * ${(f % 4) + 1};`, `  return Math.min(scaled, limit) / ${(f % 3) + 1};`, `}`, "");
+  }
+  lines.push(`module.exports = { RATE_LIMIT, TIMEOUT_MS, REGION, ${Array.from({ length: 140 }, (_, f) => `step${f}`).join(", ")} };`, "");
+  return [`src/${name}.js`, lines.join("\n")];
+});
+
+SCENARIOS.push({
+  name: "long-session",
+  about: "six turns over six large files: later turns need what earlier ones read, after those reads may have been cut",
+  setup: (w) => { for (const [name, text] of SESSION) w(name, text); },
+  task: "Read src/alpha.js and src/bravo.js in full, and tell me the RATE_LIMIT and TIMEOUT_MS of each.",
+  then: [
+    "Now read src/charlie.js and src/delta.js in full: their RATE_LIMIT and TIMEOUT_MS?",
+    "And src/echo.js and src/foxtrot.js in full: their RATE_LIMIT and TIMEOUT_MS?",
+    "In src/alpha.js, double RATE_LIMIT.",
+    "Of the six services, which has the largest TIMEOUT_MS, and which the smallest? Answer from what you already know.",
+    "In src/bravo.js, add an exported function describe() that returns \"bravo in \" + REGION, written in the same style as the file's other functions (with a /** */ comment above it).",
+  ],
+  check: ({ answer, read, load }) => {
+    try {
+      if (load("src/alpha.js").RATE_LIMIT !== 28) return "alpha's RATE_LIMIT isn't doubled to 28";
+      if (load("src/bravo.js").describe?.() !== "bravo in south") return "bravo.describe() is missing or wrong";
+    } catch (e) { return "doesn't run: " + /** @type {any} */ (e).message; }
+    if (!/\/\*\*[^]*?\*\/\s*function describe/.test(read("src/bravo.js"))) return "describe() has no /** */ comment above it";
+    return "";
+  },
+});
+
 module.exports = { SCENARIOS };
