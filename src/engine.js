@@ -14,9 +14,9 @@
  */
 
 const { Cancelled, sessionId } = require("./gateway.js");
-const { READ_ONLY, TEXTS, TOOLS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
+const { READ_ONLY, TEXTS, TOOLS, RESULTS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
-const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut } = require("./assist.js");
+const { sessionPlan, holdSession, parseReply, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten } = require("./assist.js");
 
 /** An Assist reply whose tool request can't be read is asked for again this many times, then the turn stops. */
 const MAX_REPAIRS = 2;
@@ -320,7 +320,8 @@ class Engine {
         // after a failure: then it goes back in the box, the error stays up with its Resume, and you choose. (Sent at
         // once it would be a new task, the interrupted one's reads would lose their place, and with the allowance
         // used up it would only fail again.)
-        this.emit({ type: "steer-unsent", chat: chat.id, ...this._queued(), text: this._queued().text, send: !stopped && !failed });
+        // A Stop that came after the answer arrived (while it was saved) is a Stop too: the answer is kept, the text isn't sent.
+        this.emit({ type: "steer-unsent", chat: chat.id, ...this._queued(), text: this._queued().text, send: !stopped && !failed && !controller.signal.aborted });
         this.steers = [];
       }
       this.emit({ type: "busy", chat: chat.id, busy: false });
@@ -529,8 +530,9 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
     // check waits a moment for its language server; one after each edit made twenty edits twenty waits, and reported
     // the errors a half-made change always has.)
     const group = calls[0]?.id || "";
-    const editsTo = calls.map((other) => other.function.name === "edit_file" ? pathKey(argumentsOf(other).path) : "");
     const parsedAll = calls.map((call, index) => parseArguments(call.function.name, call.function.arguments, cutOff && index === calls.length - 1));
+    // By the arguments as they're run (another agent's name for path, a call's slips forgiven), not as written.
+    const editsTo = calls.map((other, index) => other.function.name === "edit_file" ? pathKey(parsedAll[index].args.path) : "");
     // Reads started ahead of their turn (see READS_AT_ONCE): the call's place in the reply, and its result on the way.
     /** @type {Map<number, Promise<ToolResult>>} */
     const ahead = new Map();
@@ -599,10 +601,13 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         result = await work;
         // Arguments the tool doesn't take were left out: said once, so the next call can drop or rename them.
         if (parsed.ignored?.length) result = { ...result, output: result.output + "\n\n" + TEXTS.ignored(name, parsed.ignored) };
-        if (result.failed && !READ_ONLY.has(name) && !signal.aborted) {
-          // A no from you, or a move or removal that failed, stops everything after it. An edit or a write that
-          // failed stops only what was built on it.
-          if (/** @type {any} */ (result).declined || (name !== "edit_file" && name !== "write_file")) skip = TEXTS.notRun;
+        if (/** @type {any} */ (result).declined && !signal.aborted) {
+          // A no from you stops everything after it, a read you declined as much as a change.
+          skip = TEXTS.notRun;
+        } else if (result.failed && !READ_ONLY.has(name) && !signal.aborted) {
+          // A move or removal that failed stops everything after it. An edit or a write that failed stops only what
+          // was built on it.
+          if (name !== "edit_file" && name !== "write_file") skip = TEXTS.notRun;
           else failedFiles.add(pathKey(parsed.args.path));
         }
         if (signal.aborted) skip = TEXTS.notRunStopped;
@@ -621,12 +626,18 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
       this.emit({ type: "message", chat: chat.id });
     }
     // A file's problems still waiting (its later edit failed or didn't run) go with its last edit that ran.
+    let settled = false;
     for (const left of this.host.settleEdits ? await this.host.settleEdits(group) : []) {
       const message = [...added].reverse().find((m) => m.meta?.name === "edit_file" && !m.meta.failed
         && editsTo[calls.findIndex((c) => c.id === m.tool_call_id)] === pathKey(left.path));
       if (!message) continue;
       message.content += left.text;
       message.meta.summary += left.summary;
+      settled = true;
+    }
+    if (settled) {
+      await this._save(chat);
+      this.emit({ type: "message", chat: chat.id });
     }
     // A file read again in this task: its older copy is cut (the newer one holds the same lines).
     if (added.some((m) => m.meta?.name === "read_file" && !m.meta.failed) && supersedeReads(chat)) await this._save(chat);
@@ -917,12 +928,16 @@ const STOPPED = Symbol("stopped");
 /** A promise's value, or STOPPED as soon as the signal fires (the work goes on, its result unused). @param {Promise<any>} work @param {AbortSignal} signal */
 function untilStopped(work, signal) {
   work.catch(() => {}); // if it's left behind, its failure is nobody's
+  /** @type {() => void} */
+  let onAbort = () => {};
   const stopped = new Promise((resolve) => {
+    onAbort = () => resolve(STOPPED);
     if (signal.aborted) resolve(STOPPED);
-    else signal.addEventListener("abort", () => resolve(STOPPED), { once: true });
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
-  // The work first: a result that's already there wins over a stop that came at the same moment.
-  return Promise.race([work, stopped]);
+  // The work first: a result that's already there wins over a stop that came at the same moment. However it ends, the
+  // listener goes (a batch of reads left one each on the signal).
+  return Promise.race([work, stopped]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
 /** The chat as the model gets it: the system message, the recap (if compacted), then what's after it. */
@@ -1040,10 +1055,10 @@ function repeatReads(chat) {
       const key = pathKey(call.args.path);
       if (!key) continue;
       out.reads++;
-      // The lines that came back: the summary says when it was part of the file, else all of it.
-      const part = /lines ([\d,]+)–([\d,]+) of/.exec(String(message.meta?.summary ?? ""));
-      const from = part ? Number(part[1].replace(/,/g, "")) : 1;
-      const to = part ? Number(part[2].replace(/,/g, "")) : Infinity;
+      // The lines that came back, as the summary says; none (past the end, a skill): nothing to repeat or be repeated.
+      const lines = linesRead(message);
+      if (!lines) continue;
+      const { from, to } = lines;
       const before = seen.get(key) || [];
       // A covering read still whole in the chat makes this one avoidable, whatever older ones were cut.
       const covers = (/** @type {{from: number, to: number}} */ read) => read.from <= from && read.to >= to;
@@ -1216,11 +1231,20 @@ function resultText(message) {
   return (message.meta.superseded ? TEXTS.superseded(message.meta.summary) : TEXTS.stub(message.meta.summary)) + (message.meta.keep ? "\n\n" + message.meta.keep : "");
 }
 
-/** The lines a read_file result brought back: its summary says when it was part of the file, else all of it. @param {Stored} message */
+/**
+ * The lines a read_file result brought back, by its summary as read_file words it for a file's text: "Read a.js · lines
+ * 10–50 of 400" (part of it) or "Read a.js · 400 lines" (all of it). Null for any other result, which holds no lines of
+ * the file: a read past its end, a skill (or one already in the chat). @param {Stored} message
+ */
 function linesRead(message) {
-  const part = /lines ([\d,]+)–([\d,]+) of/.exec(String(message.meta?.summary ?? ""));
-  return { from: part ? Number(part[1].replace(/,/g, "")) : 1, to: part ? Number(part[2].replace(/,/g, "")) : Infinity };
+  const read = /^Read\b.*? · (?:lines ([\d,]+)–([\d,]+) of [\d,]+|[\d,]+ lines?)(?: · |$)/.exec(String(message.meta?.summary ?? ""));
+  if (!read) return null;
+  return { from: read[1] ? Number(read[1].replace(/,/g, "")) : 1, to: read[2] ? Number(read[2].replace(/,/g, "")) : Infinity };
 }
+
+/** read_file's note on a long line it showed only the start of (RESULTS.longLine), as a pattern for either wording. */
+const SHORTENED_LINE = new RegExp([true, false].map((readable) => RESULTS.longLine(98765, 43210, readable)
+  .replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/98765/g, "\\d+").replace(/43,?210/, "[\\d,]+")).join("|"));
 
 /**
  * When the task reads lines of a file it has read before, the older copy is cut to a line: the newer one, right
@@ -1245,9 +1269,11 @@ function supersedeReads(chat) {
     const key = pathKey(call.args.path);
     if (!key) continue;
     const now = linesRead(message);
+    if (!now) continue; // no lines of the file came back (past its end, a skill): it covers nothing
     const before = seen.get(key) || [];
-    // A read that came back capped (its middle left out) doesn't hold all the lines it names.
-    const whole = !message.meta?.stub && message.content.length < MAX_RESULT_CHARS;
+    // A read that came back capped (its middle left out), or with long lines shown only by their start, doesn't hold
+    // all the lines it names.
+    const whole = !message.meta?.stub && message.content.length < MAX_RESULT_CHARS && !SHORTENED_LINE.test(message.content);
     if (whole) {
       for (const old of before) {
         if (old.message.meta?.stub || old.message.meta?.keep || old.message.content.length <= STUB_MIN_CHARS) continue;
@@ -1327,6 +1353,8 @@ function parseArguments(/** @type {string} */ name, /** @type {string} */ text, 
     const alias = (/** @type {Record<string, string[]>} */ (ALIASES)[arg] || []).find((other) => other in args && !Object.hasOwn(/** @type {any} */ (properties), other));
     if (alias) { args[arg] = args[alias]; delete args[alias]; }
   }
+  // A Windows path with single backslashes: its \t and \n read as a tab and a line break, put back (paths only).
+  pathsAsWritten(args);
   // Every missing argument at once, and any the tool doesn't take (old_string for old_text): one retry, not several.
   const ignored = Object.keys(args).filter((arg) => !Object.hasOwn(/** @type {any} */ (properties), arg));
   const absent = required.filter((arg) => args[arg] === undefined || args[arg] === null
@@ -1466,8 +1494,9 @@ function transcriptOf(chat, start, end, budget) {
 /** @param {number} ms @param {AbortSignal} signal */
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Cancelled()); }, { once: true });
+    const onAbort = () => { clearTimeout(timer); reject(new Cancelled()); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(undefined); }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

@@ -438,7 +438,10 @@ class DocsIndex {
     this.sharedMisses = new Map();
     /** The last search by meaning: its best similarity, the floor, and how many passages were at or above it. @type {{best: number, floor: number, kept: number} | null} */
     this.lastNearest = null;
-    /** The vectors in memory for searching, until they change. @type {{model: string, version: number, ids: number[], dims: number, all: Float32Array} | null} */
+    /**
+     * The vectors in memory for searching, until they change (here, or in another window: `shared` is the connection's data_version).
+     * @type {{model: string, version: number, shared: number, ids: number[], dims: number, all: Float32Array} | null}
+     */
     this.loaded = null;
     this.version = 0;
     /** @type {string[] | null} the folders listed now (their keys): searches and counts cover only these */
@@ -492,6 +495,7 @@ class DocsIndex {
   close() {
     try { this.db?.close(); } catch { /* already closed */ }
     this.db = null;
+    this.loaded = null; // its data_version belonged to that connection
   }
 
   /** How many files the index holds. */
@@ -684,15 +688,16 @@ class DocsIndex {
       this.embedding.done += rows.length;
       this.embedding.tokens += answer.tokens;
       this.embedding.runTokens += answer.tokens;
-      embed.spend?.(answer.tokens);
+      // What the batch used: the gateway's own count where it gives one, else four characters a token (so a gateway
+      // that sends no count still spends from today's budget, and is still paced).
+      const used = answer.tokens > 0 ? answer.tokens : Math.ceil(texts.reduce((sum, text) => sum + text.length, 0) / 4);
+      embed.spend?.(used);
       embed.onBatch?.(rows.length, answer.tokens);
       // Paced to a rate (tokens a minute), where one is set: a gateway that allows so many a minute refuses the rest,
       // and a big folder sent as fast as it goes passes that within the first minute. Each batch takes at least the
-      // time its tokens are worth at the rate, so no minute goes over. The gateway's own count where it gives one,
-      // else four characters a token.
+      // time its tokens are worth at the rate, so no minute goes over.
       const rate = embed.perMinute ? Number(embed.perMinute()) : 0;
       if (rate > 0) {
-        const used = answer.tokens > 0 ? answer.tokens : Math.ceil(texts.reduce((sum, text) => sum + text.length, 0) / 4);
         const wait = Math.min(PACE_MAX_MS, used / rate * 60_000 - (Date.now() - began));
         if (wait > 0) {
           this.embedding.pacing = true;
@@ -720,7 +725,10 @@ class DocsIndex {
    */
   nearest(query, model, limit, floor = 0) {
     this.lastNearest = { best: 0, floor, kept: 0 };
-    if (!this.loaded || this.loaded.model !== model || this.loaded.version !== this.version) {
+    // Another window may have changed the shared file: its commits move this connection's data_version (ours don't;
+    // this.version covers those).
+    const shared = Number(this._open().prepare("PRAGMA data_version").get().data_version);
+    if (!this.loaded || this.loaded.model !== model || this.loaded.version !== this.version || this.loaded.shared !== shared) {
       const listed = this._inListed("key");
       const rows = this._open().prepare(`SELECT sid, vec FROM vectors WHERE model = ? AND ${listed.sql}`).all(model, ...listed.values);
       const dims = rows.length ? rows[0].vec.byteLength / 4 : 0;
@@ -730,7 +738,7 @@ class DocsIndex {
         const vec = new Float32Array(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength / 4);
         if (vec.length === dims) { all.set(vec, ids.length * dims); ids.push(Number(row.sid)); }
       });
-      this.loaded = { model, version: this.version, ids, dims, all: all.subarray(0, ids.length * dims) };
+      this.loaded = { model, version: this.version, shared, ids, dims, all: all.subarray(0, ids.length * dims) };
     }
     const { ids, dims, all } = this.loaded;
     const target = normalised(query);

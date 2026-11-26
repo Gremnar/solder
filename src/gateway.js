@@ -284,7 +284,7 @@ class GatewayClient {
 
   /**
    * One vector per text, in order, from the gateway's /embeddings (next to /chat/completions). Busy answers are
-   * retried like replies; nothing is ever shown from an embedding, so a resend can't repeat anything.
+   * retried like replies; a failure the gateway may have worked on (and billed) isn't, as with replies.
    * @param {{model: string, input: string[], signal?: AbortSignal}} request
    * @returns {Promise<{vectors: number[][], tokens: number, credits: Credits | null}>}
    */
@@ -301,12 +301,16 @@ class GatewayClient {
           const value = parseJson(text);
           const data = Array.isArray(value.data) ? value.data : null;
           if (!data || data.length !== input.length) throw new GatewayError("The embeddings didn't come back one for each text.");
-          /** @type {number[][]} */
-          const vectors = new Array(input.length);
+          // Each vector in its text's place: by its index (in range, once each, every place filled), else in order.
+          /** @type {any[]} */
+          const vectors = new Array(input.length).fill(null);
+          let placed = true;
           data.forEach((/** @type {any} */ item, /** @type {number} */ position) => {
-            vectors[Number.isInteger(item?.index) ? item.index : position] = item?.embedding;
+            const slot = Number.isInteger(item?.index) ? item.index : position;
+            if (slot < 0 || slot >= input.length || vectors[slot] !== null) placed = false;
+            else vectors[slot] = item?.embedding;
           });
-          if (vectors.some((vector) => !Array.isArray(vector) || !vector.length || typeof vector[0] !== "number")) {
+          if (!placed || vectors.some((vector) => !Array.isArray(vector) || !vector.length || typeof vector[0] !== "number")) {
             throw new GatewayError("The embeddings didn't come back as lists of numbers.");
           }
           const usage = value.usage || {};
@@ -318,7 +322,8 @@ class GatewayClient {
         failure = error;
       }
       const e = /** @type {any} */ (failure);
-      if (!(failure instanceof GatewayError) || !e.transient || e.exhausted || attempt >= this.maxRetries) throw failure;
+      // Never resent when the gateway may have worked on it (and billed it): only busy refusals and requests that never went out.
+      if (!(failure instanceof GatewayError) || !e.transient || e.uncertain || e.exhausted || attempt >= this.maxRetries) throw failure;
       await sleep(e.retryAfterMs ?? BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)], signal);
     }
   }
@@ -381,11 +386,17 @@ class GatewayClient {
       let sent = false;
       /** @type {ChatStream | null} */
       let reader = null;
-      /** Every failure carries what streamed before it (a reset, a timeout and Stop too). @param {any} error */
+      /**
+       * Every failure carries what streamed before it (a reset, a timeout and Stop too), and the usage the gateway
+       * already reported (billed, so counted, once: only where the error has none of its own). @param {any} error
+       */
       const fail = (error) => {
         if (settled) return;
         settled = true;
         if (error instanceof GatewayError && reader && !error.partial) error.partial = reader.text;
+        if (error instanceof GatewayError && reader && /** @type {any} */ (error).usage === undefined && Object.keys(reader.usage).length) {
+          /** @type {any} */ (error).usage = reader.usage;
+        }
         reject(error);
         req.destroy();
       };
@@ -460,10 +471,15 @@ class GatewayClient {
           ...(this.apiKey ? { Authorization: "Bearer " + this.apiKey } : {}) } });
       // A request that went out may have been seen (and billed): never sent again on its own.
       req.setTimeout(ms, () => req.destroy(new GatewayError("The gateway took too long to answer.", { transient: true, uncertain: !!body })));
+      // Once a body has gone out, a connection that then fails may have been worked on (as _streamOnce tracks it).
+      let sent = false;
+      req.on("finish", () => { sent = true; });
       req.on("error", (error) => reject(signal?.aborted ? new Cancelled()
-        : error instanceof GatewayError ? error : this._transportFailure(error)));
-      req.on("response", (res) => collect(res, this.maxResponseBytes)
-        .then((text) => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }), reject));
+        : error instanceof GatewayError ? error : this._transportFailure(error, sent && !!body)));
+      req.on("response", (res) => {
+        sent = true;
+        collect(res, this.maxResponseBytes).then((text) => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }), reject);
+      });
       req.end(body ?? undefined);
     });
   }
@@ -692,8 +708,12 @@ class SseParser {
     try { text = this.decoder.decode(chunk, { stream: true }); } catch {
       throw new GatewayError("The gateway's stream wasn't valid UTF-8.");
     }
-    if (this.afterCr && text.startsWith("\n")) text = text.slice(1);
-    if (text) this.afterCr = false;
+    // The CR's partner is looked for in the first characters to arrive: a chunk that decodes to none (part of a
+    // character) leaves it waiting; any other, LF or not, settles it.
+    if (this.afterCr && text) {
+      this.afterCr = false;
+      if (text.startsWith("\n")) text = text.slice(1);
+    }
     this.buffer += text;
     /** @type {string[]} */
     const events = [];
@@ -808,4 +828,4 @@ function sleep(ms, signal) {
   });
 }
 
-module.exports = { sessionOf, sessionId, GatewayClient, GatewayError, Cancelled, credits, NATIVE_MAX_TOKENS, TOOL_QUIET_MS };
+module.exports = { sessionOf, sessionId, GatewayClient, GatewayError, Cancelled, credits, SseParser, NATIVE_MAX_TOKENS, TOOL_QUIET_MS };

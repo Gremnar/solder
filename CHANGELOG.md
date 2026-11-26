@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+Fixes from an eight-reviewer bug hunt (2026-11-25). Nothing looks or works differently, except that these no longer happen.
+
+- **Paste in terminal:**
+  - PowerShell code whose braces don't balance (a stray `}`) is no longer sent as one `. { … }` command: the `}` closed it early, and the lines after it ran as they arrived, without Enter. It's asked about first, as other terminals are.
+  - Something you copied while a paste was going in is no longer overwritten when the clipboard is put back.
+- **Files and Undo:**
+  - `write_file` on an open file that changed on disk unnoticed (network drives) brings it up to date first, so Undo and Review use what was really there, and a write is never wrongly called "unchanged".
+  - A file whose details couldn't be read for a moment is no longer overwritten as if it were new, with no backup.
+  - Typing in a file while Solder waits for its problems check is no longer taken for part of Solder's edit: Undo refuses, as for any change of yours since.
+  - A binary file is refused cleanly, and an `old_text` that was only a line number no longer locks up the window.
+- **What the model is shown:**
+  - Search results keep the file's own backslashes (`C:\Temp` came back as `C:/Temp`).
+  - A read past a file's end, or one that shortened long lines, no longer replaces an earlier full read.
+  - Merge conflicts in `changes` are reported as conflicts.
+  - A subfolder's AGENTS.md is found when the workspace is a drive root (`Z:\`).
+- **Reading the model's requests (both lanes):**
+  - Valid requests are taken exactly as written: a `,]` or `,}` inside a file's text is no longer removed.
+  - A Windows path written with single backslashes keeps its `\t` and `\n` (`src\tools\new.ps1`).
+  - On the Assist lane, a broken request no longer swallows the requests after it, and a block holding a list of requests runs each one.
+  - A read you decline stops the rest of that reply, as a declined change does.
+- **Chats and windows:**
+  - Changing the working folder while a task runs in that chat applies from the next message: the running task, and any change waiting for your answer, stay where they started.
+  - A folder chosen for a chat made in another window is saved so it means the same folder. A chat whose folder isn't in this window's workspace says so, instead of working in this window's first folder.
+  - File links in the chat you're reading open that chat's files, not those of a task running in another chat.
+  - Deleting a chat's last turn no longer deletes turns another window saved meanwhile. A late save of a deleted chat no longer brings it back. A chats folder that can't be listed for a moment no longer leaves the spinner going.
+  - "Summarise, then switch" acts on the chat it was asked in, even if you opened another meanwhile; so do Rename and Delete.
+  - Stop pressed while the last answer was being saved no longer sends the message you'd queued.
+  - The status bar shows the open chat's tokens.
+- **Setup, Settings and the key:**
+  - Closing Settings, or the guided setup, while a save or Check connection is still going no longer shows an error.
+  - Going Back in the guided setup to change the gateway clears the key typed for the old one.
+  - Your organization's model filter applies in the guided setup and Check connection as it does in chats.
+  - The key is loaded at start, so Explain this run before the side bar is opened sends it; a key changed in one window is used by the others.
+  - Model lists that come back out of order no longer replace a newer one.
+  - Settings applies folder changes to the folders as they are now (another window's changes stay), and keeps Assist models the filter hides; moving the last Assist model to Tool sticks.
+- **Projects and export:**
+  - Read it first opens a project you picked yourself, and each Edit under a project's Rules opens its own file.
+  - A project's skills folder that's a link leading out of the project isn't read or written. Rename keeps the project's skill switches.
+  - Export names folders it couldn't read, keeps a file beside the zip whose name starts the same, and Stop leaves an existing zip as it was.
+- **Docs and embeddings:**
+  - An embedding batch the gateway may have seen is no longer sent again (billed twice).
+  - Results with bad positions are refused, not stored against the wrong passage.
+  - A gateway that sends no token count still spends from the daily budget.
+  - Search by meaning sees another window's reindex.
+- **Streaming:** a reply cut off after the gateway reported its tokens counts them, and an event split across three chunks at a CR is read.
+- **Webview:** code inside a Markdown link stays part of that link, and a step no longer goes missing when the next reply starts within a second.
+
 ## 0.3.14 (2026-11-25)
 
 - **Fix: Paste in terminal broke multi-line PowerShell.** PowerShell runs each pasted line as soon as it ends, so an `if { }` ran before the `else` on the next line arrived, and that line failed on its own (the same for `catch`, or a line starting with `|` or `.Method()`). In a terminal VS Code says is PowerShell, several lines now go in as one command, wrapped in `. { … }`: nothing runs until you press **Enter**, it then runs as a script would, and its variables stay in your terminal. It isn't asked about any more there, since nothing runs early. Code with `using` goes in as before. Other terminals are as they were.

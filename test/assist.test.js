@@ -186,7 +186,7 @@ test("the requests being written, for the panel's progress line: the tool, the f
 });
 
 test("a switch to another Assist model: whether the conversation it would be carried over in would leave its start out", () => {
-  const { wouldLeaveOut } = require("../src/assist.js");
+  const { wouldLeaveOut, prefixHash } = require("../src/assist.js");
   const resultText = (/** @type {any} */ m) => m.content;
   const chat = { messages: /** @type {any[]} */ ([]), compaction: null, assist: /** @type {any} */ (null) };
   for (let turn = 0; turn < 30; turn++) {
@@ -202,7 +202,7 @@ test("a switch to another Assist model: whether the conversation it would be car
   assert.equal(left.budget, 10_000);
   assert.equal(left.first, true);
   // The same model, whose session holds the chat already: nothing is carried over.
-  chat.assist = { fields: { session: "s1", token: "t1" }, model: "model-b", held: chat.messages.length };
+  chat.assist = { fields: { session: "s1", token: "t1" }, model: "model-b", held: chat.messages.length, heldHash: prefixHash(chat.messages, chat.messages.length) };
   assert.equal(wouldLeaveOut(chat, "model-b", { assistSessionBlock: "test_session", assistCarryTokens: 10_000 }, context, resultText), null);
   assert.ok(wouldLeaveOut(chat, "model-c", { assistSessionBlock: "test_session", assistCarryTokens: 10_000 }, context, resultText), "another model starts with nothing");
   // After a summary, the left-out part is in it: the start isn't lost (and here it all fits).

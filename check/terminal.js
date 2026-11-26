@@ -65,6 +65,13 @@ async function main() {
     await panel.onMessage({ type: "pasteInTerminal", text: `$text = @'\nline one\n\n    line three\n'@\n$text | Set-Content '${here}'` });
     enter();
     check("... a here-string keeps its blank line and indent", await until(() => read(here), 8000) === "line one\n\n    line three", String(read(here)));
+
+    // A stray } would close the wrapper early, and the lines after it would run as they arrive, with no Enter: code
+    // whose braces don't balance isn't wrapped, and is asked about first (no answer here: nothing goes in).
+    const early = path.join(T, "early.txt");
+    await panel.onMessage({ type: "pasteInTerminal", text: `Get-Date\n}\n'ran early' | Set-Content '${early}'\n{` });
+    await sleep(2500);
+    check("code with a stray } isn't wrapped: it's asked about first, and nothing runs", warned.length === 1 && read(early) === null, [warned, read(early)]);
   } finally {
     own.window.showWarningMessage = old;
     term.dispose();

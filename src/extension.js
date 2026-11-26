@@ -6,7 +6,7 @@
  * extension host: what matters behind a corporate proxy).
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy } = require("./config.js");
+const { config: solderSettings, policy, modelAllowed, MODEL_FILTER_BROKEN } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { laneOf, probeTools, withAssist } = require("./lanes.js");
 const { SolderPanel, KEY } = require("./panel.js");
@@ -48,8 +48,9 @@ async function activate(context) {
   const output = vscode.window.createOutputChannel("Solder");
   const panel = new SolderPanel(context, output);
   // A key saved before Solder kept the gateway with it is the gateway's that's set now: settled here, at the start,
-  // before the address can be changed.
-  await panel.savedKey.get().catch(() => "");
+  // before the address can be changed. Loaded into the panel too: an editor command (Explain this) or the docs index
+  // can send before the side bar is ever opened, and must send the key.
+  await panel.loadKey().catch(() => {});
   // Not set up yet: offer the guided setup once per start (the panel's welcome offers it too).
   panel.setup.needed().then(async (needed) => {
     if (!needed) return;
@@ -58,6 +59,8 @@ async function activate(context) {
     if (pick === "Guided setup") await vscode.commands.executeCommand("solder.setup");
   }, () => {});
   context.subscriptions.push(
+    // The key changed in another window (saved, replaced or removed): this window sends the one saved now.
+    context.secrets.onDidChange(() => { panel.loadKey().catch(() => {}); }),
     output,
     vscode.window.registerWebviewViewProvider("solder.chat", panel, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("solder.setApiKey", async () => {
@@ -157,12 +160,22 @@ async function checkConnection(savedKey, output, refresh) {
     const filter = config.get("modelFilter", "");
     if (filter) {
       try { const pattern = new RegExp(filter, "i"); models = models.filter((id) => pattern.test(id)); }
-      catch { log("The model filter isn't a valid regular expression; showing every model."); }
+      catch {
+        // Your organization's filter that won't read offers nothing, here as everywhere (it fails closed).
+        if (policy.locked("modelFilter")) { log(MODEL_FILTER_BROKEN); vscode.window.showErrorMessage(`Solder: ${MODEL_FILTER_BROKEN}`); return; }
+        log("The model filter isn't a valid regular expression; showing every model.");
+      }
     }
     log(`${models.length} model(s): ${models.join(", ") || "none"}`);
     const model = config.get("model", "") || (models.length ? await vscode.window.showQuickPick(models,
       { placeHolder: "A model for the tool round trip" }) : "");
     if (!model) return;
+    const allowed = modelAllowed();
+    if (allowed && !allowed(model)) {
+      log(`Your organization doesn't allow the model ${model}: nothing is sent to it.`);
+      vscode.window.showErrorMessage(`Solder: your organization doesn't allow the model ${model}. Pick another in the model menu.`);
+      return;
+    }
     const kinds = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
     if (laneOf(model, kinds) === "assist") {
       log(`${model} is set as an Assist model: Solder sends it no tools (it writes its tool requests as text), so there's no tool call to test.`);

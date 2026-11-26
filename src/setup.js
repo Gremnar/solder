@@ -6,7 +6,7 @@
  * "Set API key" would put it: user settings, and VS Code's secret storage for the key.
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
+const { config: solderSettings, policy, readOnly, allowChanges, modelAllowed, MODEL_FILTER_BROKEN } = require("./config.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { laneOf, bestModel, probeTools, withAssist } = require("./lanes.js");
 
@@ -70,30 +70,36 @@ class SetupWizard {
     const action = String(message.action || "");
     if (action === "cancel" || action === "finish") { this.view = null; this.changed(); return; }
     if (action === "back") { this.go(view.steps[Math.max(0, view.steps.indexOf(view.step) - 1)]); return; }
+    // The step this message came from. A wait below (a save, a check) can end after setup was closed, restarted or
+    // taken Back: what comes back then stays with the step that asked, and doesn't move setup on.
+    const step = view.step;
+    const current = () => this.view === view && view.step === step;
+    const go = (/** @type {string} */ next) => { if (current()) this.go(next); };
+    const changed = () => { if (current()) this.changed(); };
     const after = (/** @type {string} */ step) => view.steps[view.steps.indexOf(step) + 1] || "done";
     const config = solderSettings();
     const save = (/** @type {string} */ name, /** @type {any} */ value) => config.update(name, value, vscode.ConfigurationTarget.Global);
     switch (view.step) {
       case "endpoint": {
         const endpoint = String(message.endpoint || "").trim();
-        try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { view.error = messageOf(error); this.changed(); return; }
+        try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { view.error = messageOf(error); changed(); return; }
         view.endpoint = endpoint;
         await save("endpoint", endpoint);
         // The key step shows whether this gateway has a key: one saved for another gateway doesn't count, and isn't sent.
         view.hasKey = !!(await this.key.get(endpoint));
-        this.go(after("endpoint"));
+        go(after("endpoint"));
         return;
       }
       case "key": {
         const typed = String(message.key || "").trim();
-        if (action === "skipCheck") { view.models = []; this.go(after("key")); return; }
+        if (action === "skipCheck") { view.models = []; go(after("key")); return; }
         const gateway = String(config.get("endpoint", "") || view.endpoint);
         if (typed) await this.key.save(typed, gateway);
         const key = typed || await this.key.get(gateway);
         view.hasKey = !!key;
         view.busy = true;
         view.error = "";
-        this.changed();
+        changed();
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), CHECK_MS);
@@ -102,7 +108,11 @@ class SetupWizard {
           try { ids = await new GatewayClient({ endpoint: gateway, apiKey: key }).models(controller.signal); }
           finally { clearTimeout(timer); }
           const filter = String(config.get("modelFilter", ""));
-          if (filter) { try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); } catch { /* shown in settings */ } }
+          if (filter) {
+            try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); }
+            // Your own filter that won't read is shown in Settings; your organization's offers nothing (it fails closed).
+            catch { if (policy.locked("modelFilter")) throw new Error(MODEL_FILTER_BROKEN); }
+          }
           /** @type {Record<string, string>} */
           const names = config.get("modelNames", {}) || {};
           // Each model's kind: Tool models first, Assist models after them.
@@ -116,12 +126,12 @@ class SetupWizard {
           if (!view.model || !ids.includes(view.model)) {
             view.model = bestModel((tools.length ? tools : view.models).map((/** @type {any} */ m) => m.id)) || view.model;
           }
-          this.go(after("key"));
+          go(after("key"));
         } catch (error) {
           view.busy = false;
           view.error = error instanceof GatewayError && error.name === "Cancelled" ? "The gateway didn't answer within 30 seconds."
             : messageOf(error);
-          this.changed();
+          changed();
         }
         return;
       }
@@ -131,26 +141,27 @@ class SetupWizard {
           const offer = view.assistOffer;
           view.assistOffer = null;
           if (action === "markAssist" && offer) {
-            if (policy.locked("assistModels") || policy.locked("toolModels")) { view.error = "Your organization sets which models are Assist models."; this.changed(); return; }
+            if (policy.locked("assistModels") || policy.locked("toolModels")) { view.error = "Your organization sets which models are Assist models."; changed(); return; }
             const kinds = { toolModels: String(config.get("toolModels", "") || ""), assistModels: (config.get("assistModels", []) || []).map(String) };
             await save("assistModels", withAssist(view.models.map((/** @type {any} */ m) => m.id), kinds, offer.model));
             view.models = view.models.map((/** @type {any} */ m) => m.id === offer.model ? { ...m, assist: true } : m);
           }
-          this.go(after("model"));
+          go(after("model"));
           return;
         }
         const model = String(message.model || "").trim();
-        if (!model) { view.error = "Choose a model, or type its id."; this.changed(); return; }
+        if (!model) { view.error = "Choose a model, or type its id."; changed(); return; }
         view.model = model;
         await save("model", model);
         // A model listed as a Tool model is asked to call a tool, once: one served without tool calling answers in
         // prose, and would look as if Solder didn't work. Then you're offered to mark it as an Assist model. A model
         // you typed, or one already marked as an Assist model, isn't tested; nor is anything when the test can't run.
         const listed = view.models.find((/** @type {any} */ m) => m.id === model);
-        if (listed && !listed.assist && !policy.locked("assistModels") && !policy.locked("toolModels")) {
+        const allowed = modelAllowed();
+        if (listed && !listed.assist && !policy.locked("assistModels") && !policy.locked("toolModels") && (!allowed || allowed(model))) {
           view.busy = true;
           view.error = "";
-          this.changed();
+          changed();
           let calls = true;
           try {
             const controller = new AbortController();
@@ -163,10 +174,10 @@ class SetupWizard {
             } finally { clearTimeout(timer); }
           } catch { calls = true; } // couldn't tell: as it was
           view.busy = false;
-          if (!this.view) return; // setup closed meanwhile
-          if (!calls) { view.assistOffer = { model, name: listed.name }; this.changed(); return; }
+          if (!current()) return; // setup closed, restarted or taken Back meanwhile
+          if (!calls) { view.assistOffer = { model, name: listed.name }; changed(); return; }
         }
-        this.go(after("model"));
+        go(after("model"));
         return;
       }
       case "docs": {
@@ -176,27 +187,27 @@ class SetupWizard {
           for (const uri of picked || []) {
             if (!view.docs.some((/** @type {any} */ d) => d.path.toLowerCase() === uri.fsPath.toLowerCase())) view.docs.push({ path: uri.fsPath, about: "" });
           }
-          this.changed();
+          changed();
           return;
         }
-        if (action === "removeDocs") { view.docs.splice(Number(message.index), 1); this.changed(); return; }
+        if (action === "removeDocs") { view.docs.splice(Number(message.index), 1); changed(); return; }
         const abouts = Array.isArray(message.abouts) ? message.abouts : [];
         view.docs = view.docs.map((/** @type {any} */ d, /** @type {number} */ i) => ({ path: d.path, about: String(abouts[i] ?? d.about ?? "").trim() }));
         await save("docsFolders", view.docs.map((/** @type {any} */ d) => d.about ? { path: d.path, about: d.about } : d.path));
-        this.go(after("docs"));
+        go(after("docs"));
         return;
       }
       case "rules": {
         view.rules = String(message.rules ?? "").trim();
         await save("rules", view.rules);
-        this.go(after("rules"));
+        go(after("rules"));
         return;
       }
       case "changes": {
         // Enable tools turns read-only mode off for good; Keep read-only leaves it as it is.
         if (action === "allowChanges") await allowChanges();
         view.readOnly = readOnly();
-        this.go(after("changes"));
+        go(after("changes"));
         return;
       }
     }

@@ -174,3 +174,17 @@ test("a turn's working time reads as seconds, minutes and seconds, or hours and 
   assert.equal(panel.workedFor(615_000), "10m 15s");
   assert.equal(panel.workedFor(3_840_000), "1h 4m");
 });
+
+test("code inside a link stays the link's own: plain code in its label, its backticks as text in its address", () => {
+  const labelled = markdown("See [`src/panel.js`](https://example.com/docs) for more.");
+  assert.equal((labelled.match(/<a /g) || []).length, 1, labelled);
+  assert.match(labelled, /<a href="https:\/\/example\.com\/docs"[^>]*><code>src\/panel\.js<\/code><\/a>/);
+  const addressed = markdown("[click](https://example.com/`a/b`)");
+  assert.equal((addressed.match(/<a /g) || []).length, 1, addressed);
+  assert.doesNotMatch(addressed, /href="[^"]*</, addressed);
+  const pathLink = markdown("[`app.js`](src/app.js)");
+  assert.equal((pathLink.match(/<a /g) || []).length, 1, pathLink);
+  assert.match(pathLink, /data-path="src\/app\.js"><code class="path">app\.js<\/code><\/a>/);
+  // A code span outside any link still becomes a file link, as before.
+  assert.match(markdown("Open `src/app.js` now."), /class="path-link" data-path="src\/app\.js"/);
+});

@@ -45,9 +45,17 @@
       .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
     // Links are set aside first, so a link's address keeps its underscores and stars (only its label is formatted).
     const links = [];
+    // Code inside a link is the link's own: plain code in its label (never a second, file link inside it), and its
+    // backticks kept as text in its address (never markup inside an attribute).
+    const codeIn = (/** @type {string} */ s, /** @type {"tag" | "text" | "bare"} */ as) => s.replace(/\u0000(\d+)\u0000/g, (m, n) => {
+      const code = codes[Number(n)];
+      if (code === undefined) return m;
+      return as === "tag" ? `<code>${escape(code)}</code>` : as === "text" ? escape("`" + code + "`") : escape(code);
+    });
     text = escape(text).replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label, href) => {
-      links.push(/^https?:/i.test(href)
-        ? `<a href="${href}" title="${href}">${emphasis(label)}</a>` : `<a href="#" class="path-link" data-path="${href}"><code class="path">${label}</code></a>`);
+      const address = codeIn(href, "text");
+      links.push(/^https?:/i.test(address)
+        ? `<a href="${address}" title="${address}">${codeIn(emphasis(label), "tag")}</a>` : `<a href="#" class="path-link" data-path="${address}"><code class="path">${codeIn(label, "bare")}</code></a>`);
       return `\u0001${links.length - 1}\u0001`;
     });
     text = emphasis(text).replace(/\u0001(\d+)\u0001/g, (m, n) => links[Number(n)] ?? m);
@@ -786,6 +794,11 @@
     const s = state.setup;
     for (const key of [...bornInTranscript.keys()]) if (key.startsWith("w:")) bornInTranscript.delete(key); // the welcome after it arrives anew
     if (!setupDraft) setupDraft = {};
+    // A key typed is kept only while its step is shown: back on the address, it goes, so a key typed for one gateway
+    // is never there, unseen behind the dots, when another gateway's key step opens.
+    if (s.step !== "key") delete setupDraft["setup-key"];
+    // A model picked from a list that's since changed (another gateway's): the one setup chose stands.
+    if (setupDraft["setup-model"] !== undefined && !s.models.some((/** @type {any} */ m) => m.id === setupDraft["setup-model"])) delete setupDraft["setup-model"];
     const keep = (/** @type {string} */ id, /** @type {string} */ value) => escape(setupDraft?.[id] ?? value ?? "");
     const order = s.steps.filter((/** @type {string} */ name) => name !== "done");
     const at = s.steps.indexOf(s.step);
@@ -1628,7 +1641,7 @@
     const notice = `<div id="projects-notice" class="settings-notice ${escape(p.noticeKind)}" role="status">${escape(p.notice)}</div>`;
     const rules = page.rules.length
       ? page.rules.map((/** @type {any} */ rule) => `<div class="pfile"><div class="pfile-head"><span class="pfile-name">${escape(rule.name)}</span><span class="grow"></span>` +
-          `<button class="link" data-prules="${at}">Edit</button></div><div class="answer pfile-text">${markdown(rule.text)}</div>` +
+          `<button class="link" data-prules="${at}" data-prule-name="${escape(rule.name)}">Edit</button></div><div class="answer pfile-text">${markdown(rule.text)}</div>` +
           (rule.cut ? `<div class="hint warn">Only its first 40,000 characters are used.</div>` : "") + `</div>`).join("")
       : `<div class="hint">This project has no ${escape(page.ruleName)} yet. It's a plain text file in the project's folder saying what the model should always know here ` +
         `(what the project is, the languages and versions, what not to touch).</div><div class="actions-row"><button class="link-button" data-prules="${at}">Create ${escape(page.ruleName)}</button></div>`;
@@ -1750,7 +1763,7 @@
     else if (d.pchat !== undefined) { focusInput = true; vscode.postMessage({ type: "projectChat", path: d.pchat }); }
     else if (d.ppage !== undefined) vscode.postMessage({ type: "projects", path: d.ppage });
     else if (d.pback !== undefined) vscode.postMessage({ type: "projects" });
-    else if (d.prules !== undefined) vscode.postMessage({ type: "projectRules", path: d.prules });
+    else if (d.prules !== undefined) vscode.postMessage({ type: "projectRules", path: d.prules, name: d.pruleName || "" });
     else if (d.preveal !== undefined) vscode.postMessage({ type: "projectReveal", path: d.preveal });
     else if (d.premove !== undefined) vscode.postMessage({ type: "projectRemove", path: d.premove });
     else if (d.pexport !== undefined) vscode.postMessage({ type: "projectExport", path: d.pexport });
@@ -1964,7 +1977,13 @@
       if (reveal.timer && state && message.chat.id === state.chat.id && !screen(message) && !screen(state)) { reveal.pending = message; return; }
       applyState(message);
     } else if (message.type === "live" && state) {
-      if (!message.text.startsWith(reveal.received)) resetReveal();
+      if (!message.text.startsWith(reveal.received)) {
+        // A new stream: a state still waiting for the last one's words to fade (the step between them) is shown first,
+        // not dropped with the old stream.
+        const waiting = reveal.pending;
+        resetReveal();
+        if (waiting) applyState(waiting);
+      }
       reveal.buffer += message.text.slice(reveal.received.length);
       reveal.received = message.text;
       if (!reveal.timer) stepReveal();
@@ -2252,7 +2271,15 @@
       if (el.hasAttribute("disabled")) return;
       if (d.setup === "finish" || d.setup === "cancel") focusInput = true;
       const extra = d.setup === "next" ? setupValues() : d.setup === "removeDocs" ? { index: Number(d.index) } : {};
-      if (d.setup === "removeDocs" && setupDraft) setupDraft = Object.fromEntries(Object.entries(setupDraft).filter(([k]) => !k.startsWith("about-")));
+      // The removed row's note goes; the notes typed for the rows after it move up with them.
+      if (d.setup === "removeDocs" && setupDraft) {
+        const gone = Number(d.index);
+        setupDraft = Object.fromEntries(Object.entries(setupDraft).flatMap(([k, v]) => {
+          if (!k.startsWith("about-")) return [[k, v]];
+          const i = Number(k.slice(6));
+          return i === gone ? [] : [[i > gone ? "about-" + (i - 1) : k, v]];
+        }));
+      }
       vscode.postMessage({ type: "setup", action: d.setup, ...extra });
     } else if (d.pickModel) pickModel(el);
     else if (d.open) { closeMenus(); vscode.postMessage({ type: "open", id: d.open }); }

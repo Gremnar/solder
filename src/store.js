@@ -49,6 +49,8 @@ class ChatStore {
     this.homeOf = scope.homeOf || (() => "");
     /** The last pass over the folder, kept for a moment (see all). @type {{at: number, items: any[]} | null} */
     this.listed = null;
+    /** The last pass that could list the folder: what's shown while it can't be (see all). @type {any[]} */
+    this.lastListed = [];
     /** @type {Map<string, any>} whole chats, once opened */
     this.cache = new Map();
     /** @type {Map<string, Promise<void>>} each chat's save in progress, so the next waits for it */
@@ -84,14 +86,18 @@ class ChatStore {
     // profile's storage is on a network drive, every chat file is a round trip. Anything this store saves or removes
     // throws it away at once; a chat changed by another window shows a moment later.
     if (this.listed && Date.now() - this.listed.at < 1000) return this.listed.items.slice();
+    let names;
+    // The folder can't be listed just now (a profile on a network drive): the last good list, never "no chats".
+    try { names = fs.readdirSync(this.folder); } catch { return this.lastListed.slice(); }
     const found = [];
-    for (const name of fs.readdirSync(this.folder)) {
+    for (const name of names) {
       if (!name.endsWith(".json")) continue;
       const summary = this.summary(name);
       if (summary) found.push(summary);
     }
     found.sort((a, b) => b.updated - a.updated);
     this.listed = { at: Date.now(), items: found };
+    this.lastListed = found;
     return found.slice();
   }
 
@@ -187,13 +193,27 @@ class ChatStore {
 
   /** Written to a temporary file first, so a crash mid-save never leaves half a chat. @param {any} chat */
   async save(chat) {
+    // Deleted in this window: a late save (a title arriving afterwards) doesn't bring it back, here or on disk.
+    if (this.removed.has(chat.id)) return;
     this.cache.set(chat.id, chat);
     if (!chat.messages.length) {
       // An empty chat isn't worth a file; one that had turns and lost them all (deleted, or its first message being
-      // edited) loses its file too, in its turn, or the old conversation would be back after a reload.
+      // edited) loses its file too, in its turn, or the old conversation would be back after a reload. What another
+      // window did since is settled first, as for any save: turns it added are kept (as a copy, when this window took
+      // turns away; as this chat's, when this window had none to lose), never deleted with it.
       const before = this.saving.get(chat.id) || Promise.resolve();
-      const gone = before.catch(() => {}).then(() => fs.promises.rm(this.file(chat.id), { force: true })).catch(() => {})
-        .then(() => { this.listed = null; this.known.set(chat.id, { stamp: "", hash: "", body: bodyOf(chat), set: settable(chat) }); });
+      const gone = before.catch(() => {}).then(async () => {
+        if (this.removed.has(chat.id)) return;
+        // Settling failed (the other window's turns couldn't be kept): the file stays as it is.
+        if (!(await this.settle(chat).catch(() => false))) return;
+        if (chat.messages.length) { // the other window's turns, now this chat's (or turns added here meanwhile)
+          if (chat.home === undefined) chat.home = this.homeOf(chat);
+          return this.write(chat);
+        }
+        await fs.promises.rm(this.file(chat.id), { force: true }).catch(() => {});
+        this.listed = null;
+        this.known.set(chat.id, { stamp: "", hash: "", body: bodyOf(chat), set: settable(chat) });
+      }).catch(() => {});
       this.listed = null;
       this.summaries.delete(chat.id + ".json");
       this.saving.set(chat.id, gone);
@@ -206,24 +226,29 @@ class ChatStore {
     const prior = this.saving.get(chat.id) || Promise.resolve();
     const mine = prior.catch(() => {}).then(async () => {
       if (this.removed.has(chat.id)) return; // deleted while this save waited: it doesn't come back
-      const target = this.file(chat.id);
       // What another window did to this chat since this one read or wrote it, settled first.
       if (!(await this.settle(chat))) return;
-      // A temporary file of this window's own: two windows saving the same chat don't write into each other's.
-      const temporary = `${target}.${process.pid}.tmp`;
-      const text = JSON.stringify(chat);
-      const body = bodyOf(chat);
-      const set = settable(chat);
-      await fs.promises.writeFile(temporary, text, "utf8");
-      if (this.removed.has(chat.id)) { await fs.promises.rm(temporary, { force: true }); return; }
-      await fs.promises.rename(temporary, target);
-      this.known.set(chat.id, { stamp: stampOf(target) ?? "", hash: sha(text), body, set });
-      this.listed = null;
+      await this.write(chat);
     });
     this.listed = null;
     this.saving.set(chat.id, mine);
     mine.finally(() => { if (this.saving.get(chat.id) === mine) this.saving.delete(chat.id); }).catch(() => {});
     return mine;
+  }
+
+  /** The chat written to its file, once settled. @param {any} chat */
+  async write(chat) {
+    const target = this.file(chat.id);
+    // A temporary file of this window's own: two windows saving the same chat don't write into each other's.
+    const temporary = `${target}.${process.pid}.tmp`;
+    const text = JSON.stringify(chat);
+    const body = bodyOf(chat);
+    const set = settable(chat);
+    await fs.promises.writeFile(temporary, text, "utf8");
+    if (this.removed.has(chat.id)) { await fs.promises.rm(temporary, { force: true }); return; }
+    await fs.promises.rename(temporary, target);
+    this.known.set(chat.id, { stamp: stampOf(target) ?? "", hash: sha(text), body, set });
+    this.listed = null;
   }
 
   /**

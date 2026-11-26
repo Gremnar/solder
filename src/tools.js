@@ -12,6 +12,7 @@ const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { StringDecoder } = require("node:string_decoder");
 const { RESULTS, TEXTS } = require("./prompt.js");
 const { DocsIndex, EmbedBudget, EmbedCache, meaningFloor, available: docsAvailable, documentText, isOffice, loose, SIGNED, signatureBlocks, decodeText } = require("./docs.js");
 const skills = require("./skills.js");
@@ -406,7 +407,9 @@ class WorkspaceTools {
     chat.agentsSeen = chat.agentsSeen || [];
     let folder = path.dirname(file.full);
     const notes = [];
-    while (folder.toLowerCase().startsWith(root.toLowerCase() + path.sep)) {
+    // A drive root (Z:\) already ends in its separator; the root folder itself is never walked (its own is read already).
+    const inRoot = (root.endsWith(path.sep) ? root : root + path.sep).toLowerCase();
+    while (folder.length > inRoot.length && folder.toLowerCase().startsWith(inRoot)) {
       for (const name of names) {
         const candidate = path.join(folder, name);
         const key = candidate.toLowerCase();
@@ -970,7 +973,9 @@ class WorkspaceTools {
         const { vectors, tokens } = await this.embedder(model, [query], AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
         // How near a passage must be to count: Solder's own floor, or yours.
         meaning = { vector: vectors[0], model, floor: meaningFloor(solderSettings().get("meaningFloor", 0)) };
-        if (!this.embedFree()) this.embedBudget().spend(tokens); // counted, but a search is never held back by the budget
+        // Counted, but a search is never held back by the budget. A gateway that gives no count: about four characters
+        // a token, as the docs index estimates it.
+        if (!this.embedFree()) this.embedBudget().spend(Number(tokens) > 0 ? Number(tokens) : Math.ceil(query.length / 4));
         this.onDocsLog?.(`docs search by meaning · ${tokens} tokens`);
       } catch (error) {
         if (signal.aborted) throw error;
@@ -1020,23 +1025,33 @@ class WorkspaceTools {
     if (!regex) args.push("--fixed-strings");
     // As find_files reads a glob: any case, backslashes as slashes, and a folder (or "folder/") as everything in it.
     if (glob) args.push("--glob-case-insensitive", "--glob", rgGlob(root, String(glob)));
-    args.push("--regexp", query, "--", ".");
+    // Paths printed with "/" (only the paths: a matched line's own backslashes are its text, kept as they are).
+    args.push("--path-separator", "/", "--regexp", query, "--", ".");
     return new Promise((resolve, reject) => {
       const child = spawn(rg, args, { cwd: root, windowsHide: true, signal });
       let out = "";
       let errors = "";
       let timedOut = false;
-      child.stdout.on("data", (chunk) => { if (out.length < 2_000_000) out += chunk; });
-      child.stderr.on("data", (chunk) => { errors += chunk; });
+      // Whether the spawn failed and the fallback search gives the answer (close then comes too, with nothing).
+      let fallingBack = false;
+      // A character split between two chunks is decoded whole.
+      const outText = new StringDecoder("utf8");
+      const errorText = new StringDecoder("utf8");
+      child.stdout.on("data", (chunk) => { if (out.length < 2_000_000) out += outText.write(chunk); });
+      child.stderr.on("data", (chunk) => { errors += errorText.write(chunk); });
       const timer = setTimeout(() => { timedOut = true; child.kill(); }, SEARCH_MS);
       child.on("error", (error) => {
         clearTimeout(timer);
+        fallingBack = true;
         if (signal.aborted) { reject(new ToolError(RESULTS.stopped)); return; }
         this._rg = null; // blocked or missing: fall back from now on
         this.searchInJs(root, query, regex, glob, caseSensitive).then((lines) => { /** @type {any} */ (lines).shownPaths = true; resolve(lines); }, reject);
       });
       child.on("close", (code) => {
         clearTimeout(timer);
+        if (fallingBack) return;
+        if (out.length < 2_000_000) out += outText.end();
+        errors += errorText.end();
         if (code === 2 && !out) {
           const lines = errors.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
           // ripgrep explains a bad pattern on the lines after "regex parse error:"; keep the explanation.
@@ -1046,7 +1061,7 @@ class WorkspaceTools {
         }
         // Stopped at the time limit: what it found so far isn't the whole answer, and nothing found isn't "none".
         if (timedOut && !out.trim()) { reject(new ToolError(RESULTS.searchTimedOut(SEARCH_MS / 1000))); return; }
-        const lines = out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, "").replace(/\\/g, "/"));
+        const lines = out.split(/\r?\n/).filter(Boolean).map((line) => line.replace(/^\.[\\/]/, ""));
         const shown = lines.some((line) => line.endsWith(RG_OMITTED)) ? aroundLongMatches(lines, root, query, regex, caseSensitive) : lines;
         if (timedOut) /** @type {any} */ (shown).incomplete = true;
         resolve(shown);
@@ -1139,6 +1154,9 @@ class WorkspaceTools {
     edit.replace(file.uri, new vscode.Range(document.positionAt(start), document.positionAt(start + length)), replaced);
     if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
     await saveOrRevert(document, file, text);
+    // Solder's version is what was saved (a format-on-save included), taken now: typing while the problems check
+    // waits below is yours, and Undo then asks rather than throwing it away.
+    const after = hash(document.getText());
     const removed = lineCount(old);
     const added = lineCount(replaced);
     let problems = { text: "", summary: "" };
@@ -1147,7 +1165,7 @@ class WorkspaceTools {
       this._pendingProblems.delete(key);
       problems = await this.newProblems(file, before);
     }
-    const result = this._edited(file, document, text, backup, removed, added, start, shiftNote, problems);
+    const result = this._edited(file, after, text, backup, removed, added, start, shiftNote, problems);
     // Every place at once (replace_all): how many, and where, in place of the one range.
     if (found.places) {
       result.output = RESULTS.editedAll(file.shown, found.places.length, found.places.slice(0, 12)) + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : "");
@@ -1173,11 +1191,11 @@ class WorkspaceTools {
   }
 
   /** An edit's result, once it's made. */
-  _edited(/** @type {any} */ file, /** @type {any} */ document, /** @type {string} */ text, /** @type {string} */ backup, /** @type {number} */ removed, /** @type {number} */ added,
+  _edited(/** @type {any} */ file, /** @type {string} */ after, /** @type {string} */ text, /** @type {string} */ backup, /** @type {number} */ removed, /** @type {number} */ added,
     /** @type {number} */ start, /** @type {string} */ shiftNote, /** @type {{text: string, summary: string}} */ problems) {
     return { output: RESULTS.edited(file.shown, removed, added, lineOf(text, start)) + shiftNote + problems.text + (SIGNED.test(text) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `Edited ${file.shown} · −${removed} +${added}` + problems.summary,
-      change: { path: file.full, shown: file.shown, backup, created: false, after: hash(document.getText()) } };
+      change: { path: file.full, shown: file.shown, backup, created: false, after } };
   }
 
   // ----------------------------------------------------------------- write_file --
@@ -1190,23 +1208,33 @@ class WorkspaceTools {
       const stat = await vscode.workspace.fs.stat(file.uri);
       if (stat.type & vscode.FileType.Directory) throw new ToolError(RESULTS.isFolder(file.shown));
       exists = true;
-    } catch (error) { if (error instanceof ToolError) throw error; }
+    } catch (error) {
+      if (error instanceof ToolError) throw error;
+      // Only a file that's surely not there is a new one: any other failure (a share that didn't answer) might be
+      // hiding one, which would then be overwritten with no backup, and Undo would remove it.
+      if (!notFoundError(error)) throw new ToolError(RESULTS.notWritable(file.shown));
+    }
     const open = vscode.workspace.textDocuments.find((doc) => doc.uri.scheme === "file" && doc.uri.fsPath.toLowerCase() === file.full.toLowerCase());
+    // VS Code's copy made the disk's first (as an edit does): the backup, and the "unchanged" check, are of what's there.
+    if (open) await freshen(open, file);
     // #5: a file that isn't open is read as its encoding says (UTF-16 included), so its backup is its text.
     const raw = exists && !open ? fs.readFileSync(file.full) : null;
     const previous = exists ? (open ? open.getText() : decodeText(/** @type {Buffer} */ (raw))) : "";
+    if (previous === null) throw new ToolError(RESULTS.notText(file.shown)); // a binary file: no text to keep for Undo
+    if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
     const backup = exists ? await this.backup(chat, file, previous) : "";
     const before = exists ? problemKeys(file.uri) : new Set();
-    if (exists && hash(previous) === hash(content)) return { output: RESULTS.sameContent(file.shown), summary: `${file.shown} · unchanged` };
     const madeFolder = exists ? "" : firstMissing(path.dirname(file.full));
     /** @type {Buffer | null} what went to disk, for a file that wasn't open */
     let written = null;
+    /** @type {string} Solder's version, taken as soon as it's saved (typing during the problems check is yours) */
+    let after;
     if (open) {
-      await freshen(open, file);
       const edit = new vscode.WorkspaceEdit();
       edit.replace(file.uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), toEol(content, open.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n"));
       if (!await vscode.workspace.applyEdit(edit)) throw new ToolError(RESULTS.notApplied(file.shown));
       await saveOrRevert(open, file, previous);
+      after = hash(open.getText());
     } else {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file.full)));
       // A file that's there keeps its encoding (a UTF-8 BOM, which Windows PowerShell 5.1 needs for non-ASCII text, or
@@ -1214,14 +1242,14 @@ class WorkspaceTools {
       written = raw ? encodedLike(raw, previous, content) : Buffer.from(content, "utf8");
       try { await vscode.workspace.fs.writeFile(file.uri, written); }
       catch { throw new ToolError(RESULTS.notWritable(file.shown)); }
+      after = hash(String(decodeText(written)));
       await vscode.workspace.openTextDocument(file.uri).then(() => {}, () => {}); // lets language servers look
     }
     const lines = lineCount(content);
     const problems = await this.newProblems(file, before);
     return { output: RESULTS.written(exists, file.shown, lines) + problems.text + (exists && SIGNED.test(previous) ? "\n" + RESULTS.signatureBroken : ""),
       summary: `${exists ? "Wrote" : "Created"} ${file.shown} · ${lines} lines` + problems.summary,
-      change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder,
-        after: hash(open ? open.getText() : written ? String(decodeText(written)) : content) } };
+      change: { path: file.full, shown: file.shown, backup, created: !exists, madeFolder, after } };
   }
 
   // ------------------------------------------------------------------- problems --
@@ -1799,12 +1827,14 @@ function parseStatus(text) {
     const file = entry.slice(3);
     if (x === "?" && y === "?") { out.push({ path: file, state: "new", label: "new, not in git yet" }); continue; }
     if (x === "!" && y === "!") continue;
-    let label = x === "D" || y === "D" ? "deleted" : x === "A" ? "added" : x === "R" || x === "C" ? `renamed from ${parts[index + 1] ?? "?"}`
-      : x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D") ? "conflicted" : "modified";
+    // A merge conflict first: its pairs (AA, DD, AU, UA, DU, UD, UU) would read as added or deleted below.
+    const conflicted = x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D");
+    if (conflicted) { out.push({ path: file, state: "changed", label: "conflicted" }); continue; }
+    let label = x === "D" || y === "D" ? "deleted" : x === "A" ? "added" : x === "R" || x === "C" ? `renamed from ${parts[index + 1] ?? "?"}` : "modified";
     if (x === "R" || x === "C") index++; // the old name follows
     const staged = x !== " " && x !== "?";
     const unstaged = y !== " " && y !== "?";
-    if (label !== "conflicted") label += staged && unstaged ? " (staged and unstaged)" : staged ? " (staged)" : "";
+    label += staged && unstaged ? " (staged and unstaged)" : staged ? " (staged)" : "";
     out.push({ path: file, state: x === "D" || y === "D" ? "deleted" : "changed", label });
   }
   return out;
@@ -1869,6 +1899,17 @@ async function freshen(document, file) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new ToolError(RESULTS.changedOnDisk(file.shown));
+}
+
+/**
+ * A stat's failure that says for sure there's nothing at the path (VS Code's FileNotFound, or Node's ENOENT; a parent
+ * that's a file, too). Anything else (a share that didn't answer in time) says nothing about whether it's there.
+ * @param {any} error
+ */
+function notFoundError(error) {
+  const code = error?.code;
+  return code === "FileNotFound" || code === "ENOENT" || code === "FileNotADirectory" || code === "ENOTDIR"
+    || /^EntryNotFound/.test(String(error?.name ?? ""));
 }
 
 /** Save, or put the editor back as it was and say so: a change only counts once it's on disk. */
@@ -2305,6 +2346,7 @@ function occurrences(/** @type {string} */ text, /** @type {string} */ part) {
 
 function positions(/** @type {string} */ text, /** @type {string} */ part) {
   const found = [];
+  if (!part) return found; // "" is everywhere, and looking for it would never move on
   for (let at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + 1)) found.push(at);
   return found;
 }
@@ -2434,6 +2476,8 @@ function planEdit(shown, text, args, eol) {
   let found = locate(shown, text, old, replacement, eol);
   const plain = withoutLineNumbers(old, eol);
   if (!found) {
+    // Only a line number ("12	", a blank line copied from read_file): nothing is left to look for.
+    if (plain === "") throw new ToolError(RESULTS.emptyOldText);
     const plainNew = plain === null ? null : numberedLines(replacement, eol);
     if (plain !== null && plainNew === false) throw new ToolError(RESULTS.numberedNewText);
     const again = plain === null ? null : locate(shown, text, plain, plainNew === true ? /** @type {string} */ (withoutLineNumbers(replacement, eol)) : replacement, eol);

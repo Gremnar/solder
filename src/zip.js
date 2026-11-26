@@ -46,14 +46,18 @@ function deflate(data) {
 
 /**
  * Write a zip. Each entry is a name inside the archive (forward slashes, no leading slash, no ".." part) and either
- * the file to read or the bytes themselves. A file that can't be read is left out and named in `skipped`.
+ * the file to read or the bytes themselves. A file that can't be read is left out and named in `skipped`, as is a
+ * folder that couldn't be listed (`unread`, from filesUnder). The zip itself, or one being written to its name, is
+ * never put in it. Stopped (the signal), it throws, and a zip already there by that name is left as it was.
  * @param {string} target the zip to write (written beside itself first, then renamed, so a half-made zip never has its name)
- * @param {{name: string, file?: string, data?: Buffer}[]} entries
+ * @param {{name: string, file?: string, data?: Buffer, unread?: boolean}[]} entries
  * @param {{signal?: AbortSignal, onEntry?: (done: number, of: number) => void}} [options]
  * @returns {Promise<{files: number, bytes: number, skipped: string[]}>} bytes: the zip's size
  */
 async function writeZip(target, entries, options = {}) {
+  entries = entries.filter((entry) => !entry.file || !isZipOutput(entry.file, target));
   if (entries.length > MAX_ENTRIES) throw new Error(`That's ${entries.length.toLocaleString("en-US")} files: more than one zip file can hold (65,535).`);
+  if (options.signal?.aborted) throw new Error("Stopped.");
   const temporary = `${target}.${process.pid}.part`;
   const out = await fs.promises.open(temporary, "w");
   /** @type {Buffer[]} */
@@ -68,6 +72,7 @@ async function writeZip(target, entries, options = {}) {
       const entry = entries[index];
       const name = String(entry.name).split("\\").join("/");
       if (!name || name.startsWith("/") || name.split("/").some((part) => part === ".." || part === "")) throw new Error(`Not a name for inside a zip: ${entry.name}`);
+      if (entry.unread) { skipped.push(name); continue; }
       let data;
       let when = new Date();
       try {
@@ -126,6 +131,7 @@ async function writeZip(target, entries, options = {}) {
     end.writeUInt32LE(offset, 16);
     await out.write(Buffer.concat([directory, end]));
     await out.close();
+    if (options.signal?.aborted) throw new Error("Stopped.");
     await fs.promises.rename(temporary, target);
     return { files, bytes: offset + directory.length + 22, skipped };
   } catch (error) {
@@ -136,22 +142,39 @@ async function writeZip(target, entries, options = {}) {
 }
 
 /**
+ * Whether a file is the zip being written to `target`, or the part file of one being written there (by any window).
+ * Exact names only, so a file beside it (release.zip.sha256) isn't taken for it. @param {string} file @param {string} target
+ */
+function isZipOutput(file, target) {
+  const key = (/** @type {string} */ place) => path.resolve(place).toLowerCase();
+  const own = key(target);
+  const it = key(file);
+  return it === own || (it.startsWith(own + ".") && /^\.\d+\.part$/.test(it.slice(own.length)));
+}
+
+/**
  * The files under a folder, to go in a zip under `prefix`: real files only (a link or junction is left out, so the
  * zip holds what's in the folder and nothing it points at), folders named in `skip` left out, as many as `limit`.
+ * A folder inside that can't be listed is an entry marked `unread` (writeZip names it among those left out); the
+ * folder itself not listed is an error, and so is being stopped (the signal), rather than a list that's short.
  * @param {string} folder @param {string} prefix the name inside the zip for the folder itself ("" for none)
  * @param {{skip?: (name: string, full: string) => boolean, limit?: number, signal?: AbortSignal}} [options]
- * @returns {Promise<{entries: {name: string, file: string}[], tooMany: boolean}>} in name order
+ * @returns {Promise<{entries: {name: string, file: string, unread?: boolean}[], tooMany: boolean}>} in name order
  */
 async function filesUnder(folder, prefix, options = {}) {
   const limit = options.limit ?? MAX_ENTRIES;
-  /** @type {{name: string, file: string}[]} */
+  /** @type {{name: string, file: string, unread?: boolean}[]} */
   const entries = [];
   let tooMany = false;
   /** @param {string} at @param {string} inside */
   const walk = async (at, inside) => {
     if (tooMany || options.signal?.aborted) return;
     let listed;
-    try { listed = await fs.promises.readdir(at, { withFileTypes: true }); } catch { return; }
+    try { listed = await fs.promises.readdir(at, { withFileTypes: true }); } catch (error) {
+      if (at === folder) throw new Error(`The folder ${folder} couldn't be read (${/** @type {any} */ (error)?.code || "an error"}).`);
+      if (inside) entries.push({ name: inside, file: at, unread: true });
+      return;
+    }
     listed.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     for (const item of listed) {
       if (tooMany) return;
@@ -168,7 +191,8 @@ async function filesUnder(folder, prefix, options = {}) {
     }
   };
   await walk(folder, prefix);
+  if (options.signal?.aborted) throw new Error("Stopped.");
   return { entries, tooMany };
 }
 
-module.exports = { writeZip, filesUnder, crc32 };
+module.exports = { writeZip, filesUnder, isZipOutput, crc32 };

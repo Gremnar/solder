@@ -41,25 +41,26 @@ function findRequests(text) {
     const tag = match[1].toLowerCase();
     const body = text.slice(/** @type {number} */ (match.index) + match[0].length);
     if (tag.startsWith("tool") || SURELY_TOOL.test(body)) {
-      found.push({ start: /** @type {number} */ (match.index), ...attempt(body), tagged: true });
+      found.push(...attempt(body).map((tried) => ({ start: /** @type {number} */ (match.index), ...tried, tagged: true })));
       inside = requestEnd(text, /** @type {number} */ (match.index));
     } else if (PLAIN_TAGS.has(tag) && TOOLISH.test(body)) {
       const tried = attempt(body);
-      if (tried.call) { found.push({ start: /** @type {number} */ (match.index), ...tried, tagged: false }); inside = requestEnd(text, /** @type {number} */ (match.index)); }
+      // A list whose first is a request: the rest are requests too (one that can't be used is said, not dropped).
+      if (tried[0].call) { found.push(...tried.map((t, n) => ({ start: /** @type {number} */ (match.index), ...t, tagged: n > 0 }))); inside = requestEnd(text, /** @type {number} */ (match.index)); }
     }
   }
   if (!found.length) {
     const start = trailingStart(text); // unfenced JSON that ends the reply
     if (start !== null) {
       const tried = attempt(text.slice(start));
-      if (tried.call) found.push({ start, ...tried, tagged: false });
+      if (tried[0].call) found.push(...tried.map((t, n) => ({ start, ...t, tagged: n > 0 })));
     }
   }
   if (!found.length) {
     // The fence forgotten: a line that starts a request.
     for (const match of text.matchAll(/(?:^|\n)[ \t]*(?=\[?\{)/g)) {
       const at = /** @type {number} */ (match.index) + match[0].length;
-      if (SURELY_TOOL.test(text.slice(at))) { found.push({ start: /** @type {number} */ (match.index), ...attempt(text.slice(at)), tagged: true }); break; }
+      if (SURELY_TOOL.test(text.slice(at))) { found.push(...attempt(text.slice(at)).map((tried) => ({ start: /** @type {number} */ (match.index), ...tried, tagged: true }))); break; }
     }
   }
   const spans = found.map((r) => [r.start, requestEnd(text, r.start)]);
@@ -136,6 +137,8 @@ const SMART = { "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'" };
  */
 function decode(text) {
   const body = balanced(text.trimStart());
+  // Valid JSON is taken as it is: the forgiving passes below are only for what doesn't parse.
+  try { return JSON.parse(body); } catch { /* forgive the usual slips */ }
   const straight = body.replace(/[\u201c\u201d\u2018\u2019]/g, (c) => SMART[c]);
   for (const candidate of [body, straight]) {
     for (const fixed of [candidate, invalidEscapes(candidate)]) {
@@ -158,13 +161,46 @@ function rawControls(text) {
   }
   return out;
 }
-/** A backslash that isn't a JSON escape (C:\Users\W…), doubled. @param {string} text */
-const invalidEscapes = (text) => text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
-/** @param {string} text */
-const withoutTrailingCommas = (text) => text.replace(/,(\s*[}\]])/g, "$1");
+/**
+ * A backslash that isn't a JSON escape (C:\Users\W…), doubled. A valid escape is taken as a pair, so the second
+ * backslash of an escaped one (\\) is never doubled on its own. @param {string} text
+ */
+const invalidEscapes = (text) => text.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g, (pair, valid) => valid ? pair : "\\\\");
+/** A comma right before a } or ], outside strings, left out (a ",]" inside a string is text). @param {string} text */
+function withoutTrailingCommas(text) {
+  let out = "", inString = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false; else if (c === "\\") escaped = true; else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === ",") {
+      let next = i + 1;
+      while (next < text.length && /\s/.test(text[next])) next++;
+      if (text[next] === "}" || text[next] === "]") continue;
+    }
+    out += c;
+  }
+  return out;
+}
 
 /** Fields that hold a path: their \t and \n stay backslash-and-letter when salvaged (C:\temp\new). */
 const PATH_FIELDS = new Set(["path", "from", "to"]);
+/** Arguments that name files: no real path holds a tab, a line break or a backspace, so one there was a \t, \n… */
+const PATH_ARGUMENTS = ["path", "from", "to", "glob"];
+/** @type {Record<string, string>} */
+const CONTROL_LETTERS = { "\t": "\\t", "\n": "\\n", "\r": "\\r", "\b": "\\b", "\f": "\\f" };
+/**
+ * A path written with single backslashes (src\tools\new.ps1) reads as JSON escapes: \t and \n became a tab and a line
+ * break. In the arguments that name files they're put back as backslash and letter; text arguments are never touched.
+ * @param {Record<string, any>} args changed in place @returns {Record<string, any>}
+ */
+function pathsAsWritten(args) {
+  for (const arg of PATH_ARGUMENTS) {
+    if (typeof args[arg] === "string") args[arg] = args[arg].replace(/[\t\n\r\b\f]/g, (c) => CONTROL_LETTERS[c]);
+  }
+  return args;
+}
 /** @param {string} s */
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -176,10 +212,15 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function salvage(text) {
   let body = text.trimStart();
   if (!body.startsWith("{")) throw new Error("no object");
-  // The closing fence: the last one right after a }, since content can hold code blocks of its own.
+  // The closing fence: the last one right after a }, since content can hold code blocks of its own; but never past the
+  // start of the reply's next request (that one is read, and run, on its own).
+  const next = nextRequestAt(body);
+  let closed = false;
   for (const f of [...body.matchAll(/\n[ \t]*`{2,}/g)].reverse()) {
-    if (body.slice(0, f.index).trimEnd().endsWith("}")) { body = body.slice(0, f.index); break; }
+    if (/** @type {number} */ (f.index) > next) continue;
+    if (body.slice(0, f.index).trimEnd().endsWith("}")) { body = body.slice(0, f.index); closed = true; break; }
   }
+  if (!closed && next < body.length) throw new Error("runs into the next request");
   const nameMatch = /[{,]\s*["']?(?:tool|tool_name|name|function|action)["']?\s*:\s*["']?([A-Za-z_-]+)/i.exec(body);
   const tool = nameMatch && canonical(nameMatch[1]);
   if (!tool || !Object.hasOwn(TOOLS, tool)) throw new Error("no tool");
@@ -212,6 +253,22 @@ function salvage(text) {
   return data;
 }
 
+/**
+ * Where a block's text meets the next request: the closing fence that's followed (after any words) by a fence that opens
+ * a request. The text's length when there's none. @param {string} body
+ */
+function nextRequestAt(body) {
+  for (const close of body.matchAll(/\n[ \t]*`{2,}[ \t]*(?=\r?\n|$)/g)) {
+    const open = new RegExp(FENCE.source, "g");
+    open.lastIndex = /** @type {number} */ (close.index) + close[0].length;
+    const m = open.exec(body);
+    if (m && (m[1].toLowerCase().startsWith("tool") || SURELY_TOOL.test(body.slice(/** @type {number} */ (m.index) + m[0].length)))) {
+      return /** @type {number} */ (close.index);
+    }
+  }
+  return body.length;
+}
+
 // ================================================================ from a request to a call
 
 const NAME_KEYS = ["tool", "tool_name", "name", "function", "action"];
@@ -223,21 +280,27 @@ const ALIASES = { path: ["file_path", "file", "filename", "filepath"], old_text:
 /** read_file, readFile and read-file are the same tool. @param {unknown} name */
 const canonical = (name) => String(name).trim().replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[-\s]+/g, "_").toLowerCase();
 
-/** @param {string} text @returns {{call: {name: string, args: Record<string, any>, salvaged?: boolean} | null, problem: string}} */
+/**
+ * A block's request, or its requests when it holds a list of them (each in order, as if written one after another).
+ * @param {string} text @returns {{call: {name: string, args: Record<string, any>, salvaged?: boolean} | null, problem: string, unknown?: string}[]}
+ */
 function attempt(text) {
-  try { return toCall(decode(text)); } catch { /* try salvage */ }
+  let value;
+  try { value = decode(text); } catch { /* try salvage */ }
+  if (value !== undefined) {
+    return Array.isArray(value) && value.length ? value.map(toCall) : [toCall(value)];
+  }
   try {
     const result = toCall(salvage(text));
     if (result.call) result.call.salvaged = true;
-    return result;
+    return [result];
   } catch {
-    return { call: null, problem: "the block didn't hold valid JSON; quotes and backslashes inside strings need escaping" };
+    return [{ call: null, problem: "the block didn't hold valid JSON; quotes and backslashes inside strings need escaping" }];
   }
 }
 
 /** @param {any} value @returns {{call: {name: string, args: Record<string, any>, salvaged?: boolean} | null, problem: string, unknown?: string}} */
 function toCall(value) {
-  if (Array.isArray(value) && value.length) value = value[0];
   if (!value || typeof value !== "object" || Array.isArray(value)) return { call: null, problem: "the request wasn't a JSON object" };
   if (value.function && typeof value.function === "object") value = value.function; // OpenAI style
   const key = NAME_KEYS.find((k) => typeof value[k] === "string");
@@ -255,6 +318,7 @@ function toCall(value) {
     const alias = (ALIASES[arg] || []).find((a) => a in args && !(a in properties));
     if (alias) { args[arg] = args[alias]; delete args[alias]; }
   }
+  pathsAsWritten(args);
   for (const arg of /** @type {string[]} */ (required)) {
     if (args[arg] === undefined || args[arg] === null) return { call: null, problem: `${name} needs '${arg}'` };
   }
@@ -472,6 +536,19 @@ function prefixHash(messages, count) {
 }
 
 /**
+ * Whether this model's session still holds the chat as stored, up to where it last answered: the same model, not lost,
+ * nothing it saw rewritten (compaction, an edited or removed message), and no finished reply since that the gateway
+ * never saw (the Tool lane answered in between). A partial one (a reply that failed partway) doesn't count: it's left
+ * out of what's sent. Whether sessions are on at all is for the caller. @param {any} chat @param {string} model
+ */
+function sessionHolds(chat, model) {
+  const record = chat.assist;
+  if (!record?.fields || record.lost || record.model !== model || !(record.held <= chat.messages.length)) return false;
+  if (prefixHash(chat.messages, record.held) !== record.heldHash) return false;
+  return !chat.messages.slice(record.held).some((/** @type {any} */ m) => m.role === "assistant" && !m.meta?.incomplete);
+}
+
+/**
  * How an Assist request goes, for the chat as stored (ending with something to answer: your message, or results).
  * - "stateful": the gateway's session holds everything before the new user-side messages: only those go, as one.
  * - "fresh": nothing came before: the introduction and the message, with no session (one comes back).
@@ -484,16 +561,12 @@ function prefixHash(messages, count) {
 function sessionPlan(chat, model, settings, context, resultText) {
   const record = chat.assist;
   const block = String(settings.assistSessionBlock || "").trim();
-  const n = chat.messages.length;
   const setup = ASSIST.setup(context);
   const told = sha(setup);
-  if (block && record?.fields && !record.lost && record.model === model && record.held <= n
-      && prefixHash(chat.messages, record.held) === record.heldHash) {
+  if (block && sessionHolds(chat, model)) {
     const after = chat.messages.slice(record.held);
-    // A finished reply after the held point is one the gateway never saw (the Tool lane answered in between): it
-    // doesn't hold the conversation any more. A partial one (a reply that failed partway) is left out of what's sent.
-    const unseen = after.some((/** @type {any} */ m) => m.role === "assistant" && !m.meta?.incomplete);
-    if (!unseen && after.some((/** @type {any} */ m) => m.role !== "assistant")) {
+    // Only what's new goes: a partial reply (one that failed partway) is left out.
+    if (after.some((/** @type {any} */ m) => m.role !== "assistant")) {
       const fresh = { ...chat, compaction: null, messages: after.filter((/** @type {any} */ m) => m.role !== "assistant") };
       let text = assistOutbound(fresh, resultText).filter((m) => m.role === "user").map((m) => m.content).join("\n\n");
       if (record.told !== told) text = ASSIST.setupChanged(setup) + "\n\n" + text;
@@ -541,8 +614,7 @@ function carryFit(setup, rendered, budget) {
  *   among those left out (no summary stands in for it)
  */
 function wouldLeaveOut(chat, model, settings, context, resultText) {
-  const record = chat.assist;
-  if (String(settings.assistSessionBlock || "").trim() && record?.fields && !record.lost && record.model === model) return null;
+  if (String(settings.assistSessionBlock || "").trim() && sessionHolds(chat, model)) return null;
   // What would go: the conversation, then your next message (not typed yet: it's the small part).
   const rendered = [...assistOutbound(chat, resultText), { role: "user", content: "" }];
   if (rendered.length < 2) return null;
@@ -595,5 +667,5 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-module.exports = { findRequests, parseReply, visibleText, draftingRequests, ALIASES, decode, salvage, canonical, fence, resultMessage, requestBlock,
+module.exports = { findRequests, parseReply, visibleText, draftingRequests, ALIASES, decode, salvage, pathsAsWritten, canonical, fence, resultMessage, requestBlock,
   assistOutbound, carryOver, carryFit, wouldLeaveOut, stripSetup, sessionPlan, holdSession, prefixHash, canonicalOf, carryBudget, fp };

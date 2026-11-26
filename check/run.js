@@ -16,7 +16,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const REPO = path.resolve(__dirname, "..");
-const ALL = ["policy", "edits", "group1", "problems", "symbols", "skills", "readonly", "messages", "setup", "stale", "projects", "hardening", "terminal"];
+const ALL = ["policy", "edits", "group1", "problems", "symbols", "skills", "readonly", "messages", "setup", "stale", "projects", "hardening", "terminal", "fixes"];
 const TIMEOUT_MS = 240_000;
 
 /** The files a few checks expect in the workspace. */
@@ -93,6 +93,7 @@ function runOne(code, dir, name) {
     for (const line of result.notes) console.log("      " + line.slice(0, 400));
   }
   console.log(`\n${passed} passed, ${failed} failed` + (keep || failed ? ` · logs in ${dir}` : ""));
-  if (!keep && !failed) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+  // A terminal a check opened can hold the folder for a moment after VS Code closes: then it's left for the system to clear.
+  if (!keep && !failed) { try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { console.log(`(couldn't remove ${dir} yet: it's in the temp folder)`); } }
   process.exit(failed ? 1 : 0);
 })();

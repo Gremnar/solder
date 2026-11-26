@@ -100,8 +100,27 @@ function readProject(folder, ruleNames = ["AGENTS.md"]) {
   }
   const skillsAt = skillsFolder(full);
   let skills = [];
-  try { if (fs.statSync(skillsAt).isDirectory()) skills = listSkills([skillsAt]); } catch { /* none yet */ }
+  // Only a skills folder that's really the project's: a junction or link there to somewhere else lists nothing.
+  try { if (ownSkillsFolder(full) && fs.statSync(skillsAt).isDirectory()) skills = listSkills([skillsAt]); } catch { /* none yet */ }
   return { path: full, name, rules, skills, skillsFolder: skillsAt };
+}
+
+/**
+ * A project's skills folder when it's really the project's own (links followed, as the model's tools see it): inside
+ * the project's folder, or not made yet where .solder is the project's own. null when it, or .solder, is a junction or
+ * link that leads somewhere else, or it can't be told. @param {string} folder @returns {string | null}
+ */
+function ownSkillsFolder(folder) {
+  const full = path.resolve(folder);
+  const at = skillsFolder(full);
+  try {
+    const home = fs.realpathSync.native(full).toLowerCase().replace(/[\\/]+$/, "");
+    const inside = (/** @type {string} */ place) => fs.realpathSync.native(place).toLowerCase().startsWith(home + path.sep);
+    if (fs.existsSync(at)) return inside(at) ? at : null;
+    // Not made yet: made inside .solder, so that must be the project's own.
+    const dir = path.dirname(at);
+    return fs.existsSync(dir) && inside(dir) ? at : null;
+  } catch { return null; }
 }
 
 /**
@@ -125,12 +144,13 @@ function createProject(folder, name) {
 /** @param {string} folder @param {string} name */
 function renameProject(folder, name) {
   const full = path.resolve(folder);
-  if (readName(full) === null) throw new Error("That folder isn't a project any more.");
+  // Read once, and only the name changed on what was read: a read that fails stops it, rather than writing the name
+  // alone over the skill switches and whatever else the file holds.
+  const data = readData(full);
+  if (!data) throw new Error("That folder isn't a project any more.");
   const problem = nameProblem(name);
   if (problem) throw new Error(problem);
-  let data = {};
-  try { data = JSON.parse(fs.readFileSync(path.join(full, DIR, FILE), "utf8").replace(/^\uFEFF/, "")) || {}; } catch { data = {}; }
-  writeFile(full, { ...(typeof data === "object" && !Array.isArray(data) ? data : {}), name: String(name).trim() });
+  writeFile(full, { ...data, name: String(name).trim() });
 }
 
 /** Written whole to a temporary file first, so a crash never leaves half a project file. */
@@ -374,4 +394,4 @@ function switchesFrom(value) {
 }
 
 module.exports = { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel: readName, readProject, createProject, renameProject, nearestProject, isProject, nameProblem, projectKey, skillsFolder,
-  DIR, MAX_NAME_CHARS };
+  ownSkillsFolder, DIR, MAX_NAME_CHARS };

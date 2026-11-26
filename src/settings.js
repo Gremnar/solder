@@ -134,12 +134,18 @@ class SettingsScreen {
   /** A message from the settings screen. @param {any} message */
   async handle(message) {
     if (!this.view) return;
+    // The screen this message came from. A wait below (a save, a check, a picker) can end after it was closed or
+    // opened again: what comes back then goes to the screen that asked, which is no longer shown, never to another.
+    const view = this.view;
+    const current = () => this.view === view;
+    const note = (/** @type {string} */ text, /** @type {"ok" | "bad" | ""} */ kind = "") => { if (current()) this.notice(text, kind); };
+    const changed = () => { if (current()) this.changed(); };
     const action = String(message.action || "");
     const config = solderSettings();
     const save = async (/** @type {string} */ name, /** @type {any} */ value, /** @type {string} */ field) => {
       await config.update(name, value, vscode.ConfigurationTarget.Global);
-      Object.assign(this.view, await this.values(), { saved: field, notice: "", noticeKind: "" });
-      this.changed();
+      Object.assign(view, await this.values(), { saved: field, notice: "", noticeKind: "" });
+      changed();
     };
     switch (action) {
       case "close": this.close(); return;
@@ -147,12 +153,12 @@ class SettingsScreen {
       case "set": {
         const field = String(message.field || "");
         const value = message.value;
-        if (this.view.locked?.[field]) { this.notice("Your organization sets this.", "bad"); return; }
+        if (view.locked?.[field]) { note("Your organization sets this.", "bad"); return; }
         if (field === "endpoint") {
           const endpoint = String(value || "").trim();
-          if (endpoint) { try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { this.notice(messageOf(error), "bad"); return; } }
+          if (endpoint) { try { new GatewayClient({ endpoint, apiKey: "" }); } catch (error) { note(messageOf(error), "bad"); return; } }
           await save("endpoint", endpoint, field);
-          if (endpoint && this.view.keyElsewhere) this.notice("The saved key is another gateway's, so it isn't sent to this one. Enter this gateway's key.", "bad");
+          if (endpoint && view.keyElsewhere) note("The saved key is another gateway's, so it isn't sent to this one. Enter this gateway's key.", "bad");
         } else if (field === "model") await save("model", String(value || "").trim(), field);
         else if (field === "effort" && ["default", "low", "medium", "high"].includes(value)) await save("effort", value, field);
         // Read-only mode: only ever changed here, by you (Solder never turns it on by itself).
@@ -162,52 +168,52 @@ class SettingsScreen {
           await save("instructionFiles", String(value || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean), field);
         } else if (field === "compactAt") {
           const n = Math.round(Number(value));
-          if (!Number.isFinite(n) || n < 30_000) { this.notice("Compact at needs to be 30,000 tokens or more.", "bad"); return; }
+          if (!Number.isFinite(n) || n < 30_000) { note("Compact at needs to be 30,000 tokens or more.", "bad"); return; }
           await save("compactAtTokens", n, field);
         } else if (field === "maxRounds") {
           const n = Math.round(Number(value));
-          if (!Number.isFinite(n) || n < 1 || n > 100) { this.notice("Max rounds needs to be between 1 and 100.", "bad"); return; }
+          if (!Number.isFinite(n) || n < 1 || n > 100) { note("Max rounds needs to be between 1 and 100.", "bad"); return; }
           await save("maxRounds", n, field);
         } else if (field === "assistMaxRounds") {
           const n = Math.round(Number(value));
-          if (!Number.isFinite(n) || n < 1 || n > 200) { this.notice("Assist max rounds needs to be between 1 and 200.", "bad"); return; }
+          if (!Number.isFinite(n) || n < 1 || n > 200) { note("Assist max rounds needs to be between 1 and 200.", "bad"); return; }
           await save("assistMaxRounds", n, field);
         } else if (field === "assistCarryTokens") {
           const n = Math.round(Number(String(value ?? "").replace(/[,_\s]/g, "")));
-          if (!Number.isFinite(n) || n < 20_000 || n > 900_000) { this.notice("Assist carry-over needs to be between 20,000 and 900,000 tokens.", "bad"); return; }
+          if (!Number.isFinite(n) || n < 20_000 || n > 900_000) { note("Assist carry-over needs to be between 20,000 and 900,000 tokens.", "bad"); return; }
           await save("assistCarryTokens", n, field);
         } else if (field === "docsSearch" && ["keyword", "hybrid"].includes(value)) await save("docsSearch", value, field);
         else if (field === "embeddingModel") await save("embeddingModel", String(value || "").trim(), field);
         else if (field === "embeddingsCache") {
           const folder = String(value || "").trim();
-          if (folder && !path.isAbsolute(folder.replace(/^~(?=$|[\\/])/, "C:\\"))) { this.notice("The shared embeddings folder needs a full path, such as \\\\server\\share\\solder-embeddings.", "bad"); return; }
+          if (folder && !path.isAbsolute(folder.replace(/^~(?=$|[\\/])/, "C:\\"))) { note("The shared embeddings folder needs a full path, such as \\\\server\\share\\solder-embeddings.", "bad"); return; }
           await save("embeddingsCache", folder, field);
         }
         else if (field === "embedBudget") {
           const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
-          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens, from 0 to 100,000,000.", "bad"); return; }
+          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { note("A whole number of tokens, from 0 to 100,000,000.", "bad"); return; }
           await save("embedDailyBudget", tokens, field);
         }
         else if (field === "embedRate") {
           const tokens = Number(String(value ?? "").replace(/[,_\s]/g, ""));
-          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { this.notice("A whole number of tokens a minute, from 0 (no limit) to 100,000,000.", "bad"); return; }
+          if (!Number.isInteger(tokens) || tokens < 0 || tokens > 100_000_000) { note("A whole number of tokens a minute, from 0 (no limit) to 100,000,000.", "bad"); return; }
           await save("embedTokensPerMinute", tokens, field);
         }
         else if (field === "modelFilter") {
           const text = String(value || "").trim();
-          try { if (text) new RegExp(text); } catch { this.notice("That model filter isn't a valid regular expression.", "bad"); return; }
+          try { if (text) new RegExp(text); } catch { note("That model filter isn't a valid regular expression.", "bad"); return; }
           await save("modelFilter", text, field);
         } else if (field === "toolModels") {
           const text = String(value || "").trim();
-          try { if (text) new RegExp(text); } catch { this.notice("That Tool models pattern isn't a valid regular expression.", "bad"); return; }
+          try { if (text) new RegExp(text); } catch { note("That Tool models pattern isn't a valid regular expression.", "bad"); return; }
           await save("toolModels", text, field);
         } else if (field === "assistSessionBlock") {
           const text = String(value || "").trim();
-          if (text && !/^[A-Za-z_][\w.-]{0,63}$/.test(text)) { this.notice("The Assist session block is one name, such as session: letters, digits, _ . and -.", "bad"); return; }
+          if (text && !/^[A-Za-z_][\w.-]{0,63}$/.test(text)) { note("The Assist session block is one name, such as session: letters, digits, _ . and -.", "bad"); return; }
           await save("assistSessionBlock", text, field);
         } else if (field === "storageLimit") {
           const n = Number(value);
-          if (!Number.isFinite(n) || n < 0.1) { this.notice("The storage limit needs to be 0.1 GB or more.", "bad"); return; }
+          if (!Number.isFinite(n) || n < 0.1) { note("The storage limit needs to be 0.1 GB or more.", "bad"); return; }
           await save("storageLimitGB", n, field);
         }
         return;
@@ -215,14 +221,14 @@ class SettingsScreen {
       case "key": {
         const key = String(message.key || "").trim();
         await this.key.save(key);
-        Object.assign(this.view, await this.values(), { saved: "key" });
-        this.notice(key ? "Key saved." : "Key removed.", "ok");
+        Object.assign(view, await this.values(), { saved: "key" });
+        note(key ? "Key saved." : "Key removed.", "ok");
         await this.hooks.refreshModels();
         return;
       }
       case "check": {
-        this.view.checking = true;
-        this.notice("Checking…");
+        view.checking = true;
+        note("Checking…");
         try {
           const key = await this.key.get();
           const controller = new AbortController();
@@ -231,54 +237,56 @@ class SettingsScreen {
           policy.gate();
           try { ids = await new GatewayClient({ endpoint: String(config.get("endpoint", "")), apiKey: key }).models(controller.signal); }
           finally { clearTimeout(timer); }
-          this.view.checking = false;
-          this.notice(`Connected: the gateway lists ${ids.length} model${ids.length === 1 ? "" : "s"}.`, "ok");
+          view.checking = false;
+          note(`Connected: the gateway lists ${ids.length} model${ids.length === 1 ? "" : "s"}.`, "ok");
           await this.hooks.refreshModels();
-          Object.assign(this.view, { models: this.hooks.models() });
-          this.changed();
+          Object.assign(view, { models: this.hooks.models() });
+          changed();
         } catch (error) {
-          this.view.checking = false;
-          this.notice(messageOf(error), "bad");
+          view.checking = false;
+          note(messageOf(error), "bad");
         }
         return;
       }
       case "addDocs": {
-        if (this.view.docsLocked) { this.notice("Your organization sets the docs folders.", "bad"); return; }
+        if (view.docsLocked) { note("Your organization sets the docs folders.", "bad"); return; }
         const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true,
           openLabel: "Use as docs", title: "Solder: folders of your own reference docs" });
         if (!picked?.length) return;
-        const docs = this.view.docs.slice();
+        const docs = ownDocs(config);
         for (const uri of picked) if (!docs.some((d) => d.path.toLowerCase() === uri.fsPath.toLowerCase())) docs.push({ path: uri.fsPath, about: "" });
         await save("docsFolders", stored(docs), "docs");
         return;
       }
       case "removeDocs": {
-        const docs = this.view.docs.slice();
-        docs.splice(Number(message.index), 1);
+        // The row by its path, in the setting as it is now (another window may have changed it since this screen read it).
+        const gone = String(view.docs[Number(message.index)]?.path ?? "").toLowerCase();
+        const docs = ownDocs(config).filter((d) => d.path.toLowerCase() !== gone);
         await save("docsFolders", stored(docs), "docs");
         return;
       }
       case "docsAbout": {
-        const docs = this.view.docs.slice();
-        const index = Number(message.index);
-        if (!docs[index]) return;
+        const shown = String(view.docs[Number(message.index)]?.path ?? "").toLowerCase();
+        const docs = ownDocs(config);
+        const index = docs.findIndex((d) => d.path.toLowerCase() === shown);
+        if (!shown || index < 0) { Object.assign(view, await this.values()); changed(); return; }
         docs[index] = { ...docs[index], about: String(message.value || "").trim() };
         await save("docsFolders", stored(docs), "docs-" + index);
         return;
       }
       case "addSkills": {
-        if (this.view.skillsLocked) { this.notice("Your organization sets the skills folders.", "bad"); return; }
+        if (view.skillsLocked) { note("Your organization sets the skills folders.", "bad"); return; }
         const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true,
           openLabel: "Use for skills", title: "Solder: folders of your skills (one .md file each)" });
         if (!picked?.length) return;
-        const folders = this.view.skillsFolders.slice();
+        const folders = ownSkillsFolders(config);
         for (const uri of picked) if (!folders.some((/** @type {string} */ f) => f.toLowerCase() === uri.fsPath.toLowerCase())) folders.push(uri.fsPath);
         await save("skillsFolders", folders, "skills");
         return;
       }
       case "removeSkills": {
-        const folders = this.view.skillsFolders.slice();
-        folders.splice(Number(message.index), 1);
+        const gone = String(view.skillsFolders[Number(message.index)] ?? "").toLowerCase();
+        const folders = ownSkillsFolders(config).filter((folder) => folder.toLowerCase() !== gone);
         await save("skillsFolders", folders, "skills");
         return;
       }
@@ -287,31 +295,40 @@ class SettingsScreen {
         if (skill) await vscode.window.showTextDocument(vscode.Uri.file(skill.path), { preview: false });
         return;
       }
-      case "newSkill": Object.assign(this.view, { skillForm: true, notice: "", noticeKind: "" }); this.changed(); return;
+      case "newSkill": Object.assign(view, { skillForm: true, notice: "", noticeKind: "" }); changed(); return;
       case "interviewSkill": await this.hooks.interviewSkill(); return;
-      case "cancelSkill": Object.assign(this.view, { skillForm: false, notice: "", noticeKind: "" }); this.changed(); return;
+      case "cancelSkill": Object.assign(view, { skillForm: false, notice: "", noticeKind: "" }); changed(); return;
       case "moveModel": {
         // A model moved to the other kind: the Assist models list is saved whole (made from the current kinds the first time).
-        if (this.view.locked?.kinds) { this.notice("Your organization sets which models are which.", "bad"); return; }
+        if (view.locked?.kinds) { note("Your organization sets which models are which.", "bad"); return; }
         const id = String(message.name || "");
-        const assist = new Set(this.view.kinds.filter((/** @type {any} */ m) => m.assist).map((/** @type {any} */ m) => m.id));
-        if (message.index === 1) assist.add(id); else assist.delete(id);
-        await save("assistModels", [...assist], "kinds");
+        // From the list as it's saved (models the filter hides, or the gateway left out this time, stay on it); made
+        // from the current kinds only the first time.
+        const saved = (config.get("assistModels", []) || []).map(String);
+        const assist = saved.length ? saved : view.kinds.filter((/** @type {any} */ m) => m.assist).map((/** @type {any} */ m) => m.id);
+        const others = assist.filter((/** @type {string} */ m) => m.toLowerCase() !== id.toLowerCase());
+        const next = message.index === 1 ? [...others, id] : others;
+        // The last Assist model made a Tool model: an empty list means "go by the Tool models pattern", which would
+        // make it an Assist model again. So the pattern goes too, when it's yours to change.
+        if (!next.length && String(config.get("toolModels", "") || "").trim() && !policy.locked("toolModels")) {
+          await config.update("toolModels", "", vscode.ConfigurationTarget.Global);
+        }
+        await save("assistModels", next, "kinds");
         return;
       }
       case "refreshModels": {
-        this.notice("Asking the gateway for its models…");
+        note("Asking the gateway for its models…");
         await this.hooks.refreshModels();
-        Object.assign(this.view, await this.values(), { models: this.hooks.models() });
-        this.notice(`The gateway lists ${this.view.models.length} model${this.view.models.length === 1 ? "" : "s"}.`, "ok");
+        Object.assign(view, await this.values(), { models: this.hooks.models() });
+        note(`The gateway lists ${view.models.length} model${view.models.length === 1 ? "" : "s"}.`, "ok");
         return;
       }
       case "createSkill": {
         // Its name and when to use it, from the form; the skills folder is made if there's none yet.
         const made = await this.hooks.createSkill(String(message.name || ""), String(message.when || ""));
-        if ("problem" in made) { this.notice(made.problem, "bad"); return; }
-        Object.assign(this.view, await this.values(), { skillForm: false, saved: "skills", notice: "Made: write its instructions in the editor.", noticeKind: "ok" });
-        this.changed();
+        if ("problem" in made) { note(made.problem, "bad"); return; }
+        Object.assign(view, await this.values(), { skillForm: false, saved: "skills", notice: "Made: write its instructions in the editor.", noticeKind: "ok" });
+        changed();
         return;
       }
       case "skillSwitch": {
@@ -322,51 +339,63 @@ class SettingsScreen {
         const off = offNames(config.get("skillsOff", [])).filter((name) => name !== key);
         if (skill.on) off.push(key);
         await config.update("skillsOff", off.length ? off : undefined, vscode.ConfigurationTarget.Global);
-        Object.assign(this.view, { skills: this.skills(), notice: "", noticeKind: "" });
-        this.changed();
+        Object.assign(view, { skills: this.skills(), notice: "", noticeKind: "" });
+        changed();
         return;
       }
       case "deleteSkill": {
-        if (await this.hooks.deleteSkill(String(message.name || ""))) { Object.assign(this.view, { skills: this.skills() }); this.changed(); }
+        if (await this.hooks.deleteSkill(String(message.name || ""))) { Object.assign(view, { skills: this.skills() }); changed(); }
         return;
       }
       case "openInstructions": {
         const problem = await this.hooks.openInstructions();
-        Object.assign(this.view, { instructionsHere: this.hooks.instructions() });
-        this.notice(problem, problem ? "bad" : "");
+        Object.assign(view, { instructionsHere: this.hooks.instructions() });
+        note(problem, problem ? "bad" : "");
         return;
       }
-      case "reindex": this.hooks.refreshDocs(); this.notice("Indexing the docs folders in the background.", "ok"); return;
+      case "reindex": this.hooks.refreshDocs(); note("Indexing the docs folders in the background.", "ok"); return;
       case "startEmbedding":
         this.hooks.startEmbedding();
-        Object.assign(this.view, { docsStatus: this.hooks.docs() });
-        this.notice("Embedding in the background. You can close Settings: it carries on.", "ok");
+        Object.assign(view, { docsStatus: this.hooks.docs() });
+        note("Embedding in the background. You can close Settings: it carries on.", "ok");
         return;
       case "stopEmbedding":
         this.hooks.stopEmbedding();
-        Object.assign(this.view, { docsStatus: this.hooks.docs() });
-        this.notice("Embedding stopped. What's embedded is kept, and search by meaning uses it.", "ok");
+        Object.assign(view, { docsStatus: this.hooks.docs() });
+        note("Embedding stopped. What's embedded is kept, and search by meaning uses it.", "ok");
         return;
       case "raiseEmbedBudget":
-        if (policy.locked("embedDailyBudget")) { this.notice("Your organization sets the daily embedding budget.", "bad"); return; }
+        if (policy.locked("embedDailyBudget")) { note("Your organization sets the daily embedding budget.", "bad"); return; }
         this.hooks.raiseEmbedBudget();
-        Object.assign(this.view, { docsStatus: this.hooks.docs() });
-        this.notice("Raised for today (until midnight UTC). Embedding carries on in the background.", "ok");
+        Object.assign(view, { docsStatus: this.hooks.docs() });
+        note("Raised for today (until midnight UTC). Embedding carries on in the background.", "ok");
         return;
       case "testEmbedding": {
         const model = String(solderSettings().get("embeddingModel", "")).trim();
-        if (!model) { this.notice("Type the embeddings model's id first.", "bad"); return; }
-        this.notice("Testing the embeddings model…");
+        if (!model) { note("Type the embeddings model's id first.", "bad"); return; }
+        note("Testing the embeddings model…");
         try {
           const { dims, tokens } = await this.hooks.testEmbedding(model);
-          this.notice(`It works: ${dims.toLocaleString("en-US")} numbers for each passage${tokens ? `, ${tokens} tokens for that test` : ""}.`, "ok");
+          note(`It works: ${dims.toLocaleString("en-US")} numbers for each passage${tokens ? `, ${tokens} tokens for that test` : ""}.`, "ok");
         } catch (error) {
-          this.notice(messageOf(error), "bad");
+          note(messageOf(error), "bad");
         }
         return;
       }
     }
   }
+}
+
+/** Your own docs folders, as the setting holds them now. @param {any} config @returns {{path: string, about: string}[]} */
+function ownDocs(config) {
+  const raw = config.own("docsFolders", []);
+  return (Array.isArray(raw) ? raw : []).map((item) => typeof item === "string" ? { path: item, about: "" }
+    : { path: String(item?.path ?? ""), about: String(item?.about ?? "") }).filter((d) => d.path);
+}
+
+/** Your own skills folders, as the setting holds them now. @param {any} config @returns {string[]} */
+function ownSkillsFolders(config) {
+  return (config.own("skillsFolders", []) || []).map((/** @type {any} */ item) => String(typeof item === "string" ? item : item?.path ?? "")).filter(Boolean);
 }
 
 /** @param {{path: string, about: string}[]} docs */

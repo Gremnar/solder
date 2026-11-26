@@ -5,12 +5,13 @@
  * no truth: it renders the state posted here (rebuilt from the saved chat) plus streamed text.
  */
 const vscode = require("vscode");
-const { config: solderSettings, policy, readOnly, allowChanges } = require("./config.js");
+const { config: solderSettings, policy, readOnly, allowChanges, modelAllowed, MODEL_FILTER_BROKEN } = require("./config.js");
 const { laneOf, assistTwin, bestModel } = require("./lanes.js");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { writeZip } = require("./zip.js");
+const { bracesBalance } = require("./paste.js");
 const { Engine, labelOf, parseArguments, tokenReport, removeTurn, laterMessages } = require("./engine.js");
 const { GatewayClient, GatewayError } = require("./gateway.js");
 const { systemPrompt, toolDefinitions, STARTERS, SELECTION, SKILL, CONTEXT } = require("./prompt.js");
@@ -22,7 +23,7 @@ const { SetupWizard } = require("./setup.js");
 const { SettingsScreen } = require("./settings.js");
 const { Log } = require("./log.js");
 const { MAX_SKILLS, offered, offNames, switchedOn } = require("./skills.js");
-const { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder } = require("./projects.js");
+const { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder, ownSkillsFolder } = require("./projects.js");
 const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
 
@@ -70,19 +71,6 @@ project, in plain words, then delete these lines. For example:
 - How you want changes made: style, naming, comments.
 `;
 
-const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
-
-/**
- * Which models a request may use: any, unless your organization enforces a model filter, when only those it matches
- * (none, if the filter won't read). null when there's no such rule.
- * @returns {((id: string) => boolean) | null}
- */
-function modelAllowed() {
-  if (!policy.locked("modelFilter")) return null;
-  const filter = String(solderSettings().get("modelFilter", "") || "");
-  if (!filter) return null;
-  try { const pattern = new RegExp(filter, "i"); return (id) => pattern.test(id); } catch { return () => false; }
-}
 
 /**
  * Where your skills go when you haven't chosen a folder: %APPDATA%\Solder\skills on Windows (it roams with your
@@ -154,6 +142,8 @@ class SolderPanel {
     /** @type {any} */
     this.credits = null;
     this.answerTokens = 0;
+    /** The chat the latest answer's count belongs to. */
+    this.answerChat = "";
     /** The project folders you use (being on the list is your yes to a project's rules and skills). */
     this.projects = new ProjectList(path.join(context.globalStorageUri.fsPath, "projects.json"));
     /** @type {{page: string, skillForm: boolean, notice: string, noticeKind: string} | null} the Projects screen, when it's open */
@@ -328,8 +318,10 @@ class SolderPanel {
     // then fails on its own (so does a `catch`, or a `|` or `.Method()` starting a line). Inside the braces nothing is
     // finished until the last one, so it all waits for your Enter and runs as one, as a script would; the dot runs it
     // in your session, so its variables stay. Only where VS Code says the terminal is PowerShell (a terminal just
-    // made gets a moment to say). `using` must start a script, so code with it goes in as before.
-    if (PWSH.has(await terminalShell(terminal, !open)) && !/^\s*using\s/im.test(code)) {
+    // made gets a moment to say). `using` must start a script, so code with it goes in as before, and so does code
+    // whose braces don't balance (or can't be told to): a stray `}` would close the wrapper early, and PowerShell
+    // would then run what follows as it arrives.
+    if (PWSH.has(await terminalShell(terminal, !open)) && !/^\s*using\s/im.test(code) && bracesBalance(code)) {
       terminal.sendText(`. {\n${code}\n}`, false);
       return;
     }
@@ -356,14 +348,18 @@ class SolderPanel {
     const before = pending ? pending.before : await Promise.resolve(vscode.env.clipboard.readText()).catch(() => "");
     this._clipboard = { before, timer: undefined };
     await vscode.env.clipboard.writeText(code);
+    const pasted = code;
     try {
       await vscode.commands.executeCommand("workbench.action.terminal.paste");
     } finally {
       const mine = this._clipboard;
       if (mine && mine.before === before && !mine.timer) {
-        mine.timer = setTimeout(() => {
+        mine.timer = setTimeout(async () => {
           if (this._clipboard === mine) this._clipboard = null;
-          if (before) Promise.resolve(vscode.env.clipboard.writeText(before)).catch(() => {});
+          if (!before) return;
+          // Only while the clipboard still holds what was pasted: something you copied since stays.
+          const now = await Promise.resolve(vscode.env.clipboard.readText()).catch(() => null);
+          if (now === pasted) Promise.resolve(vscode.env.clipboard.writeText(before)).catch(() => {});
         }, 800);
       }
     }
@@ -450,13 +446,38 @@ class SolderPanel {
    */
   useChat(chat) {
     // A task that's running keeps the tools as they are (its folder, its project's skills, what it may read): looking
-    // at another chat meanwhile, or trying to send from it, must not move the task's files under it.
-    if (this.engine?.busy && this.runId && chat.id !== this.runId) return;
+    // at another chat meanwhile, or trying to send from it, must not move the task's files under it; nor may a change
+    // to its own chat's folder or project made while it runs (that applies from the next message, as the task ends).
+    if (this.engine?.busy && this.runId) return;
     this.tools.useFolder(this.folderOf(chat));
     this.tools.attached = this.attachedPaths(chat);
     // No file is read here (this runs on every redraw): where the skills would be is enough.
     const folder = String(chat?.project || "");
     this.tools.projectSkills = folder && this.projects.has(folder) && !policy.locked("skillsFolders") ? skillsFolder(path.resolve(folder)) : "";
+  }
+
+  /**
+   * Whether a chat works in a folder this window's workspace doesn't have (a project's whose folder you chose not to
+   * add here, or a folder from another window): its paths would otherwise land in this window's first folder, where
+   * a file of the same name may be. Says so when it does. @param {any} chat
+   */
+  folderMissing(chat) {
+    const folder = this.folderOf(chat);
+    if (!folder || !path.isAbsolute(folder) || !this.tools.root() || this.tools.rootOf(path.resolve(folder))) return false;
+    vscode.window.showInformationMessage(`Solder: this chat works in ${folder}, which isn't in this window's workspace. Choose its folder again (the folder chip) to add it, or open that folder in a window of its own.`);
+    return true;
+  }
+
+  /**
+   * A chat's working folder as a full path, when it's in this window's workspace and there; "" otherwise. (Not the
+   * tools' resolve: that starts from the working folder already, and would put it in twice.) @param {any} chat
+   */
+  chatFolderPath(chat) {
+    const folder = this.folderOf(chat);
+    const root = this.tools.root();
+    if (!folder || (!root && !path.isAbsolute(folder))) return "";
+    const full = path.isAbsolute(folder) ? path.resolve(folder) : path.resolve(root, folder);
+    return this.tools.rootOf(full) && fs.existsSync(full) ? full : "";
   }
 
   /** A project's name for the panel, read at most every few seconds (it's shown on every redraw). @param {string} folder */
@@ -518,12 +539,13 @@ class SolderPanel {
   /**
    * A project in this window that isn't one of yours, shown read-only before you decide: its name, its rules and its
    * skills, and nothing to change. Only a folder that's a project, found in this window (so the page can't be pointed
-   * at just any folder); every action on a project still asks that it's on your list.
-   * @param {string} folder
+   * at just any folder), or one you picked yourself in the folder picker; every action on a project still asks that
+   * it's on your list.
+   * @param {string} folder @param {boolean} [picked] chosen by you in VS Code's folder picker (not named by the panel)
    */
-  previewProject(folder) {
+  previewProject(folder, picked = false) {
     if (!folder || this.projects.has(folder) || !isProject(folder)) return;
-    if (!this.foundProjects().some((item) => projectKey(item.path) === projectKey(folder))) return;
+    if (!picked && !this.foundProjects().some((item) => projectKey(item.path) === projectKey(folder))) return;
     this.settingsScreen.close();
     this.projectsView = { page: path.resolve(folder), preview: true, skillForm: false, notice: "", noticeKind: "" };
     this.post();
@@ -601,7 +623,8 @@ class SolderPanel {
     const fresh = this.foundCache && Date.now() - this.foundCache.at < 60_000;
     if (!fresh && !this.foundScan) {
       const folders = [...this.tools.roots()];
-      try { if (this.chat.folder) folders.push(this.tools.resolve(this.folderOf(this.chat) || this.chat.folder).full); } catch { /* a folder that's gone */ }
+      const own = this.chatFolderPath(this.chat);
+      if (own) folders.push(own);
       const before = JSON.stringify(this.foundCache?.items || this.foundLast);
       this.foundScan = findProjects(folders).then((items) => {
         this.foundCache = { at: Date.now(), items };
@@ -637,7 +660,7 @@ class SolderPanel {
       const pick = await vscode.window.showWarningMessage(`Use the project "${theirs?.name ?? path.basename(folder)}"?`, { modal: true,
         detail: `This folder is already set up as a Solder project${brings ? `, with ${brings}` : ""}. A project's rules and skills are instructions the model follows in its chats: use it only if you trust where it came from. You can read them on its page first.` },
       "Use project", READ);
-      if (pick === READ) { this.previewProject(folder); return; }
+      if (pick === READ) { this.previewProject(folder, !given); return; }
       if (pick !== "Use project") return;
     }
     try {
@@ -724,9 +747,9 @@ class SolderPanel {
         token.onCancellationRequested(() => controller.abort());
         const listed = await exportEntries(folder, what, this.ruleNames(), { limit: 20_000, signal: controller.signal });
         if (listed.tooMany) throw new Error("There are more than 20,000 files in it. Zip the folder with Windows instead, or export the project's own files.");
-        // Never the zip itself (or one being written), should it be saved inside the folder.
-        const entries = listed.entries.filter((entry) => !projectKey(entry.file).startsWith(projectKey(target)));
-        return writeZip(target, entries, { signal: controller.signal, onEntry: (at, of) => { if (at % 50 === 0 || at === of) progress.report({ message: `${at.toLocaleString("en-US")} of ${of.toLocaleString("en-US")} files` }); } });
+        // Never the zip itself (or one being written), should it be saved inside the folder: writeZip leaves those
+        // out by their exact names (a file beside it whose name starts the same, such as its checksum, goes in).
+        return writeZip(target, listed.entries, { signal: controller.signal, onEntry: (at, of) => { if (at % 50 === 0 || at === of) progress.report({ message: `${at.toLocaleString("en-US")} of ${of.toLocaleString("en-US")} files` }); } });
       });
       this.projectNotice(`Exported ${done.files.toLocaleString("en-US")} file${done.files === 1 ? "" : "s"} to ${path.basename(target)}.` +
         (done.skipped.length ? ` ${done.skipped.length} couldn't be read and ${done.skipped.length === 1 ? "was" : "were"} left out.` : ""), "ok");
@@ -740,9 +763,10 @@ class SolderPanel {
   }
 
   /** The project's rules file: made if it has none (never written over), and opened to read or write. @param {string} folder */
-  async openProjectRules(folder) {
+  /** @param {string} folder @param {string} [name] the rules file whose Edit was clicked (one of the instruction file names) */
+  async openProjectRules(folder, name = "") {
     if (!this.projects.has(folder)) return;
-    const problem = await this.openInstructions(path.resolve(folder));
+    const problem = await this.openInstructions(path.resolve(folder), name);
     if (problem) this.projectNotice(problem, "bad"); else this.post();
   }
 
@@ -750,8 +774,12 @@ class SolderPanel {
   async createProjectSkill(folder, name, when) {
     if (!this.projects.has(folder) || !this.projectsView) return;
     if (policy.locked("skillsFolders")) { this.projectNotice("Your organization sets the skills, so a project can't add its own.", "bad"); return; }
-    const made = await this.createSkill(name, when, skillsFolder(path.resolve(folder)));
+    // The project's own skills folder: one that's a link leading out of the project isn't written to.
+    const into = ownSkillsFolder(path.resolve(folder));
+    if (!into) { this.projectNotice("This project's skills folder leads outside the project, so Solder won't add skills there.", "bad"); return; }
+    const made = await this.createSkill(name, when, into);
     if ("problem" in made) { this.projectNotice(made.problem, "bad"); return; }
+    if (!this.projectsView) return; // Projects closed meanwhile
     Object.assign(this.projectsView, { skillForm: false, notice: "", noticeKind: "" });
     this.post();
   }
@@ -816,7 +844,7 @@ class SolderPanel {
    */
   async attachFiles(given) {
     const into = this.attachments; // the chat it's for, should you open another while the dialog is up
-    const start = this.chat.folder ? this.tools.resolve(this.chat.folder).full : this.tools.root();
+    const start = this.chatFolderPath(this.chat) || this.tools.root();
     const picked = given ?? await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
       openLabel: "Attach", title: "Solder: attach text files", ...(start ? { defaultUri: vscode.Uri.file(start) } : {}) });
     /** @type {string[]} */
@@ -1040,11 +1068,13 @@ class SolderPanel {
    * lines on what to put in it, and opens it to write. One that's there is opened as it is, never overwritten.
    * @returns {Promise<string>} what to say ("" when it opened)
    */
-  async openInstructions(/** @type {string} */ folder = "") {
+  async openInstructions(/** @type {string} */ folder = "", /** @type {string} */ asked = "") {
     const root = folder || this.tools.roots()[0];
     if (!root) return "Open a folder first: an instruction file lives in a project's top folder.";
     const names = plainNames(solderSettings().get("instructionFiles", ["AGENTS.md"]));
-    const name = names.find((candidate) => ownFile(path.join(root, candidate), root)) || names[0] || "AGENTS.md";
+    // The file asked for, when it's one of the instruction files and there (a project with two shows an Edit for each).
+    const wanted = names.find((candidate) => candidate.toLowerCase() === asked.toLowerCase() && ownFile(path.join(root, candidate), root));
+    const name = wanted || names.find((candidate) => ownFile(path.join(root, candidate), root)) || names[0] || "AGENTS.md";
     const file = path.join(root, name);
     try {
       fs.writeFileSync(file, INSTRUCTIONS_STARTER, { flag: "wx" });
@@ -1121,14 +1151,30 @@ class SolderPanel {
     this._client = null;
   }
 
-  async refreshModels() {
+  /**
+   * Lists the gateway's models again. Each listing may take a while (a gateway that drops traffic, up to a minute):
+   * only the newest one's answer is used, so a slow answer for an address since changed can't replace it, and an
+   * older one waits for the newest before it returns.
+   * @returns {Promise<void>}
+   */
+  refreshModels() {
+    const listing = this._listModels(++this._modelsRun);
+    this._modelsListing = listing;
+    return listing;
+  }
+
+  /** @param {number} run @returns {Promise<void>} */
+  async _listModels(run) {
+    const latest = () => run === this._modelsRun;
     this.modelsProblem = "";
     try {
       await this.loadKey();
+      if (!latest()) return this._modelsListing;
       const config = solderSettings();
       // No gateway, or no key for one that needs it: that's setup to do, not a connection problem (a 401).
-      if (!config.get("endpoint", "") || await this.setup.needed()) { this.models = []; this.modelsProblem = "setup"; this.post(); return; }
+      if (!config.get("endpoint", "") || await this.setup.needed()) { if (!latest()) return this._modelsListing; this.models = []; this.modelsProblem = "setup"; this.post(); return; }
       let ids = await this.client().models();
+      if (!latest()) return this._modelsListing;
       const filter = config.get("modelFilter", "");
       if (filter) {
         try { const pattern = new RegExp(filter, "i"); ids = ids.filter((id) => pattern.test(id)); }
@@ -1141,11 +1187,17 @@ class SolderPanel {
       const names = config.get("modelNames", {});
       this.models = ids.map((id) => ({ id, name: names[id] || id }));
     } catch (error) {
+      if (!latest()) return this._modelsListing;
       this.models = [];
       this.modelsProblem = error instanceof GatewayError ? error.message : "Couldn't list the models.";
     }
     this.post();
   }
+
+  /** How many model listings have started: a listing's answer is used only while it's the newest. */
+  _modelsRun = 0;
+  /** The newest listing. @type {Promise<void>} */
+  _modelsListing = Promise.resolve();
 
   // ------------------------------------------------------------- engine events --
 
@@ -1180,7 +1232,7 @@ class SolderPanel {
         }
         break;
       case "approval-done": this.approvals = this.approvals.filter((a) => a.id !== event.id); break;
-      case "usage": this.answerTokens = event.answer; this.credits = event.credits || this.credits; this.updateStatusBar(); break;
+      case "usage": this.answerTokens = event.answer; this.answerChat = event.chat ?? this.runId; this.credits = event.credits || this.credits; this.updateStatusBar(); break;
       case "busy":
         if (event.busy) { this.error = null; this.answerTokens = 0; } else {
           this.status = ""; this.live = ""; this.running = ""; this.approvals = [];
@@ -1285,13 +1337,18 @@ class SolderPanel {
         if (this.engine.busy || policy.locked("model")) return;
         const target = String(message.model || "");
         if (!this.models.some((m) => m.id === target)) return;
-        if (!(await this.confirmSwitch(this.chat, target))) { this.post(); return; }
-        this.chat.model = target;
-        await this.store.save(this.chat);
-        this.error = null; this.useChat(this.chat); this.engine.resume(this.chat); return;
+        // The chat this was asked in: a summary first can take a while, and another chat may be open by its end.
+        const chat = this.chat;
+        if (!(await this.confirmSwitch(chat, target))) { this.post(); return; }
+        if (this.engine.busy || this.folderMissing(chat)) { this.post(); return; } // Resume is still there
+        chat.model = target;
+        await this.store.save(chat);
+        if (this.chat === chat) this.error = null;
+        this.useChat(chat); this.engine.resume(chat).catch(() => {}); return;
       }
       case "dismiss": this.error = null; this.post(); return;
       case "resume":
+        if (this.folderMissing(this.chat)) return;
         if (this.engine.busy) { vscode.window.showInformationMessage(`Solder is working in "${this.runChat?.title ?? "another chat"}". Resume this one when it's done.`); return; }
         this.error = null; this.useChat(this.chat); this.engine.resume(this.chat); return;
       case "decide": this.engine.decide(message.id, { decision: message.decision, note: message.note }); return;
@@ -1311,13 +1368,14 @@ class SolderPanel {
         return;
       }
       case "rename": {
-        if (this.chat.title === "New chat" && !this.chat.messages.length) return;
-        const title = await vscode.window.showInputBox({ title: "Rename this chat", value: this.chat.title,
+        const chat = this.chat; // the chat asked about, whichever is open when the name comes back
+        if (chat.title === "New chat" && !chat.messages.length) return;
+        const title = await vscode.window.showInputBox({ title: "Rename this chat", value: chat.title,
           validateInput: (value) => value.trim() ? null : "A chat needs a name." });
         if (!title?.trim()) return;
-        this.chat.title = title.trim().slice(0, 120);
-        this.chat.titleSource = "user"; // never renamed automatically again
-        await this.store.save(this.chat);
+        chat.title = title.trim().slice(0, 120);
+        chat.titleSource = "user"; // never renamed automatically again
+        await this.store.save(chat);
         this.post();
         return;
       }
@@ -1333,7 +1391,7 @@ class SolderPanel {
       case "projectRename": return this.renameProjectTo(String(message.path || ""), String(message.name ?? ""));
       case "projectRemove": return this.removeProject(String(message.path || ""));
       case "projectChat": return this.newProjectChat(String(message.path || ""));
-      case "projectRules": return this.openProjectRules(String(message.path || ""));
+      case "projectRules": return this.openProjectRules(String(message.path || ""), String(message.name || ""));
       case "projectSkillForm": if (this.projectsView) { Object.assign(this.projectsView, { skillForm: !!message.open, notice: "", noticeKind: "" }); this.post(); } return;
       case "projectSkillNew": return this.createProjectSkill(String(message.path || ""), String(message.name ?? ""), String(message.when ?? ""));
       case "projectSkillSwitch": return this.switchProjectSkill(String(message.path || ""), String(message.name || ""), !!message.on);
@@ -1367,6 +1425,7 @@ class SolderPanel {
         if (!chat) return;
         this.chat = chat;
         this.syncChat(); // as its file has it now, if another window went on with it
+        this.useChat(this.chat); // the tools follow the chat shown (not while a task runs: it keeps its own)
         this.projectsView = null;
         if (chat.id === this.awayDone) this.awayDone = "";
         // A project's chat opened in a window its folder isn't in: the folder is added (after asking), so it can work there.
@@ -1376,13 +1435,19 @@ class SolderPanel {
         return;
       }
       case "delete": {
-        if (this.engine.busy && this.chat.id === this.runId) return;
-        const pick = await vscode.window.showWarningMessage(`Delete the chat "${this.chat.title}"?`, { modal: true }, "Delete");
+        const chat = this.chat; // the chat asked about
+        if (this.engine.busy && chat.id === this.runId) return;
+        const pick = await vscode.window.showWarningMessage(`Delete the chat "${chat.title}"?`, { modal: true }, "Delete");
         if (pick !== "Delete") return;
-        this.store.remove(this.chat.id);
-        this.tools.removeBackups(this.chat.id);
-        const next = this.store.list().find((c) => !c.archived);
-        this.chat = (next && this.store.load(next.id)) || Engine.newChat();
+        this.store.remove(chat.id);
+        this.tools.removeBackups(chat.id);
+        this.drafts.delete(chat.id);
+        if (this.awayDone === chat.id) this.awayDone = "";
+        if (this.chat === chat) {
+          const next = this.store.list().find((c) => !c.archived);
+          this.chat = (next && this.store.load(next.id)) || Engine.newChat();
+          this.useChat(this.chat);
+        }
         this.post();
         return;
       }
@@ -1626,6 +1691,11 @@ class SolderPanel {
       if (typed) this.view?.webview.postMessage({ type: "restore", text: typed });
       return;
     }
+    if (this.folderMissing(this.chat)) {
+      const typed = String(message.text || "").trim();
+      if (typed) this.view?.webview.postMessage({ type: "restore", text: typed });
+      return;
+    }
     this.useChat(this.chat);
     const attached = this.attachmentParts();
     // Something attached and nothing typed: it still goes, with a line saying so.
@@ -1634,8 +1704,14 @@ class SolderPanel {
     // Sent by its path: from here the task may read it without asking.
     for (const a of this.attachments) if (a.kind === "path" && a.full) this.tools.attached.add(String(a.full).toLowerCase());
     if (this.engine.busy) {
-      // Busy: it goes with the next step, the selection with it when it came from the menu.
-      const picked = message.picked ?? (message.editor ? this.selectionBlock(message.editor) : null);
+      // Busy: it goes with the next step, with what the box's chips hold (the selection, or the open file), as it
+      // would have when idle; the selection from the editor's menu too.
+      const editor = message.editor ?? vscode.window.activeTextEditor;
+      let picked = message.picked ?? null;
+      if (!picked && editor && editor.document.uri.scheme === "file") {
+        if (message.editor || message.selection) picked = this.selectionBlock(editor);
+        else if (message.file) { const shown = this.tools.shown(editor.document.uri.fsPath); picked = { block: CONTEXT.openFile(shown), chip: path.basename(shown) }; }
+      }
       const going = [...(picked ? [picked] : []), ...attached];
       this.engine.steer(text, going.length ? { context: going.map((part) => part.block).join("\n\n"), chips: going.map((part) => part.chip) } : {});
       this.attachments = [];
@@ -1706,6 +1782,7 @@ class SolderPanel {
    */
   async setFolder(full) {
     if (this.awayBusy()) { vscode.window.showInformationMessage("Solder is working in another chat: change this chat's folder once it's done."); return; }
+    const chat = this.chat; // the chat asked about, whichever is open once the question below is answered
     const root = this.tools.root();
     let folder = "";
     if (full && root) {
@@ -1724,13 +1801,18 @@ class SolderPanel {
           return;
         }
       }
-      // In the main folder: relative to it. In another workspace folder: its full path.
+      // In the main folder: relative to it. In another workspace folder: its full path. So too for a chat made in
+      // another window whose main folder isn't this one's: it reads a relative folder against its own (folderOf).
       const relative = path.relative(root, full);
-      folder = relative.startsWith("..") || path.isAbsolute(relative) ? path.resolve(full) : relative.split(path.sep).join("/");
+      const home = String(chat.home || "");
+      const elsewhere = home && path.isAbsolute(home) && projectKey(home) !== projectKey(root);
+      folder = elsewhere || relative.startsWith("..") || path.isAbsolute(relative) ? path.resolve(full) : relative.split(path.sep).join("/");
     }
-    this.chat.folder = folder;
-    this.useChat(this.chat);
-    await this.store.save(this.chat);
+    chat.folder = folder;
+    // A task running in this chat finishes where it started (its paths, and any change waiting for your answer,
+    // stay where they were): the new folder applies from the next message, as the end of the task sets it.
+    if (this.chat === chat && !(this.engine.busy && this.runId === chat.id)) this.useChat(chat);
+    await this.store.save(chat);
     this.post();
   }
 
@@ -1841,9 +1923,8 @@ class SolderPanel {
 
   /** @param {string} file @param {number} [line] */
   async openFile(file, line) {
-    if (!this.awayBusy()) this.useChat(this.chat); // the running task keeps its folder
-
-    const target = this.tools.resolve(file);
+    let target;
+    try { target = this.shownChatPath(file); } catch { vscode.window.showWarningMessage(`Solder: couldn't open ${file}.`); return; }
     try {
       const document = await vscode.workspace.openTextDocument(target.uri);
       const position = new vscode.Position(Math.max(0, (line || 1) - 1), 0);
@@ -1862,12 +1943,23 @@ class SolderPanel {
     if (action === "copy") { await vscode.env.clipboard.writeText(shown || given); return; }
     if (action === "open") return this.openFile(file, line ? Number(line) : undefined);
     if (action !== "copyPath" && action !== "reveal") return;
-    if (!this.awayBusy()) this.useChat(this.chat); // the running task keeps its folder
     let target;
-    try { target = this.tools.resolve(file); } catch { vscode.window.showWarningMessage(`Solder: ${file} isn't a path that can be used here.`); return; }
+    try { target = this.shownChatPath(file); } catch { vscode.window.showWarningMessage(`Solder: ${file} isn't a path that can be used here.`); return; }
     if (action === "copyPath") { await vscode.env.clipboard.writeText(target.full); return; }
     if (!fs.existsSync(target.full)) { vscode.window.showWarningMessage(`Solder: couldn't find ${file}.`); return; }
     await vscode.commands.executeCommand("revealFileInOS", target.uri);
+  }
+
+  /**
+   * A path in the chat that's shown, as its own folder resolves it: while a task runs in another chat, the tools keep
+   * that task's folder, so the shown chat's is used for this one path and the task's put straight back (nothing runs
+   * in between: resolving doesn't wait). @param {string} file
+   */
+  shownChatPath(file) {
+    if (!this.awayBusy()) { this.useChat(this.chat); return this.tools.resolve(file); }
+    const running = this.tools.folder;
+    this.tools.useFolder(this.folderOf(this.chat));
+    try { return this.tools.resolve(file); } finally { this.tools.useFolder(running); }
   }
 
   // ------------------------------------------------------------------- posting --
@@ -1889,6 +1981,7 @@ class SolderPanel {
   }
 
   post() {
+    this.updateStatusBar(); // the chat shown may have changed (opened, new, deleted): the bar is that chat's
     if (!this.view) return;
     const chat = this.chat;
     const settings = this.settings();
@@ -2041,14 +2134,17 @@ class SolderPanel {
   }
 
   updateStatusBar() {
+    if (!this.statusBar) return;
     const tokens = this.chat.usage.tokens;
+    // The latest answer's count is its own chat's: not shown on another.
+    const answer = this.answerChat === this.chat.id ? this.answerTokens : 0;
     const left = this.credits ? ` · ${compact(this.credits.remaining)} left` : "";
     // An Assist model's tokens aren't counted against the allowance: shown apart, so a chat on one doesn't read as 0.
     const unbilled = Number(this.chat.usage.assistTokens) || 0;
     this.statusBar.text = `$(symbol-misc) ${!tokens && unbilled ? `${compact(unbilled)} unbilled` : compact(tokens)}${left}`;
     this.statusBar.tooltip = `Solder: this chat has used ${tokens.toLocaleString()} tokens` +
       (unbilled ? ` of your allowance, and ${unbilled.toLocaleString()} on Assist models (not counted against it)` : "") +
-      (this.answerTokens ? `, the latest answer ${this.answerTokens.toLocaleString()}` : "") +
+      (answer ? `, the latest answer ${answer.toLocaleString()}` : "") +
       (this.credits ? `.\n${this.credits.remaining.toLocaleString()} of ${this.credits.limit.toLocaleString()} left (${this.credits.bucket})` +
         (this.credits.resetSeconds ? `, resets in about ${Math.round(this.credits.resetSeconds / 3600)} h` : "") : "") + ".";
     this.statusBar.show();

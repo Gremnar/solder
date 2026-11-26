@@ -28,4 +28,19 @@ async function allowChanges() {
   return true;
 }
 
-module.exports = { config, policy, readOnly, allowChanges };
+/** What's shown when your organization's model filter won't read: no model is offered, or sent to. */
+const MODEL_FILTER_BROKEN = "Your organization's model filter isn't a valid pattern, so no model can be offered. Ask your IT team.";
+
+/**
+ * Which models a request may use: any, unless your organization enforces a model filter, when only those it matches
+ * (none, if the filter won't read). null when there's no such rule.
+ * @returns {((id: string) => boolean) | null}
+ */
+function modelAllowed() {
+  if (!policy.locked("modelFilter")) return null;
+  const filter = String(config().get("modelFilter", "") || "");
+  if (!filter) return null;
+  try { const pattern = new RegExp(filter, "i"); return (id) => pattern.test(id); } catch { return () => false; }
+}
+
+module.exports = { config, policy, readOnly, allowChanges, modelAllowed, MODEL_FILTER_BROKEN };
