@@ -1082,14 +1082,14 @@ test("looks next to each other in a reply run a few at a time; their results sta
   const read = (/** @type {string} */ file) => call("c-" + file, "read_file", { path: file });
   const ids = (/** @type {any} */ chat) => chat.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id);
 
-  // Eight reads: four at a time, never more; the first asked takes longest, and is still answered first.
+  // Sixteen reads: eight at a time, never more; the first asked takes longest, and is still answered first.
   let host = slowHost({ "f0.js": 60 });
   let chat = Engine.newChat();
-  await engine(fakeClient([{ calls: Array.from({ length: 8 }, (_, i) => read(`f${i}.js`)) }, { content: "ok" }]), host).ask(chat, "go");
-  assert.equal(host.log.most, 4);
-  assert.deepEqual(host.log.order.slice(0, 4), ["start f0.js", "start f1.js", "start f2.js", "start f3.js"], "started in the order asked");
-  assert.deepEqual(ids(chat), Array.from({ length: 8 }, (_, i) => `c-f${i}.js`), "answered in the order asked");
-  assert.equal(chat.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 8);
+  await engine(fakeClient([{ calls: Array.from({ length: 16 }, (_, i) => read(`f${i}.js`)) }, { content: "ok" }]), host).ask(chat, "go");
+  assert.equal(host.log.most, 8);
+  assert.deepEqual(host.log.order.slice(0, 8), Array.from({ length: 8 }, (_, i) => `start f${i}.js`), "started in the order asked");
+  assert.deepEqual(ids(chat), Array.from({ length: 16 }, (_, i) => `c-f${i}.js`), "answered in the order asked");
+  assert.equal(chat.messages.filter((m) => m.role === "tool" && !m.meta.failed).length, 16);
 
   // A change between reads: nothing after it starts until it's done, and it doesn't start until the reads before it are.
   host = slowHost();
@@ -1127,13 +1127,13 @@ test("Stop while several looks run: each is answered, none is left without a res
   const host = fakeHost();
   host.runTool = async (name, args) => { host.ran.push([name, args]); await new Promise((resolve) => setTimeout(resolve, 200)); return { output: "late", summary: "late" }; };
   const chat = Engine.newChat();
-  const e = engine(fakeClient([{ calls: Array.from({ length: 6 }, (_, i) => call(`r${i}`, "read_file", { path: `f${i}.js` })) }, { content: "ok" }]), host);
+  const e = engine(fakeClient([{ calls: Array.from({ length: 10 }, (_, i) => call(`r${i}`, "read_file", { path: `f${i}.js` })) }, { content: "ok" }]), host);
   setTimeout(() => e.stop(), 30);
   await e.ask(chat, "go");
   const results = chat.messages.filter((m) => m.role === "tool");
-  assert.equal(results.length, 6, "every call has its answer");
+  assert.equal(results.length, 10, "every call has its answer");
   assert.ok(results.every((m) => m.meta.failed && /stopped|Not run/i.test(m.content)), results.map((m) => m.content.slice(0, 30)).join(" | "));
-  assert.ok(host.ran.length <= 4, "no more were started than run at once");
+  assert.ok(host.ran.length <= 8, "no more were started than run at once");
 });
 
 test("a turn's working time is kept on its first message: a Resume adds to it, and time waiting on your approval doesn't count", async () => {

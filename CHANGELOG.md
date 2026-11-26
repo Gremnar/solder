@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Tool models look at everything they need in one reply.** The instructions said "up to 8 reads" a reply, and a current model held to it: a rename across 25 files and a question needing 16 files read each took extra replies. Without the limit it did each in one, with 37% fewer tokens on the rename and the rest of the live tests unchanged. Reads in a reply now also run eight at a time, not four.
+
 - **Fix: some models sent a second whole-file write with no text.** To save tokens, Solder sent an earlier task's long `write_file` and `edit_file` calls without their text. Some models copy the shape of their own earlier calls, so in a follow-up turn they sent `write_file` with a path and no content: it failed, and cost a round trip each time. Those calls now go as they came. Measured on such a model, a chat that writes two files and then changes the first: before, 0 of 4 runs passed, at 8.5 requests and about 33k input tokens; now 4 of 4, at 6 requests and about 25k. A long chat is still kept in bounds by its summary.
 
 ## 0.3.16 (2026-11-26)

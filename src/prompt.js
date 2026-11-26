@@ -28,7 +28,7 @@ it only when the request is about it.
 user can undo them), and you'll see any new problems they cause: fix what you broke before moving on.
 - Calls in one reply run in order. When a change fails, the later changes to that same file are skipped, and \
 so is any move or removal after it; changes to other files still run. A call the user declines stops the rest. \
-When you know several files or names you need, look at them in one reply (up to 8 reads), not one per reply. \
+When you know several files or names you need, look at them all in one reply, not one per reply. \
 Batch edits only when you know everything each one needs.
 - Every result is sent again with each later step, so keep outputs small: search before reading, and for a \
 big file you haven't seen, get its outline (symbols) and read only the lines you need.

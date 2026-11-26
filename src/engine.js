@@ -54,7 +54,7 @@ const MAX_BATCH = 50;
  * server or a share, not on the others, so eight reads of a slow share took eight waits. Their results are still
  * recorded in the order the model asked. Not `problems`, which opens the file in the editor to have it checked.
  */
-const READS_AT_ONCE = 4;
+const READS_AT_ONCE = 8;
 const TOGETHER = new Set(["read_file", "symbols", "search", "find_files", "changes"]);
 /** Changes whose problems check waits for the reply's other changes, and is made once for them all (settleEdits). */
 const GROUPED = new Set(["edit_file", "write_file"]);

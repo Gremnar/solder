@@ -964,4 +964,48 @@ SCENARIOS.push({
   },
 });
 
+// ---------------------------------------------------------------- wide work: many files in one task --
+// How much a model does in one reply: a rename across 25 files, and a question that needs 16 files read.
+
+const STATIONS = Array.from({ length: 24 }, (_, i) => `station${String(i + 1).padStart(2, "0")}`);
+
+SCENARIOS.push({
+  name: "wide-rename",
+  about: "a function used in 24 files plus its own: renamed everywhere, in as few steps as the model can manage",
+  setup: (w) => {
+    w("src/lib/money.js", "function formatPrice(cents) {\n  return \"$\" + (cents / 100).toFixed(2);\n}\n\nmodule.exports = { formatPrice };\n");
+    STATIONS.forEach((name, i) => w(`src/stations/${name}.js`, `const { formatPrice } = require("../lib/money");\n\n// Station ${i + 1}: its fee, shown to the operator.\nfunction fee() {\n  return formatPrice(${(i + 1) * 125});\n}\n\nmodule.exports = { fee };\n`));
+  },
+  task: "Rename formatPrice to formatMoney everywhere under src: the function itself and every place that uses it.",
+  check: ({ read, load }) => {
+    const all = ["src/lib/money.js", ...STATIONS.map((name) => `src/stations/${name}.js`)].map((name) => read(name)).join("\n");
+    if (/formatPrice/.test(all)) return "formatPrice is still there";
+    try {
+      if (typeof load("src/lib/money.js").formatMoney !== "function") return "money.js doesn't export formatMoney";
+      for (const [i, name] of STATIONS.entries()) if (load(`src/stations/${name}.js`).fee() !== "$" + ((i + 1) * 1.25).toFixed(2)) return `${name}.fee() is wrong`;
+    } catch (e) { return "doesn't run: " + /** @type {any} */ (e).message; }
+    return "";
+  },
+});
+
+const RATES = Array.from({ length: 16 }, (_, i) => {
+  // Four of them go below zero for an input of 0: each in its own way, so a search for one pattern can't find them all.
+  const bad = { 2: "return (x - 3) * 0.5;", 7: "return x > 0 ? x * 2 : -1;", 11: "const base = 10;\n  return base - (x + 12);", 14: "return Math.min(x, 1) - 2;" }[i];
+  return [`src/rates/rate${String(i + 1).padStart(2, "0")}.js`, `// Rate ${i + 1} for the billing engine.\nfunction rate(x) {\n  ${bad ?? `return x * ${(i % 5) + 1} + ${i};`}\n}\n\nmodule.exports = { rate };\n`];
+});
+
+SCENARIOS.push({
+  name: "wide-read",
+  about: "a question that needs 16 small files read: answered right, in as few steps as reads at once allow",
+  setup: (w) => { for (const [name, text] of RATES) w(name, text); },
+  task: "Each file in src/rates exports a rate(x) function. Which of them return a negative number for rate(0)? List the file names. Work it out from the code; don't change anything.",
+  check: ({ answer }) => {
+    const want = ["rate03", "rate08", "rate12", "rate15"];
+    const missing = want.filter((name) => !answer.includes(name));
+    if (missing.length) return "missed " + missing.join(", ") + ": " + answer.slice(0, 160);
+    const wrong = RATES.map(([name]) => /rate\d\d/.exec(name)?.[0] || "").filter((name) => !want.includes(name) && answer.includes(name));
+    return wrong.length ? "also named " + wrong.join(", ") : "";
+  },
+});
+
 module.exports = { SCENARIOS };
