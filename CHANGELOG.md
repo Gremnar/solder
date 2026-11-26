@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.17 (2026-11-26)
 
 - **Tool models look at everything they need in one reply.** The instructions said "up to 8 reads" a reply, and a current model held to it: a rename across 25 files and a question needing 16 files read each took extra replies. Without the limit it did each in one, with 37% fewer tokens on the rename and the rest of the live tests unchanged. Reads in a reply now also run eight at a time, not four.
 
