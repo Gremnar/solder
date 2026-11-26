@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: Paste in terminal broke multi-line PowerShell.** PowerShell runs each pasted line as soon as it ends, so an `if { }` ran before the `else` on the next line arrived, and that line failed on its own (the same for `catch`, or a line starting with `|` or `.Method()`). In a terminal VS Code says is PowerShell, several lines now go in as one command, wrapped in `. { … }`: nothing runs until you press **Enter**, it then runs as a script would, and its variables stay in your terminal. It isn't asked about any more there, since nothing runs early. Code with `using` goes in as before. Other terminals are as they were.
+
 ## 0.3.13 (2026-11-25)
 
 - **Set the default model from the model picker.** Right-click a model in the picker beside Send (or press **Shift+F10** on it) for **Use in this chat** and **Set as default**. The default is what new chats start on, as **Settings → Connection** sets it, and it's marked *default* in the list. When your organization sets the model, there's nothing to change.

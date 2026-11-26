@@ -309,9 +309,9 @@ class SolderPanel {
 
   /**
    * A shell code block's Paste in terminal: the code goes into VS Code's terminal for you to run. Solder never runs
-   * it: nothing presses Enter (trailing newlines are left off). One line is typed in; several go through VS Code's
-   * own terminal paste, which warns before a multi-line paste where the shell would run each line as it arrives. The
-   * clipboard that paste needs is put back as it was (when it held text).
+   * it: nothing presses Enter (trailing newlines are left off). One line is typed in; several into PowerShell are typed
+   * in as one command (below); anywhere else they go through VS Code's own terminal paste, after asking, since some
+   * shells run each line as it arrives. The clipboard that paste needs is put back as it was (when it held text).
    * @param {string} text
    */
   async pasteInTerminal(text) {
@@ -319,9 +319,20 @@ class SolderPanel {
     // lands at the prompt is what the panel showed, and nothing runs until you press Enter.
     const code = withoutControls(String(text ?? "")).replace(/\s+$/, "");
     if (!code || code.length > 100_000) return;
-    const terminal = vscode.window.activeTerminal ?? vscode.window.terminals[0] ?? vscode.window.createTerminal({ name: "Solder" });
+    const open = vscode.window.activeTerminal ?? vscode.window.terminals[0];
+    const terminal = open ?? vscode.window.createTerminal({ name: "Solder" });
     terminal.show(false);
     if (!code.includes("\n")) { terminal.sendText(code, false); return; }
+    // Several lines into PowerShell go in as one command, inside `. { … }`. Line by line, PowerShell runs each
+    // statement as soon as its line ends: an `if { }` runs before the `else` on the next line arrives, and that line
+    // then fails on its own (so does a `catch`, or a `|` or `.Method()` starting a line). Inside the braces nothing is
+    // finished until the last one, so it all waits for your Enter and runs as one, as a script would; the dot runs it
+    // in your session, so its variables stay. Only where VS Code says the terminal is PowerShell (a terminal just
+    // made gets a moment to say). `using` must start a script, so code with it goes in as before.
+    if (PWSH.has(await terminalShell(terminal, !open)) && !/^\s*using\s/im.test(code)) {
+      terminal.sendText(`. {\n${code}\n}`, false);
+      return;
+    }
     // Several lines: asked about once, first. A shell that takes a paste as one block waits for Enter, but some
     // (Windows PowerShell among them) run each line as it arrives, and nothing here can tell which this terminal is.
     // VS Code's own warning isn't relied on: it can be switched off, and where it's set to always show, ours would
@@ -2065,6 +2076,21 @@ function withoutControls(text) {
     if (code === 9 || code === 10 || (code >= 32 && code !== 127 && !(code >= 128 && code <= 159))) out += ch;
   }
   return out;
+}
+
+/** What VS Code calls PowerShell (Windows PowerShell and PowerShell 7 alike) as a terminal's shell. */
+const PWSH = new Set(["pwsh", "powershell"]);
+
+/**
+ * The shell VS Code says is running in a terminal ("pwsh", "bash", "cmd" and so on), or undefined when it can't
+ * tell. A terminal just made is given up to 5 seconds to start. @param {vscode.Terminal} terminal @param {boolean} wait
+ * @returns {Promise<string | undefined>}
+ */
+async function terminalShell(terminal, wait) {
+  const now = () => { try { return /** @type {any} */ (terminal).state?.shell || undefined; } catch { return undefined; } };
+  const end = Date.now() + (wait ? 5000 : 0);
+  while (!now() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 100));
+  return now();
 }
 
 /** A number setting held to its range (the fallback when it isn't a number at all). @param {unknown} value @param {number} low @param {number} high @param {number} fallback */

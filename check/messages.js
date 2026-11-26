@@ -84,7 +84,8 @@ async function main() {
 
     // ---- Paste in terminal: into a terminal, never run (no Enter), the clipboard put back
     const typed = [];
-    const fakeTerminal = { name: "Solder", show() {}, sendText(text, run) { typed.push([text, run]); }, dispose() {} };
+    // A terminal VS Code says is cmd: PowerShell's own way is below.
+    const fakeTerminal = { name: "Solder", state: { shell: "cmd" }, show() {}, sendText(text, run) { typed.push([text, run]); }, dispose() {} };
     const pastes = [];
     const restore = [
       stub(own.window, "createTerminal", () => fakeTerminal),
@@ -125,6 +126,20 @@ async function main() {
         check("... and another chat still asks (no answer: nothing pasted)", panel.chat !== asking && warned.length === 4 && pastes.length === 3, [warned.length, pastes.length]);
         asking.pasteUnasked = false;
         panel.chat = asking;
+        // PowerShell: several lines go in as one command, `. { … }`, typed without Enter and not asked about.
+        fakeTerminal.state.shell = "pwsh";
+        typed.length = 0;
+        const ifElse = "if ($e) {\n  'yes'\n}\nelse {\n  'no'\n}";
+        await panel.onMessage({ type: "pasteInTerminal", text: ifElse + "\n" });
+        check("PowerShell: several lines are typed in as one command, inside . { }, without Enter, and not asked about",
+          JSON.stringify(typed) === JSON.stringify([[". {\n" + ifElse + "\n}", false]]) && warned.length === 4 && pastes.length === 3, [typed, warned.length]);
+        typed.length = 0;
+        await panel.onMessage({ type: "pasteInTerminal", text: "Get-Date" });
+        check("... one line is typed as it is", JSON.stringify(typed) === JSON.stringify([["Get-Date", false]]), typed);
+        typed.length = 0;
+        await panel.onMessage({ type: "pasteInTerminal", text: "using namespace System.IO\n[Path]::GetTempPath()" });
+        check("... code with using (which must start a script) goes in as before: asked about, not wrapped", typed.length === 0 && warned.length === 5, [typed, warned.length]);
+        fakeTerminal.state.shell = "cmd";
         await sleep(1200);
         check("... and your clipboard is put back", await own.env.clipboard.readText() === "what you had copied");
       } else log("SKIP Paste in terminal: this window already has a terminal");
