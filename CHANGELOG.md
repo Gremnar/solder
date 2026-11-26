@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.14 (2026-11-25)
 
 - **Fix: Paste in terminal broke multi-line PowerShell.** PowerShell runs each pasted line as soon as it ends, so an `if { }` ran before the `else` on the next line arrived, and that line failed on its own (the same for `catch`, or a line starting with `|` or `.Method()`). In a terminal VS Code says is PowerShell, several lines now go in as one command, wrapped in `. { … }`: nothing runs until you press **Enter**, it then runs as a script would, and its variables stay in your terminal. It isn't asked about any more there, since nothing runs early. Code with `using` goes in as before. Other terminals are as they were.
 
