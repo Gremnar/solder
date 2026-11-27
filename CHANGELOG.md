@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.19 (2026-11-26)
 
 - **A pet, if you'd like one.** `/pet` shows a small pixel companion over the chat's top right corner, and `/pet` again hides it. There are three, each with a corner of its own: **Bit**, a robot at a workbench (`/pet bit`), **Flux**, a cat on a shelf (`/pet flux`), and **Wisp**, a ghost in a night sky (`/pet wisp`); `/pet corner` takes the corner away or gives it back. It acts out what Solder is doing: a thought bubble while the model thinks, a book for reading, a magnifying glass for searching, a laptop while a file is written, a question mark when Solder asks you something, a hop when the reply is done, and a nap after five quiet minutes. It's off until you ask for it, and your choice is remembered. Messages pass under it and it takes no clicks; it's hidden in Settings, the setup and Projects, and in a very narrow panel. With reduced motion turned on in your system it holds a still pose. It's drawn in the panel from a few hundred lines of code, with no image files: nothing about it is sent to the model, and it uses no tokens.
 
