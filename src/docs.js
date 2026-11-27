@@ -33,6 +33,8 @@ const INDEX_VERSION = 2;
 const MARKDOWN = new Set([".md", ".markdown", ".mdx", ".mdown"]);
 /** A folder no longer listed keeps its index this long (so a settings mishap doesn't cost a rebuild and its tokens). */
 const UNLISTED_KEPT_MS = 14 * 24 * 60 * 60 * 1000;
+/** How many files are left out of the index in one transaction, with a pause after each batch. */
+const FORGET_BATCH = 200;
 /** An embedding run of this many passages or more asks first, with its estimated cost. */
 const CONFIRM_PASSAGES = 300;
 /** The longest wait between two batches when pacing to a rate (a rate set absurdly low doesn't hang the run). */
@@ -475,13 +477,21 @@ class DocsIndex {
         CREATE TABLE IF NOT EXISTS vectors(sid INTEGER PRIMARY KEY, key TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL);
         CREATE INDEX IF NOT EXISTS vectors_key ON vectors(key);
         CREATE TABLE IF NOT EXISTS roots(root TEXT PRIMARY KEY, seen INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS shared(key TEXT NOT NULL, model TEXT NOT NULL, folder TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(key, model, folder));`);
+        CREATE TABLE IF NOT EXISTS shared(key TEXT NOT NULL, model TEXT NOT NULL, folder TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(key, model, folder));
+        CREATE TABLE IF NOT EXISTS owners(sid INTEGER PRIMARY KEY, key TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS owners_key ON owners(key);`);
+      // Which file each passage is from, with an index: the passages table can't index its key (it's the full-text
+      // table), so finding one file's passages there read every passage. An index made before this has its list
+      // filled in once, in one pass, rather than being made again.
+      if (!db.prepare("SELECT 1 FROM owners LIMIT 1").get() && db.prepare("SELECT 1 FROM sections LIMIT 1").get()) {
+        db.exec("BEGIN; INSERT INTO owners (sid, key) SELECT rowid, key FROM sections; COMMIT;");
+      }
       return db;
     };
     try {
       this.db = create();
       if (Number(this.db.prepare("PRAGMA user_version").get().user_version) < INDEX_VERSION) {
-        this.db.exec(`DELETE FROM vectors; DELETE FROM sections; DELETE FROM files; PRAGMA user_version = ${INDEX_VERSION};`);
+        this.db.exec(`DELETE FROM vectors; DELETE FROM sections; DELETE FROM owners; DELETE FROM files; PRAGMA user_version = ${INDEX_VERSION};`);
       }
     } catch {
       // A damaged index is only a cache: start it again.
@@ -778,7 +788,10 @@ class DocsIndex {
         // Not listed (removed, or a settings file lost for a while): kept, out of searches, until it's been gone 14 days.
         db.prepare("INSERT OR IGNORE INTO roots (root, seen) VALUES (?, ?)").run(key, now);
         const last = Number(db.prepare("SELECT seen FROM roots WHERE root = ?").get(key)?.seen ?? now);
-        if (now - last > UNLISTED_KEPT_MS) { this._forget(db, "root = ?", key); db.prepare("DELETE FROM roots WHERE root = ?").run(key); }
+        // Forgotten a batch at a time, with a pause between (a folder of 24,000 files held the window for an hour), and
+        // what's done is kept: a reload, or a refresh out of time, carries on from there.
+        if (now - last > UNLISTED_KEPT_MS && await this._forget(db, "root = ?", key, late)) db.prepare("DELETE FROM roots WHERE root = ?").run(key);
+        if (late()) break;
       }
       const result = { files: 0, changed: 0, unfinished: false, truncated: false, unread: 0 };
       for (const root of roots) {
@@ -807,22 +820,24 @@ class DocsIndex {
             const pieces = text ? sections(text, MARKDOWN.has(ext) || OFFICE.has(ext)) : [];
             /** @type {Map<string, {rowid: number, location: string}[]>} */
             const old = new Map();
-            for (const row of db.prepare("SELECT rowid, location, heading, body FROM sections WHERE key = ?").all(key)) {
+            for (const row of db.prepare("SELECT s.rowid AS rowid, s.location AS location, s.heading AS heading, s.body AS body FROM owners o JOIN sections s ON s.rowid = o.sid WHERE o.key = ?").all(key)) {
               const same = String(row.heading) + "\u0000" + String(row.body);
               old.set(same, [...(old.get(same) ?? []), { rowid: Number(row.rowid), location: String(row.location) }]);
             }
             const add = db.prepare("INSERT INTO sections (key, path, location, heading, body) VALUES (?, ?, ?, ?, ?)");
+            const own = db.prepare("INSERT OR REPLACE INTO owners (sid, key) VALUES (?, ?)");
             const move = db.prepare("UPDATE sections SET location = ?, path = ? WHERE rowid = ?");
             for (const piece of pieces) {
               const kept = old.get(piece.heading + "\u0000" + piece.body)?.shift();
               if (kept) { if (kept.location !== piece.location) move.run(piece.location, file.full, kept.rowid); }
-              else add.run(key, file.full, piece.location, piece.heading, piece.body);
+              else own.run(Number(add.run(key, file.full, piece.location, piece.heading, piece.body).lastInsertRowid), key);
             }
             const gone = [...old.values()].flat().map((row) => row.rowid);
             if (gone.length) {
               const marks = gone.map(() => "?").join(",");
               if (db.prepare(`DELETE FROM vectors WHERE sid IN (${marks})`).run(...gone).changes) this.version++;
               db.prepare(`DELETE FROM sections WHERE rowid IN (${marks})`).run(...gone);
+              db.prepare(`DELETE FROM owners WHERE sid IN (${marks})`).run(...gone);
             }
             db.prepare("INSERT OR REPLACE INTO files (key, root, stamp) VALUES (?, ?, ?)").run(key, rootKey, stamp);
             db.exec("COMMIT");
@@ -842,7 +857,7 @@ class DocsIndex {
           for (const key of known.keys()) {
             if (seen.has(key)) continue;
             if (hidden(key)) result.unread++;
-            else this._forget(db, "key = ?", key);
+            else await this._forget(db, "key = ?", key);
           }
         } else if (!walk.truncated) {
           result.unfinished = true;
@@ -857,14 +872,42 @@ class DocsIndex {
     }
   }
 
-  /** @param {any} db @param {string} where @param {string} value */
-  _forget(db, where, value) {
+  /**
+   * Leaves files out of the index: their passages, vectors and file rows. A batch at a time, each in one transaction and
+   * kept once it's done, with a pause between batches so the window answers meanwhile; stops early when `late` says so.
+   * @param {any} db @param {string} where @param {string} value @param {() => boolean} [late]
+   * @returns {Promise<boolean>} whether every file was left out
+   */
+  async _forget(db, where, value, late = () => false) {
     const gone = db.prepare(`SELECT key FROM files WHERE ${where}`).all(value).map((row) => String(row.key));
-    const remove = db.prepare("DELETE FROM sections WHERE key = ?");
+    const passages = db.prepare("SELECT sid FROM owners WHERE key = ?");
+    const unowned = db.prepare("DELETE FROM owners WHERE key = ?");
     const unvector = db.prepare("DELETE FROM vectors WHERE key = ?");
     const unshare = db.prepare("DELETE FROM shared WHERE key = ?");
-    for (const key of gone) { remove.run(key); unshare.run(key); if (unvector.run(key).changes) this.version++; }
-    db.prepare(`DELETE FROM files WHERE ${where}`).run(value);
+    const unfile = db.prepare("DELETE FROM files WHERE key = ?");
+    for (let at = 0; at < gone.length; at += FORGET_BATCH) {
+      db.exec("BEGIN");
+      try {
+        for (const key of gone.slice(at, at + FORGET_BATCH)) {
+          const sids = passages.all(key).map((row) => Number(row.sid));
+          for (let i = 0; i < sids.length; i += 500) {
+            const some = sids.slice(i, i + 500);
+            db.prepare(`DELETE FROM sections WHERE rowid IN (${some.map(() => "?").join(",")})`).run(...some);
+          }
+          unowned.run(key);
+          unshare.run(key);
+          if (unvector.run(key).changes) this.version++;
+          unfile.run(key);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      if (late() && at + FORGET_BATCH < gone.length) return false;
+    }
+    return true;
   }
 
   /** When this folder was last walked in full (0: never). @param {string} root */
