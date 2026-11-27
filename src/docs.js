@@ -80,12 +80,20 @@ const FUSION_K = 60;
 const SKIP_FOLDERS = new Set([".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
   "$recycle.bin", "system volume information"]);
 const OFFICE = new Set([".docx", ".docm", ".dotx", ".xlsx", ".xlsm", ".pptx", ".pptm"]);
-/** Never text (the NUL check would skip most of these anyway; this saves reading them). */
+/**
+ * Never text (the NUL check would skip most of these anyway; this saves reading them). The folder walk leaves them out
+ * too: not looked at, not kept in the index's file list, and not counted toward a folder's file limit (a build's
+ * output could fill it before the documents were reached).
+ */
 const BINARY = new Set([".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".tif", ".tiff", ".webp", ".heic",
   ".zip", ".7z", ".rar", ".gz", ".tgz", ".bz2", ".xz", ".cab", ".msi", ".exe", ".dll", ".sys", ".so", ".dylib",
   ".bin", ".obj", ".o", ".lib", ".a", ".pdb", ".class", ".jar", ".pyc", ".doc", ".xls", ".ppt", ".msg", ".pst",
   ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv", ".ttf", ".otf", ".woff", ".woff2", ".iso", ".img", ".vhd",
-  ".vhdx", ".vsix", ".nupkg", ".db", ".sqlite", ".mdb", ".accdb", ".psd", ".dwg"]);
+  ".vhdx", ".vsix", ".nupkg", ".db", ".sqlite", ".mdb", ".accdb", ".psd", ".dwg",
+  // Build output and other machine files (2026-11-27: a docs folder held a Rust build's).
+  ".rlib", ".rmeta", ".pch", ".ipch", ".idb", ".ilk", ".exp", ".node", ".wasm", ".dmp", ".lnk", ".pak"]);
+/** A folder holding this file is a cache (the Cache Directory Tagging convention: Rust's target folder, among others). */
+const CACHE_TAG = "cachedir.tag";
 
 /** Whether this runtime has node:sqlite with FTS5 (VS Code's does; very old ones don't). */
 function available() {
@@ -1037,6 +1045,8 @@ async function listFiles(root, late) {
     let entries;
     try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); }
     catch (error) { if (folder === root || !gone(error)) failed.push(folder); continue; }
+    // A cache (build output, a browser's data): nothing in it is a document.
+    if (folder !== root && entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === CACHE_TAG)) continue;
     for (const entry of entries) {
       const full = path.join(folder, entry.name);
       if (entry.isDirectory()) {
@@ -1044,6 +1054,7 @@ async function listFiles(root, late) {
         continue;
       }
       if (!entry.isFile() || entry.name.startsWith("~$")) continue; // ~$ is an Office lock file
+      if (BINARY.has(path.extname(entry.name).toLowerCase())) continue;
       if (files.length >= MAX_FOLDER_FILES) return { files, complete: false, truncated: true, failed };
       try {
         const stat = await fs.promises.stat(full);

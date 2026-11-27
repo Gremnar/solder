@@ -107,7 +107,8 @@ test("the index: built, searched (stemmed, ranked, Office included), updated, an
   const index = new docs.DocsIndex(path.join(base, "index", "docs.sqlite"));
   try {
     const first = await index.refresh([folder, other]);
-    assert.deepEqual([first.files, first.unfinished, first.truncated], [5, false, false]);
+    // Four: logo.png is a binary, left out of the walk (not looked at, not counted).
+    assert.deepEqual([first.files, first.unfinished, first.truncated], [4, false, false]);
     let hits = await index.search("schematics");
     assert.deepEqual(hits.map((h) => path.basename(h.path)).sort(), ["manual.docx", "notes.txt"], "stemmed; node_modules skipped");
     const word = hits.find((h) => h.path.endsWith("manual.docx"));
@@ -128,7 +129,7 @@ test("the index: built, searched (stemmed, ranked, Office included), updated, an
     assert.equal((await index.search("fb_init")).length, 1);
     assert.equal((await index.search("FB_CTRL")).length, 0, "a deleted file is gone");
     assert.equal((await index.search("unrelated")).length, 0, "a folder no longer listed is forgotten");
-    assert.equal(index.count(), 3);
+    assert.equal(index.count(), 2, "foobus.md and manual.docx (logo.png, a binary, was never listed)");
     assert.deepEqual(await index.search('"unbalanced'), [], "bad FTS syntax falls back to words");
   } finally {
     index.close();

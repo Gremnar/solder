@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Docs folders skip what can't be a document.** Files with a binary extension (images, archives, programs, and build output such as `.o`, `.rlib` and `.rmeta`) are now left out as the folder is walked: not looked at, not kept in the index, and not counted toward a folder's 20,000-file limit, which a build's output could fill before the documents were reached. Folders that mark themselves as a cache (a `CACHEDIR.TAG` file, as Rust's `target` folder has) are skipped whole. Anything like that already in your index goes on the next refresh.
+
 ## 0.3.18 (2026-11-26)
 
 - **Fix: a big docs folder you'd removed could freeze VS Code for an hour, on every start.** Fourteen days after a docs folder leaves your settings, Solder clears it out of its docs index. It did that one file at a time, and each file meant reading every passage in the index, with nothing else able to run meanwhile. A folder of 24,000 files took about an hour, the panel looked frozen throughout, and since nothing was kept until the end, every window load started it again. Each passage's file is now kept in a small indexed list, so finding a file's passages is immediate; a folder is cleared a batch at a time, with VS Code free between batches; and what's done is kept, so a reload carries on from there. Forgetting 3,000 files went from 9 seconds of frozen window to a third of a second. Updating a changed file in a large index is faster for the same reason. An index made before this gets its list filled in once, in a single pass.
