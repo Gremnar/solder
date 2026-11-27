@@ -38,6 +38,7 @@
 </header>
 <div id="read-only" class="read-only hidden" role="status"></div>
 
+<div class="pet-spot" aria-hidden="true"><canvas id="pet" class="hidden" width="44" height="34"></canvas></div>
 <main id="transcript" role="log" aria-live="off" aria-label="Chat"></main>
 <div id="announce" class="sr-only" role="status" aria-live="polite"></div>
 
@@ -69,6 +70,7 @@
   </div>
   <div id="footer" class="footer"></div>
 </section>
+<script nonce="{{nonce}}" src="{{pet}}"></script>
 <script nonce="{{nonce}}" src="{{js}}"></script>
 </body>
 </html>

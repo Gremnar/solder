@@ -35,7 +35,7 @@ VS Code extension host (Node)
 ├─ src/prompt.js        system prompt, tool definitions, every fixed text the model sees
 ├─ src/store.js         chats saved as JSON per workspace
 ├─ src/tools.js         the tools, on the vscode API (the Host the engine calls)
-└─ media/               panel.html / panel.css / panel.js: plain DOM, strict CSP, no frameworks
+└─ media/               panel.html / panel.css / panel.js: plain DOM, strict CSP, no frameworks; pet.js: the pet (/pet)
 ```
 
 - **The engine is separate from VS Code.**

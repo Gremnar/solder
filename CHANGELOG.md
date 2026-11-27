@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A pet, if you'd like one.** `/pet` shows a small pixel companion over the chat's top right corner, and `/pet` again hides it. There are three, each with a corner of its own: **Bit**, a robot at a workbench (`/pet bit`), **Flux**, a cat on a shelf (`/pet flux`), and **Wisp**, a ghost in a night sky (`/pet wisp`); `/pet corner` takes the corner away or gives it back. It acts out what Solder is doing: a thought bubble while the model thinks, a book for reading, a magnifying glass for searching, a laptop while a file is written, a question mark when Solder asks you something, a hop when the reply is done, and a nap after five quiet minutes. It's off until you ask for it, and your choice is remembered. Messages pass under it and it takes no clicks; it's hidden in Settings, the setup and Projects, and in a very narrow panel. With reduced motion turned on in your system it holds a still pose. It's drawn in the panel from a few hundred lines of code, with no image files: nothing about it is sent to the model, and it uses no tokens.
+
 - **Docs folders skip what can't be a document.** Files with a binary extension (images, archives, programs, and build output such as `.o`, `.rlib` and `.rmeta`) are now left out as the folder is walked: not looked at, not kept in the index, and not counted toward a folder's 20,000-file limit, which a build's output could fill before the documents were reached. Folders that mark themselves as a cache (a `CACHEDIR.TAG` file, as Rust's `target` folder has) are skipped whole. Anything like that already in your index goes on the next refresh.
 
 ## 0.3.18 (2026-11-26)

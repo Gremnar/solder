@@ -1872,6 +1872,9 @@
     Object.assign(reveal, { received: "", shown: "", buffer: "", spans: [], timer: null, pending: null });
   }
 
+  /** The pet (/pet, media/pet.js): it's told each state as it's shown, and that you're typing. */
+  const pet = /** @type {any} */ (window).SolderPet ? /** @type {any} */ (window).SolderPet.attach($("pet"), window) : null;
+
   /** @param {any} message */
   function applyState(message) {
     const was = state;
@@ -1881,6 +1884,7 @@
     announceChanges(was, message);
     state = message;
     render();
+    if (pet) pet.update(state);
   }
 
   function stepReveal() {
@@ -2021,6 +2025,7 @@
     { name: "review", about: "Review what's changed since the last commit" },
     { name: "skill", hint: "what it's for", about: "Save how this was done as a skill, for next time" },
     { name: "settings", about: "Open Solder's settings" },
+    { name: "pet", about: "Show or hide a small companion (/pet flux, /pet wisp, /pet bit, /pet corner)" },
     { name: "help", about: "Open Solder's guide" },
   ];
   const slash = $("slash");
@@ -2089,6 +2094,7 @@
     if (item) pickSlash(Number(item.dataset.slash));
   });
   input.addEventListener("blur", hideSlash);
+  input.addEventListener("input", () => { if (pet) pet.wake(); });
 
   /** Pasted text longer than this goes above the box as a chip, not into it (a hundred lines of log are in the way there, and in the chat). */
   const PASTE_CHIP_LINES = 40;

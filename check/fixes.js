@@ -116,6 +116,38 @@ async function main() {
       await panel.send({ text: "change the script" });
       check("a chat whose folder isn't in this window: not sent, and you're told why", !panel.engine.busy && away.messages.length === 0 && told.some((t) => /isn't in this window's workspace/.test(t)), told);
     }
+
+    // ---- /pet: off until asked for; a name picks one, "corner" gives or takes its corner, anything else is explained.
+    {
+      panel.chat = Engine.newChat();
+      const states = [];
+      panel.view = { webview: { postMessage: (m) => { if (m.type === "state") states.push(m); return Promise.resolve(true); } }, visible: true };
+      const last = () => states[states.length - 1].pet;
+      panel.post();
+      check("the pet is off until asked for", last() && last().on === false && last().pet === "bit" && last().corner === true, last());
+      await panel.command("pet", "");
+      check("/pet shows it", last().on === true && last().pet === "bit", last());
+      await panel.command("pet", "Flux");
+      check("/pet flux picks that one", last().on === true && last().pet === "flux", last());
+      await panel.command("pet", "corner");
+      check("/pet corner takes its corner away, and gives it back", last().corner === false, last());
+      await panel.command("pet", "corner");
+      check("/pet corner gives it back", last().corner === true && last().on === true, last());
+      told.length = 0;
+      const before = states.length;
+      await panel.command("pet", "dragon");
+      check("/pet with a name it doesn't have says what it takes, and changes nothing", told.some((t) => /bit, flux, wisp, corner, on or off/.test(t)) && states.length === before && last().pet === "flux", told);
+      await panel.command("pet", "");
+      check("/pet again hides it, and it's remembered which one it was", last().on === false && last().pet === "flux", last());
+      await panel.command("pet", "wisp");
+      check("picking one shows it", last().on === true && last().pet === "wisp", last());
+      await panel.command("pet", "off");
+      // The page: the pet's script is loaded under the page's nonce, from Solder's own folder.
+      const page = panel.html({ asWebviewUri: (uri) => uri, cspSource: "vscode-webview:" }, vscode.Uri.joinPath(ext.extensionUri, "media"));
+      const nonce = /script-src 'nonce-([A-Za-z0-9_-]+)'/.exec(page);
+      check("the panel's page loads the pet's script under its nonce, with no placeholder left",
+        !!nonce && page.includes(`<script nonce="${nonce[1]}" src="`) && /src="[^"]*media\/pet[.]js"><\/script>/.test(page) && !page.includes("{{"), page.slice(-400));
+    }
   } finally {
     own.window.showInformationMessage = oldInfo;
   }

@@ -30,13 +30,13 @@ Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-co
 | `src/docs.js` | The docs index: node:sqlite FTS5 over the user's docs folders, plain text and Office files; embeddings for search by meaning, the daily embedding budget, and the shared embeddings folder (no `vscode`, tested under node) |
 | `src/setup.js` | The guided setup in the side bar: endpoint, key (checked by listing models), model, docs folders, rules |
 | `src/settings.js` | Settings inside the side bar (the sliders button in the bar): the same user settings, the key, and the docs index's live status |
-| `media/` | The panel's HTML, CSS and JS: plain DOM, strict CSP, VS Code theme variables, Alloy-style word fade-in |
+| `media/` | The panel's HTML, CSS and JS: plain DOM, strict CSP, VS Code theme variables, Alloy-style word fade-in. `pet.js` is the pet (`/pet`): pixel drawings as text grids on one small canvas, told the panel's state (tested under node; the extension reads its list of names) |
 | `build/vsix.js` | Packages `solder-<version>.vsix` with no tools (a hand-written zip) |
 
 ## Checking your work
 
 - **Tests:** `node --test`. With no Node installed, use VS Code's own: `$env:ELECTRON_RUN_AS_NODE=1; & "<VS Code>\Code.exe" --test`.
-- **Syntax:** `node --check` every changed `src/*.js` and `media/panel.js`.
+- **Syntax:** `node --check` every changed `src/*.js`, `media/panel.js` and `media/pet.js`.
 - **In a real VS Code:** `node check/run.js` (see `check/README.md`) for anything that touches commands, the Settings screen's actions, editors, the language services or the policy. Add to it when you add such a thing.
 - **Install locally:** `node build/vsix.js`, then `code --install-extension solder-0.0.1.vsix --force`. The user reloads the VS Code window.
 - **Looking at the panel without VS Code:** serve `media/panel.css` and `media/panel.js` next to a small `index.html` that mocks `acquireVsCodeApi` and the `--vscode-*` CSS variables, and post it `state` / `live` / `editor` messages.

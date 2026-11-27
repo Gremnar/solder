@@ -26,6 +26,9 @@ const { MAX_SKILLS, offered, offNames, switchedOn } = require("./skills.js");
 const { ProjectList, projectSwitches, setProjectSwitch, findProjects, exportEntries, projectLabel, readProject, createProject, renameProject, nearestProject, isProject, projectKey, skillsFolder, ownSkillsFolder } = require("./projects.js");
 const { documentText, isOffice, decodeText, withoutSignatures } = require("./docs.js");
 const os = require("node:os");
+/** The pets' names (the panel's own script, media/pet.js, has the pets), and where your choice of one is kept. */
+const PET_NAMES = /** @type {string[]} */ (require("../media/pet.js").NAMES);
+const PET_KEY = "solder.pet";
 
 const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so it can't change files.";
 /** Attachments: the most with one message, the longest text sent whole (a longer file goes by its path), and the biggest read at all. */
@@ -128,6 +131,8 @@ class SolderPanel {
     this.modelsProblem = "";
     this.live = "";        // the answer streaming in
     this.status = "";      // "Thinking…", "Retrying…"
+    /** @type {{ on: boolean, pet: string, corner: boolean } | null} the pet as last set in this window (see pet()) */
+    this.petChoice = null;
     this.running = "";     // the call that's running
     this.runningSince = 0; // when it started
     /** @type {any[]} */
@@ -1503,6 +1508,15 @@ class SolderPanel {
     }
   }
 
+  /**
+   * The pet (/pet): whether it's showing, which one, and whether it has its corner. Yours on this machine, in every
+   * window; off until you ask for it. @returns {{ on: boolean, pet: string, corner: boolean }}
+   */
+  pet() {
+    const saved = /** @type {any} */ ((this.context.globalState ? this.context.globalState.get(PET_KEY) : this.petChoice) || {});
+    return { on: saved.on === true, pet: PET_NAMES.includes(saved.pet) ? saved.pet : PET_NAMES[0], corner: saved.corner !== false };
+  }
+
   /** @param {{text: string, selection?: boolean, file?: boolean}} message */
   /**
    * A slash command typed in the box: /new, /fork, /compact [what to keep], /rename [name], /model [name],
@@ -1513,6 +1527,20 @@ class SolderPanel {
     const info = (/** @type {string} */ text) => { vscode.window.showInformationMessage(text); };
     const busy = () => info(`Solder is working on a reply. /${name} can wait until it's done, or press Stop first.`);
     switch (name) {
+      case "pet": {
+        // /pet shows or hides it; a name picks one, "corner" gives or takes its corner, "on" and "off" say which.
+        const now = this.pet();
+        const word = arg.toLowerCase();
+        if (!word) now.on = !now.on;
+        else if (word === "on" || word === "off") now.on = word === "on";
+        else if (word === "corner") { now.corner = !now.on || !now.corner; now.on = true; }
+        else if (PET_NAMES.includes(word)) { now.pet = word; now.on = true; }
+        else return info(`/pet takes ${PET_NAMES.join(", ")}, corner, on or off: there's no "${arg}".`);
+        this.petChoice = now;
+        await this.context.globalState?.update(PET_KEY, now);
+        this.post();
+        return;
+      }
       case "new": return this.engine.busy ? busy() : this.onMessage({ type: "new" });
       case "fork": {
         if (this.engine.busy) return busy();
@@ -2023,6 +2051,7 @@ class SolderPanel {
           cut: String(a.args.old_text ?? "").length > 1200 || String(a.args.new_text ?? "").length > 1200 } : {}),
         diff: a.name === "edit_file" || a.name === "write_file" })),
       error: this.error && (!this.errorChat || this.errorChat === chat.id) ? this.error : null,
+      pet: this.pet(),
       answerTokens: this.awayBusy() ? 0 : this.answerTokens,
       credits: this.credits,
       steers: this.awayBusy() ? [] : this.engine.steers.map((s) => s.text),
@@ -2159,7 +2188,8 @@ class SolderPanel {
     const js = webview.asWebviewUri(vscode.Uri.joinPath(media, "panel.js"));
     return fs.readFileSync(path.join(media.fsPath, "panel.html"), "utf8")
       .replace(/\{\{csp\}\}/g, `default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}'; font-src ${webview.cspSource}; form-action 'none'; base-uri 'none'; frame-src 'none';`)
-      .replace(/\{\{nonce\}\}/g, nonce).replace("{{css}}", css.toString()).replace("{{js}}", js.toString());
+      .replace(/\{\{nonce\}\}/g, nonce).replace("{{css}}", css.toString()).replace("{{js}}", js.toString())
+      .replace("{{pet}}", webview.asWebviewUri(vscode.Uri.joinPath(media, "pet.js")).toString());
   }
 }
 
