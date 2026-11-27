@@ -27,6 +27,8 @@ function solder(src) {
     tools: require(path.join(src, "tools.js")),
     // An older src (a baseline) has no skills.
     skills: fs.existsSync(path.join(src, "skills.js")) ? require(path.join(src, "skills.js")) : null,
+    // And none has images.
+    images: fs.existsSync(path.join(src, "images.js")) ? require(path.join(src, "images.js")) : null,
   };
 }
 
@@ -55,6 +57,8 @@ function workspaceHost(root, S, hooks = {}, skillsFolder = "", readOnly = false)
     needsApproval: () => null,
     async save() {},
     async runTool(/** @type {string} */ name, /** @type {any} */ args, /** @type {any} */ ctx) { return ws.run(name, args, ctx); },
+    // Images a scenario attaches are kept beside the workspace, as Solder keeps them in its storage.
+    imageUrl: (/** @type {any} */ image) => (S.images ? S.images.imageUrl(root + "-images", image?.file) : null),
   } };
 }
 

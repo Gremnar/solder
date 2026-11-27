@@ -16,6 +16,7 @@
 const { Cancelled, sessionId } = require("./gateway.js");
 const { READ_ONLY, TEXTS, TOOLS, RESULTS, ASSIST, timeNote, toolDefinitions, assistText } = require("./prompt.js");
 const { laneOf } = require("./lanes.js");
+const { IMAGE_TOKENS, IMAGE_TOKENS_LOW } = require("./images.js");
 const { sessionPlan, holdSession, heldThroughCut, parseReply, promisesAction, visibleText, draftingRequests, decode, ALIASES, wouldLeaveOut, pathsAsWritten,
   shortCall } = require("./assist.js");
 
@@ -100,7 +101,9 @@ function estimate(text) {
  *   settleEdits?(group: string): Promise<{path: string, text: string, summary: string}[]>,
  *   needsApproval(name: string, args: any): string | null,
  *   save(chat: Chat): Promise<void>,
+ *   imageUrl?(image: {file: string, name: string}): string | null,
  * }} Host
+ *   imageUrl: an image attached to a message (meta.images) as a data URL, or null when it's gone
  * @typedef {{model: string, effort?: string, compactAt: number, maxRounds: number, assistMaxRounds?: number, assistCarryTokens?: number, modelAllowed?: ((id: string) => boolean) | null,
  *            readOnly?: boolean, assistTwinOf?: (model: string) => string}} Settings
  *   assistTwinOf: a Tool model's Assist twin on offer ("" for none): it writes summaries and titles, free of the allowance
@@ -193,7 +196,9 @@ class Engine {
 
   /**
    * Your message, then the loop until the model answers.
-   * @param {Chat} chat @param {string} text what you typed @param {{context?: string, chips?: string[], attachments?: any[]}} [extra]
+   * @param {Chat} chat @param {string} text what you typed
+   * @param {{context?: string, chips?: string[], attachments?: any[], images?: {file: string, name: string, mime?: string, width?: number, height?: number}[]}} [extra]
+   *   images: pasted or attached images, for a Tool model (each goes with this message, as the host's imageUrl gives it)
    */
   async ask(chat, text, extra = {}) {
     await this._run(chat, async (signal) => {
@@ -201,7 +206,7 @@ class Engine {
       const content = `${timeNote(this.now())}\n\n${text}` + (extra.context ? `\n\n${extra.context}` : "");
       // What was attached is kept with the message too (its text is in the content): Edit puts it back above the box.
       chat.messages.push({ role: "user", content, meta: { typed: text, chips: extra.chips || [],
-        ...(extra.attachments?.length ? { attachments: extra.attachments } : {}) } });
+        ...(extra.attachments?.length ? { attachments: extra.attachments } : {}), ...(extra.images?.length ? { images: extra.images } : {}) } });
       delete chat.limitHit;
       if (chat.title === "New chat") chat.title = titleFrom(text);
       await this._save(chat);
@@ -411,7 +416,7 @@ ${TEXTS.resume}`, meta: { typed: "Carry on", resume: true, auto: true } });
         // What an Assist carry-over left out (assist.js carryFit) is sent here: every kept text goes on this lane.
         if (chat.assist?.leftOut) delete chat.assist.leftOut;
         const system = await this.host.systemPrompt(chat);
-        const messages = outbound(chat, system);
+        const messages = outbound(chat, system, (image) => this.host.imageUrl ? this.host.imageUrl(image) : null);
         const made = breakdown(chat, system, tools); // what this request is made of, as it goes out
         this.emit({ type: "thinking", chat: chat.id });
         reply = await this._patient(chat, { model, messages, tools,
@@ -1020,7 +1025,13 @@ function untilStopped(work, signal) {
 }
 
 /** The chat as the model gets it: the system message, the recap (if compacted), then what's after it. */
-function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
+/**
+ * The request's messages, from the chat. A message with images goes as parts: its text, then each image (at low
+ * detail once its task is over: it's sent again with every step, and costs a quarter as much that way). One that's
+ * gone is a line in the text instead. `imageUrl` gives each image's data; the default stands in for them (a size estimate).
+ * @param {Chat} chat @param {string} system @param {(image: any) => string | null} [imageUrl]
+ */
+function outbound(chat, system, imageUrl = () => "") {
   /** @type {any[]} */
   const out = [{ role: "system", content: system }];
   let start = 0;
@@ -1033,7 +1044,7 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   /** @type {Set<string>} calls sent without their long text: each one's result says so */
   const shortened = new Set();
   for (const [offset, message] of chat.messages.slice(start).entries()) {
-    if (message.role === "user") out.push({ role: "user", content: message.content });
+    if (message.role === "user") out.push({ role: "user", content: withImages(message, start + offset < current, imageUrl) });
     else if (message.role === "assistant") {
       if (!message.content && !message.tool_calls?.length) continue;
       // An earlier task's big writes and edits are sent as they came (SHORTEN_EARLIER_CALLS, below, says why).
@@ -1056,13 +1067,42 @@ function outbound(/** @type {Chat} */ chat, /** @type {string} */ system) {
   return out.filter((m) => m.role !== "tool" || offered.has(m.tool_call_id));
 }
 
+/**
+ * A user message's content as it's sent: its text alone, or its text and its images as parts.
+ * @param {Stored} message @param {boolean} earlier its task is over (low detail) @param {(image: any) => string | null} imageUrl
+ */
+function withImages(message, earlier, imageUrl) {
+  const images = imagesOf(message);
+  if (!images.length) return message.content;
+  /** @type {any[]} */
+  const parts = [{ type: "text", text: message.content }];
+  for (const image of images) {
+    const url = imageUrl(image);
+    if (url === null) parts[0].text += "\n\n" + TEXTS.imageGone(String(image.name || "image"));
+    else parts.push({ type: "image_url", image_url: earlier ? { url, detail: "low" } : { url } });
+  }
+  return parts.length > 1 ? parts : parts[0].text;
+}
+
+/** The images a stored message has (pasted or attached with it). @param {Stored} message @returns {any[]} */
+function imagesOf(message) {
+  return message.role === "user" && Array.isArray(message.meta?.images) ? message.meta.images : [];
+}
+
+/** A message's content in estimated tokens: its text, and what each image part costs. @param {any} content */
+function contentTokens(content) {
+  if (!Array.isArray(content)) return estimate(content);
+  return content.reduce((sum, part) => sum + (part?.type === "text" ? estimate(part.text)
+    : part?.type === "image_url" ? (part.image_url?.detail === "low" ? IMAGE_TOKENS_LOW : IMAGE_TOKENS) : 0), 0);
+}
+
 // ---------------------------------------------------------------- where the tokens go (Copy diagnostics) --
 
 /** What a request is made of. Numbers only ever leave this: no text, no paths. */
 const KINDS = /** @type {const} */ ({
   results: "tool results", system: "the system prompt", tools: "the tool definitions", user: "your messages", text: "the model's own text",
   calls: "its tool calls' arguments", signatures: "thought signatures", standIns: "stand-ins for cut results",
-  kept: "kept instructions, skills and notes", recap: "the summary of earlier turns",
+  kept: "kept instructions, skills and notes", recap: "the summary of earlier turns", images: "images",
 });
 
 /**
@@ -1081,8 +1121,11 @@ function breakdown(chat, system, tools) {
   const current = taskStart(chat); // as outbound sends it
   const offered = new Set();
   for (const [offset, message] of chat.messages.slice(start).entries()) {
-    if (message.role === "user") parts.user += message.content.length;
-    else if (message.role === "assistant") {
+    if (message.role === "user") {
+      parts.user += message.content.length;
+      // In characters as the rest is (what an image costs in tokens, as that many characters would).
+      parts.images += imagesOf(message).length * (start + offset < current ? IMAGE_TOKENS_LOW : IMAGE_TOKENS) * CHARS_PER_TOKEN;
+    } else if (message.role === "assistant") {
       parts.text += message.content.length;
       for (const call of message.tool_calls || []) {
         const sent = SHORTEN_EARLIER_CALLS && start + offset < current ? shortCall(call) : call;
@@ -1551,12 +1594,12 @@ function effortOf(value) {
 }
 
 function estimateMessages(/** @type {any[]} */ messages) {
-  return messages.reduce((sum, m) => sum + estimate(m.content) + estimate(JSON.stringify(m.tool_calls || "")) + 4, 0);
+  return messages.reduce((sum, m) => sum + contentTokens(m.content) + estimate(JSON.stringify(m.tool_calls || "")) + 4, 0);
 }
 
 /** One stored message's size as it's sent (a cut result as its stand-in). @param {Stored} message */
 function sizeOf(message) {
-  return estimate(message.role === "tool" ? resultText(message) : message.content)
+  return estimate(message.role === "tool" ? resultText(message) : message.content) + imagesOf(message).length * IMAGE_TOKENS
     + estimate(JSON.stringify((SHORTEN_EARLIER_CALLS ? message.tool_calls?.map(shortCall) : message.tool_calls) || "")) + 4; // as earlier turns' calls are sent
 }
 
@@ -1606,4 +1649,4 @@ function sleep(ms, signal) {
 }
 
 module.exports = { Engine, outbound, trim, removeTurn, laterMessages, parseArguments, labelOf, estimate, transcriptOf, cleanTitle, titleExcerpt, breakdown, repeatReads, supersedeReads, tokenReport,
-  KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };
+  estimateMessages, KEEP_RESULTS_TOKENS, TRIM_SLACK_TOKENS };

@@ -17,6 +17,7 @@ const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
 const { solder, workspaceHost } = require("./host.js");
+const { digitsPng } = require("../test/png.js");
 const { SCENARIOS } = require("./scenarios.js");
 
 const argv = process.argv.slice(2);
@@ -142,8 +143,13 @@ async function once(scenario, run) {
   // A scenario with `resumes` presses Resume (up to that many times) whenever the turn ends paused at the step limit.
   let resumed = 0;
   try {
-    for (const text of texts) {
-      await engine.ask(chat, text);
+    for (const [turn, text] of texts.entries()) {
+      // Images with this message (scenario.images[turn]: numbers drawn as PNGs), kept and sent as the panel sends them.
+      const drawn = (scenario.images?.[turn] || []).map((/** @type {string} */ digits, /** @type {number} */ n) => {
+        const kept = S.images.keepImage(root + "-images", digitsPng(digits));
+        return { file: kept.file, name: `screenshot-${turn + 1}-${n + 1}.png`, mime: kept.mime, width: kept.width, height: kept.height };
+      });
+      await engine.ask(chat, text, drawn.length ? { images: drawn, context: drawn.map((i) => S.prompt.CONTEXT.image(i.name, i.width, i.height)).join("\n\n") } : {});
       while (chat.limitHit && resumed < (scenario.resumes || 0)) { resumed++; await engine.resume(chat); }
     }
   } catch (e) { error = /** @type {any} */ (e)?.message || String(e); }

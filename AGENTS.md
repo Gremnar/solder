@@ -25,6 +25,7 @@ Solder is a lean coding agent in a VS Code side panel. It talks to any OpenAI-co
 | `src/projects.js` | Projects: a folder with `.solder\project.json` (its name) and `.solder\skills`, its rules being the instruction files at its root; and the list of project folders you use (no `vscode`, tested under node) |
 | `src/outline.js` | An outline made from a file's text, for kinds VS Code has none for: PowerShell, Structured Text and SCL, TwinCAT and other XML exports, batch labels, Python, SQL (no `vscode`, tested under node) |
 | `src/paste.js` | Paste in terminal's check that PowerShell code's braces balance before it's sent as one `. { … }` command (no `vscode`, tested under node) |
+| `src/images.js` | Images for Tool models: PNG and JPEG told by their bytes, kept once by their content in Solder's storage, and read back as data URLs by a name Solder gave (no `vscode`, tested under node) |
 | `src/zip.js` | Writes a plain zip straight to disk, one file at a time: a project's Export (no `vscode`, tested under node) |
 | `src/skills.js` | Skills: one `.md` file each in the skills folders, with a "When to use:" line (or front matter's description); read whole by read_file (no `vscode`, tested under node) |
 | `src/docs.js` | The docs index: node:sqlite FTS5 over the user's docs folders, plain text and Office files; embeddings for search by meaning, the daily embedding budget, and the shared embeddings folder (no `vscode`, tested under node) |

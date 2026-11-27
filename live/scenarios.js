@@ -4,15 +4,33 @@
  * The live scenarios. Each sets up a small workspace, gives a task, and checks the result on disk (not just the
  * answer). `hooks` change things under the model (a file edited after it read it) to test recovery.
  * @typedef {{name: string, about: string, heavy?: boolean, setup: (write: (p: string, t: string) => void) => void, task: string | ((prompt: any) => string),
- *   hooks?: any, maxRounds?: number, resumes?: number, skills?: Record<string, string>, then?: (string | ((prompt: any) => string))[], check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
+ *   hooks?: any, maxRounds?: number, resumes?: number, images?: string[][], skills?: Record<string, string>, then?: (string | ((prompt: any) => string))[], check: (r: {ws: any, chat: any, answer: string, read: (p: string) => string,
  *   load: (p: string, mocks?: Record<string, any>) => any, skillsFolder: string}) => string}} Scenario
  *   skills: name → file text, put in a skills folder beside the workspace; then: follow-up messages in the same chat
+ *   images: for each message (the task, then each follow-up), numbers drawn as PNG images that go with it
  * check returns "" when it passed, else what was wrong.
  */
 const fs = require("node:fs");
 
 /** @type {Scenario[]} */
 const SCENARIOS = [];
+
+// ---------------------------------------------------------------- images --
+
+SCENARIOS.push({
+  name: "image-read",
+  about: "reads a number off an attached image; then, in a later turn (the first image now at low detail), one off a new image",
+  setup: (w) => w("README.md", "# Codes\n\nCodes from screenshots go in codes.txt, one a line.\n"),
+  task: "Write the number shown in the image I attached into codes.txt, on its own line.",
+  then: ["Add the number in this new image to codes.txt, on a new line under the first."],
+  images: [["4721"], ["6093"]],
+  check: ({ read }) => {
+    let text = "";
+    try { text = read("codes.txt"); } catch { return "no codes.txt"; }
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    return lines[0] !== "4721" ? `first line "${lines[0] ?? ""}", not 4721` : lines[1] !== "6093" ? `second line "${lines[1] ?? ""}", not 6093` : lines.length > 2 ? "more than two lines" : "";
+  },
+});
 
 // ---------------------------------------------------------------- edits and recovery --
 

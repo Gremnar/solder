@@ -7,6 +7,7 @@
 const vscode = require("vscode");
 const { config: solderSettings, policy, readOnly, allowChanges, modelAllowed, MODEL_FILTER_BROKEN } = require("./config.js");
 const { laneOf, assistTwin, bestModel } = require("./lanes.js");
+const { IMAGE_TOKENS, IMAGE_TOKENS_LOW, MAX_IMAGE_BYTES, fromDataUrl, keepImage, imageUrl, pruneImages, imageLabel } = require("./images.js");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
@@ -31,6 +32,9 @@ const PET_NAMES = /** @type {string[]} */ (require("../media/pet.js").NAMES);
 const PET_KEY = "solder.pet";
 
 const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so it can't change files.";
+/** An image with an Assist model: they read text only. */
+const IMAGES_NEED_TOOLS = "This chat's model is an Assist model, which reads text only: switch to a Tool model to send an image.";
+const IMAGES_NEED_TOOLS_SHORT = "images need a Tool model (Assist models read text only)";
 /** Attachments: the most with one message, the longest text sent whole (a longer file goes by its path), and the biggest read at all. */
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACH_CHARS = 40_000;
@@ -51,8 +55,12 @@ function attachmentId() {
   return "a" + (++attachmentCount).toString(36) + Date.now().toString(36);
 }
 
-/** An attachment's chip: "app.log · 320 lines", "Pasted · 132 lines". @param {{name: string, lines: number}} a */
+/** Image files the paperclip takes (pasted images can be anything the panel can draw: it makes them PNG or JPEG). */
+const IMAGE_FILE = /\.(png|jpe?g)$/i;
+
+/** An attachment's chip: "app.log · 320 lines", "Pasted · 132 lines", "Pasted image · 1920×1080". @param {any} a */
 function attachmentLabel(a) {
+  if (a.kind === "image") return imageLabel(a);
   return `${a.name} · ${a.lines.toLocaleString("en-US")} line${a.lines === 1 ? "" : "s"}`;
 }
 
@@ -219,7 +227,7 @@ class SolderPanel {
     const prune = setTimeout(() => { try { this.tools.pruneBackups(); } catch { /* best effort */ } }, 30_000);
     context.subscriptions.push({ dispose: () => clearTimeout(prune) });
     // The docs index catches up in the background, a little after start (it's only read when searched).
-    const timer = setTimeout(() => { this.tools.refreshDocs(); this.prunePastes(); }, 15_000);
+    const timer = setTimeout(() => { this.tools.refreshDocs(); this.prunePastes(); pruneImages(this.imagesFolder()); }, 15_000);
     context.subscriptions.push({ dispose: () => clearTimeout(timer) });
     this.updateStatusBar();
   }
@@ -253,6 +261,7 @@ class SolderPanel {
       settleEdits: (/** @type {string} */ group) => this.tools.settleEdits(group),
       needsApproval: (/** @type {string} */ name, /** @type {any} */ args) => this.tools.needsApproval(name, args),
       save: (/** @type {any} */ chat) => this.store.save(chat),
+      imageUrl: (/** @type {any} */ image) => imageUrl(this.imagesFolder(), image?.file),
     };
   }
 
@@ -842,6 +851,38 @@ class SolderPanel {
     this.post();
   }
 
+  /** Where pasted and attached images are kept (see images.js): Solder's own storage, shared by every window. */
+  imagesFolder() {
+    return path.join(this.context.globalStorageUri.fsPath, "images");
+  }
+
+  /** Whether the open chat's model is an Assist model, which reads text only (no images). */
+  onAssistModel() {
+    const settings = this.settings();
+    const model = (settings.modelLocked ? settings.model : this.chat?.model || settings.model) || "";
+    return !!model && laneOf(model, settings) === "assist";
+  }
+
+  /**
+   * An image pasted into the box (the panel made it a PNG or JPEG, and smaller when it was big): kept in Solder's
+   * storage, and a chip above the box until it goes with your next message. Not on an Assist model, which can't see it.
+   * @param {string} data a data URL @param {string} [name]
+   */
+  attachImage(data, name = "Pasted image") {
+    if (this.onAssistModel()) { vscode.window.showInformationMessage(IMAGES_NEED_TOOLS); return; }
+    if (this.attachments.length >= MAX_ATTACHMENTS) { vscode.window.showInformationMessage(`Up to ${MAX_ATTACHMENTS} things can go with one message.`); return; }
+    const bytes = fromDataUrl(data);
+    try {
+      if (!bytes) throw new Error("it isn't a PNG or JPEG image");
+      const kept = keepImage(this.imagesFolder(), bytes);
+      this.attachments.push({ id: attachmentId(), kind: "image", name: String(name || "Pasted image").slice(0, 80), ...kept, full: path.join(this.imagesFolder(), kept.file) });
+    } catch (error) {
+      vscode.window.showInformationMessage(`That image can't be attached: ${/** @type {Error} */ (error).message}.`);
+      return;
+    }
+    this.post();
+  }
+
   /**
    * Attach text files (the paperclip): each is read now. One of a size to send goes whole, after your message; a longer
    * one goes by its path, for the model to read the parts it needs (without asking: you attached it). Word, Excel and
@@ -851,7 +892,7 @@ class SolderPanel {
     const into = this.attachments; // the chat it's for, should you open another while the dialog is up
     const start = this.chatFolderPath(this.chat) || this.tools.root();
     const picked = given ?? await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true,
-      openLabel: "Attach", title: "Solder: attach text files", ...(start ? { defaultUri: vscode.Uri.file(start) } : {}) });
+      openLabel: "Attach", title: "Solder: attach files", ...(start ? { defaultUri: vscode.Uri.file(start) } : {}) });
     /** @type {string[]} */
     const refused = [];
     for (const uri of picked || []) {
@@ -859,6 +900,16 @@ class SolderPanel {
       const full = uri.fsPath;
       const name = path.basename(full);
       if (into.some((a) => a.full && a.full.toLowerCase() === full.toLowerCase())) continue;
+      // A PNG or JPEG goes as an image, for a Tool model to see.
+      if (IMAGE_FILE.test(name)) {
+        if (this.onAssistModel()) { refused.push(`${name}: ${IMAGES_NEED_TOOLS_SHORT}`); continue; }
+        try {
+          if (fs.statSync(full).size > MAX_IMAGE_BYTES) throw new Error(`it's bigger than ${MAX_IMAGE_BYTES / 1_000_000} MB`);
+          const kept = keepImage(this.imagesFolder(), fs.readFileSync(full));
+          into.push({ id: attachmentId(), kind: "image", name, ...kept, full: path.join(this.imagesFolder(), kept.file) });
+        } catch (error) { refused.push(`${name}: ${/** @type {Error} */ (error).message}`); }
+        continue;
+      }
       let text = null;
       try {
         if (fs.statSync(full).size > MAX_ATTACH_BYTES) { refused.push(`${name} is too big`); continue; }
@@ -885,6 +936,7 @@ class SolderPanel {
   async openAttachment(id) {
     const found = this.attachments.find((a) => a.id === id);
     if (!found) return;
+    if (found.kind === "image") { await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(found.full), { preview: true }); return; }
     const document = found.text === undefined ? await vscode.workspace.openTextDocument(vscode.Uri.file(found.full))
       : await vscode.workspace.openTextDocument({ content: found.text });
     await vscode.window.showTextDocument(document, { preview: true });
@@ -948,6 +1000,8 @@ class SolderPanel {
     const whole = this.inlineAttachments();
     return this.attachments.map((a) => {
       const chip = attachmentLabel(a);
+      // An image: a line saying so (the image itself goes with the message as an image, see send).
+      if (a.kind === "image") return { block: CONTEXT.image(a.name, a.width, a.height), chip, image: true };
       if (a.kind !== "path" && !whole.has(a)) this.sendByPath(a);
       if (a.kind === "path") return { block: a.pasted ? CONTEXT.pastedPath(a.full, a.lines) : CONTEXT.attachedPath(this.tools.shown(a.full), a.lines), chip };
       const fence = fenceFor(a.text);
@@ -1408,6 +1462,7 @@ class SolderPanel {
       case "projectReveal": if (this.projects.has(String(message.path || ""))) await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(String(message.path))); return;
       case "attach": return this.attachFiles();
       case "attachPaste": return this.attachPaste(String(message.text ?? ""));
+      case "attachImage": return this.attachImage(String(message.data ?? ""), String(message.name || "Pasted image"));
       case "removeAttachment": return this.removeAttachment(String(message.id || ""));
       case "openAttachment": return this.openAttachment(String(message.id || ""));
       case "pasteInTerminal": return this.pasteInTerminal(String(message.text ?? ""));
@@ -1727,6 +1782,21 @@ class SolderPanel {
       return;
     }
     this.useChat(this.chat);
+    // Images can't go to an Assist model: nothing is sent, and your words go back in the box.
+    if (!this.engine.busy && this.attachments.some((a) => a.kind === "image") && this.onAssistModel()) {
+      vscode.window.showInformationMessage(`${IMAGES_NEED_TOOLS} Or remove the image to send the rest.`);
+      const typed = String(message.text || "").trim();
+      if (typed) this.view?.webview.postMessage({ type: "restore", text: typed });
+      return;
+    }
+    // While it works, what you add goes with the next step, as text: an image waits above the box for your next message.
+    const images = this.attachments.filter((a) => a.kind === "image");
+    if (this.engine.busy && images.length) {
+      const typed = String(message.text || "").trim();
+      vscode.window.showInformationMessage("An image goes with your next message, once this reply is done: it's kept above the box until then.");
+      if (!typed && this.attachments.length === images.length) return;
+      this.attachments = this.attachments.filter((a) => a.kind !== "image");
+    }
     const attached = this.attachmentParts();
     // Something attached and nothing typed: it still goes, with a line saying so.
     const text = String(message.text || "").trim() || (attached.length ? CONTEXT.attachedOnly : "");
@@ -1744,7 +1814,7 @@ class SolderPanel {
       }
       const going = [...(picked ? [picked] : []), ...attached];
       this.engine.steer(text, going.length ? { context: going.map((part) => part.block).join("\n\n"), chips: going.map((part) => part.chip) } : {});
-      this.attachments = [];
+      this.attachments = images;
       this.post();
       return;
     }
@@ -1779,7 +1849,8 @@ class SolderPanel {
     const kept = this.attachments;
     this.attachments = [];
     this.error = null;
-    this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips, attachments: kept });
+    this.engine.ask(this.chat, text, { context: parts.join("\n\n"), chips, attachments: kept,
+      images: images.map((a) => ({ file: a.file, name: a.name, mime: a.mime, width: a.width, height: a.height })) });
   }
 
   /** The selected text as context for the model, and its chip ("cart.js:12–18"), or null with nothing selected. @param {vscode.TextEditor} editor */
@@ -2059,9 +2130,11 @@ class SolderPanel {
       readOnly: readOnly(), readOnlyLocked: policy.locked("readOnly"),
       // Each chip says what it will cost: about how many tokens when it goes whole (sent again with every step of
       // the task), or that it goes by its path, for the model to read the lines it needs.
-      attachments: ((whole) => this.attachments.map((a) => ({ id: a.id, label: attachmentLabel(a), paste: a.kind === "paste" || !!a.pasted,
-        peek: a.text === undefined ? a.full : String(a.text).split("\n").slice(0, 6).join("\n").slice(0, 400),
-        tokens: whole.has(a) ? Math.max(1, Math.round(a.text.length / 4)) : 0, byPath: !whole.has(a) })))(this.inlineAttachments()),
+      attachments: ((whole) => this.attachments.map((a) => a.kind === "image"
+        ? { id: a.id, label: attachmentLabel(a), image: true, peek: "", tokens: IMAGE_TOKENS, later: IMAGE_TOKENS_LOW, byPath: false }
+        : { id: a.id, label: attachmentLabel(a), paste: a.kind === "paste" || !!a.pasted,
+          peek: a.text === undefined ? a.full : String(a.text).split("\n").slice(0, 6).join("\n").slice(0, 400),
+          tokens: whole.has(a) ? Math.max(1, Math.round(a.text.length / 4)) : 0, byPath: !whole.has(a) }))(this.inlineAttachments()),
       starters: STARTERS.map((s) => ({ id: s.id, title: s.title, blurb: s.blurb })),
       setup: this.setup.view,
       settings: this.setup.view ? null : this.settingsScreen.view,

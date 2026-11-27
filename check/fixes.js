@@ -148,6 +148,66 @@ async function main() {
       check("the panel's page loads the pet's script under its nonce, with no placeholder left",
         !!nonce && page.includes(`<script nonce="${nonce[1]}" src="`) && /src="[^"]*media\/pet[.]js"><\/script>/.test(page) && !page.includes("{{"), page.slice(-400));
     }
+
+    // ---- Images: pasted (a data URL from the panel) or attached (the paperclip), kept in Solder's storage, sent with
+    // the message for a Tool model; refused for an Assist model, whose words go back in the box.
+    {
+      const { png } = require(path.join(REPO, "test", "png.js"));
+      const config = own.workspace.getConfiguration("solder");
+      panel.chat = Engine.newChat();
+      panel.chat.model = "model-a";
+      const states = [];
+      const posted = [];
+      panel.view = { webview: { postMessage: (m) => { posted.push(m); if (m.type === "state") states.push(m); return Promise.resolve(true); } }, visible: true };
+      const red = png(64, 40, () => [255, 0, 0]);
+      panel.attachImage("data:image/png;base64," + red.toString("base64"));
+      const pasted = panel.attachments[0];
+      check("a pasted image is kept in Solder's storage and shown as a chip with its size",
+        pasted?.kind === "image" && fs.existsSync(pasted.full) && path.dirname(pasted.full) === panel.imagesFolder() && states.at(-1).attachments[0]?.image === true
+          && states.at(-1).attachments[0].label === "Pasted image · 64×40", states.at(-1)?.attachments);
+      told.length = 0;
+      panel.attachImage("data:image/gif;base64,R0lGODlhAQABAAAAACw=");
+      check("an image that isn't a PNG or JPEG is refused in plain words", panel.attachments.length === 1 && told.some((t) => /isn't a PNG or JPEG/.test(t)), told);
+      const shot = path.join(ws, "fx-shot.png");
+      fs.writeFileSync(shot, png(30, 20, () => [0, 0, 255]));
+      await panel.attachFiles([vscode.Uri.file(shot)]);
+      check("the paperclip takes a PNG as an image", panel.attachments[1]?.kind === "image" && panel.attachments[1].name === "fx-shot.png" && panel.attachments[1].width === 30, panel.attachments);
+      await panel.openAttachment(panel.attachments[1].id);
+      check("clicking an image's chip opens it (the copy that's sent)", vscode.window.tabGroups.activeTabGroup.activeTab?.label === panel.attachments[1].file, vscode.window.tabGroups.activeTabGroup.activeTab?.label);
+      // Sent with a Tool model: the images go to the engine, their names in the message's context.
+      const realAsk = panel.engine.ask;
+      let asked = null;
+      panel.engine.ask = async (chat, text, extra) => { asked = { text, extra }; };
+      try {
+        await panel.send({ text: "What colours are these?" });
+        check("sent with a Tool model, the images go with the message, and the message says so",
+          asked?.extra?.images?.length === 2 && asked.extra.images.every((i) => /^[0-9a-f]{24}\.png$/.test(i.file)) && /Attached image: Pasted image, 64×40/.test(asked.extra.context)
+            && /Attached image: fx-shot\.png, 30×20/.test(asked.extra.context) && panel.attachments.length === 0, asked);
+        // An Assist model: an image isn't taken, and one already there doesn't go (your words come back).
+        await config.update("assistModels", ["model-assist"], own.ConfigurationTarget.Global);
+        panel.chat.model = "model-assist";
+        told.length = 0;
+        panel.attachImage("data:image/png;base64," + red.toString("base64"));
+        check("an Assist model: a pasted image isn't taken, and you're told why", panel.attachments.length === 0 && told.some((t) => /Assist model, which reads text only/.test(t)), told);
+        panel.chat.model = "model-a";
+        panel.attachImage("data:image/png;base64," + red.toString("base64"));
+        panel.chat.model = "model-assist";
+        asked = null;
+        posted.length = 0;
+        told.length = 0;
+        await panel.send({ text: "And this one?" });
+        check("an image waiting when the chat is on an Assist model: nothing is sent, the image stays, your words come back",
+          asked === null && panel.attachments.length === 1 && posted.some((m) => m.type === "restore" && m.text === "And this one?") && told.some((t) => /switch to a Tool model/.test(t)), [asked, told]);
+      } finally {
+        panel.engine.ask = realAsk;
+        panel.attachments = [];
+        await config.update("assistModels", undefined, own.ConfigurationTarget.Global);
+      }
+      // What the engine is given for a kept image: its data, read back by its name only.
+      const url = panel.host().imageUrl({ file: pasted.file });
+      check("the engine is given a kept image as a data URL, and nothing for a name Solder didn't give",
+        url === "data:image/png;base64," + red.toString("base64") && panel.host().imageUrl({ file: "../fx-shot.png" }) === null, String(url).slice(0, 60));
+    }
   } finally {
     own.window.showInformationMessage = oldInfo;
   }

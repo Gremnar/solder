@@ -9,11 +9,11 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { RULES, TOOLS, READ_ONLY, TEXTS, RESULTS, STARTERS, SELECTION, SKILL, CONTEXT, PROBE, systemPrompt, toolDefinitions, timeNote, ASSIST, assistText } = require("../src/prompt.js");
 
-const PINNED = "07e61fcbbf781b0b";
+const PINNED = "c0b50fde2df6b0e6";
 
 /** Sample arguments for every text that's a function: name → a list of argument lists. */
 const SAMPLES = {
-  notRunBatch: [[8]], resumeLimit: [[30]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
+  imageGone: [["Pasted image"]], notRunBatch: [[8]], resumeLimit: [[30]], userNote: [["NOTE"]], unknownTool: [["nope", ["a", "b"]]],
   missing: [["edit_file", ["path"]], ["edit_file", ["old_text", "new_text"], ["old_string", "new_string"]]], ignored: [["read_file", ["offset"]], ["read_file", ["offset", "limit", "mode"]]],
   wrongType: [["read_file", "start_line", "integer"], ["search", "regex", "boolean"], ["search", "query", "string"]],
   wrapUp: [[0], [1], [3]], steer: [["STEER"]], titleRequest: [["EXCERPT"]], compactionFocus: [["FOCUS"]], stub: [["SUMMARY"]], superseded: [["SUMMARY"]], writtenOver: [["SUMMARY"]], resultCut: [[12345]],
@@ -65,7 +65,8 @@ function everything() {
     readOnlyTools: toolDefinitions(true),
     starters: STARTERS,
     context: [CONTEXT.workingIn("src"), CONTEXT.openFile("a.js"), CONTEXT.selected("a.js", 1, 2, "js", "X", "```"), CONTEXT.cutShort, CONTEXT.undid("a.js", "Edited a.js"),
-      CONTEXT.pasted(132, "LOG", "```"), CONTEXT.pasted(1, "LOG", "```"), CONTEXT.attached("app.log", 320, "LOG", "````"), CONTEXT.attachedPath("logs/big.log", 5000), CONTEXT.pastedPath("C:\\store\\pastes\\abc.txt", 5000), CONTEXT.attachedOnly],
+      CONTEXT.pasted(132, "LOG", "```"), CONTEXT.pasted(1, "LOG", "```"), CONTEXT.attached("app.log", 320, "LOG", "````"), CONTEXT.attachedPath("logs/big.log", 5000), CONTEXT.pastedPath("C:\\store\\pastes\\abc.txt", 5000), CONTEXT.attachedOnly,
+      CONTEXT.image("Pasted image", 1920, 1080), CONTEXT.image("chart.png", 0, 0)],
     selection: { explain: SELECTION.explain, fix: SELECTION.fix, problems: SELECTION.problems(["- line 3: X"]) },
     skill: [SKILL.fromChat, SKILL.about("WHAT"), SKILL.interview],
     texts: filled(TEXTS, SAMPLES, "TEXTS"),

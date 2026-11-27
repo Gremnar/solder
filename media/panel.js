@@ -277,6 +277,7 @@
   }
 
   const ICONS = {
+    image: `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="m3 11.5 3.2-3.2 2.3 2.3 1.6-1.6 3.4 3.4"/><circle cx="10.5" cy="6" r="1"/></svg>`,
     pencil: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.6 3.4l2 2L6 12H4v-2zM9.4 4.6l2 2"/></svg>`,
     clip: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.9 4.6 6.2 9.3a1.3 1.3 0 0 0 1.9 1.9l4.6-4.7a2.6 2.6 0 0 0-3.7-3.7L4.3 7.5a3.9 3.9 0 0 0 5.5 5.5l3.6-3.6"/></svg>`,
     clipboard: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5h-2v10h9v-10h-2M5.5 2.5h5v2h-5zM5.5 7.5h5M5.5 10h3.5"/></svg>`,
@@ -1248,10 +1249,11 @@
       // What it will cost: sent whole, about that many tokens with this message and again with every step of the
       // task; by its path, only the lines the model reads.
       const cost = a.byPath ? "by path" : a.tokens ? `~${compact(a.tokens)} tokens` : "";
-      const why = a.byPath ? "Too long to send whole with the rest: Solder reads the lines it needs from it, so it costs only what's read."
+      const why = a.image ? `An image, for the model to look at: about ${Number(a.tokens).toLocaleString("en-US")} tokens with your message and again with each step of the task, then about ${Number(a.later).toLocaleString("en-US")} a step in later ones (sent at low detail).`
+        : a.byPath ? "Too long to send whole with the rest: Solder reads the lines it needs from it, so it costs only what's read."
         : a.tokens ? `Sent whole: about ${Number(a.tokens).toLocaleString("en-US")} tokens with your message, and again with each step of the task.` : "";
       chips.push(`<button class="chip on attached" data-open-attachment="${escape(a.id)}" title="${escape(a.peek || "")}&#10;&#10;${escape(why)}&#10;Goes with your next message. Click to look at it.">` +
-        `${a.paste ? ICONS.clipboard : ICONS.clip}${escape(a.label)}${cost ? `<span class="cost"> · ${escape(cost)}</span>` : ""}</button>` +
+        `${a.image ? ICONS.image : a.paste ? ICONS.clipboard : ICONS.clip}${escape(a.label)}${cost ? `<span class="cost"> · ${escape(cost)}</span>` : ""}</button>` +
         `<button class="chip clear" data-remove-attachment="${escape(a.id)}" title="Don't send it" aria-label="Remove ${escape(a.label)}">✕</button>`);
     }
     if (chips.join("") !== shownChips) {
@@ -2105,8 +2107,53 @@
     return text.length > PASTE_CHIP_CHARS || text.split("\n").length > PASTE_CHIP_LINES;
   }
 
+  /**
+   * A pasted image goes to the extension as a PNG or JPEG. A big one is made smaller first, as a JPEG no wider or taller
+   * than IMAGE_SIDE: that only makes it quicker to send (a model is charged about the same for an image of any size).
+   */
+  const IMAGE_SIDE = 2560;
+  const IMAGE_BYTES = 1_500_000;
+  /** @param {File} file */
+  async function attachImage(file) {
+    const url = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    /** @type {HTMLImageElement} */
+    const picture = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("unreadable"));
+      img.src = url;
+    });
+    const width = picture.naturalWidth, height = picture.naturalHeight;
+    const big = file.size > IMAGE_BYTES || Math.max(width, height) > IMAGE_SIDE;
+    let data = url;
+    if (big || !/^data:image\/(png|jpeg);base64,/.test(url)) {
+      const scale = Math.min(1, IMAGE_SIDE / Math.max(width, height, 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      if (big) { g.fillStyle = "#ffffff"; g.fillRect(0, 0, canvas.width, canvas.height); } // a JPEG has no see-through parts
+      g.drawImage(picture, 0, 0, canvas.width, canvas.height);
+      data = big ? canvas.toDataURL("image/jpeg", 0.9) : canvas.toDataURL("image/png");
+    }
+    vscode.postMessage({ type: "attachImage", data, name: "Pasted image" });
+  }
+
   input.addEventListener("paste", (event) => {
     const text = event.clipboardData?.getData("text/plain") || "";
+    // An image with no text alongside it (a screenshot; copying from an Office file brings text too, and the text is kept).
+    const images = [...(event.clipboardData?.files || [])].filter((file) => /^image\//.test(file.type));
+    if (state && !state.setup && !state.settings && images.length && !text.trim()) {
+      event.preventDefault();
+      for (const file of images.slice(0, 10)) attachImage(file).catch(() => vscode.postMessage({ type: "attachImage", data: "", name: "Pasted image" }));
+      announce(images.length === 1 ? "Image attached" : `${images.length} images attached`);
+      return;
+    }
     if (!state || state.setup || state.settings || !pasteAsChip(text)) return;
     event.preventDefault();
     vscode.postMessage({ type: "attachPaste", text });

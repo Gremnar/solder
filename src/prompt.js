@@ -189,6 +189,8 @@ function listed(items) {
 }
 
 const TEXTS = {
+  /** An image attached to a message that's no longer in Solder's storage (kept 90 days): said in its place. */
+  imageGone: (/** @type {string} */ name) => `(An image was attached here, ${name}, but it isn't available any more.)`,
   notRun: "Not run: an earlier call in this reply failed or was declined, so this one was skipped.",
   /** A later change to a file whose earlier change in the same reply failed (changes to other files went ahead). */
   notRunSameFile: "Not run: an earlier change to this file in the same reply failed, so this one was skipped. Get that \
@@ -485,6 +487,9 @@ const CONTEXT = {
   /** Pasted text too long to send whole with everything else attached: saved, and read from there (no approval needed). */
   pastedPath: (/** @type {string} */ file, /** @type {number} */ lines) =>
     `(Pasted text, ${lines.toLocaleString("en-US")} lines: too long to send whole. It's saved as ${file}. To find something in it, search with this path; read the parts you need with read_file, which takes a range of lines.)`,
+  /** An image pasted or attached: it follows your message, as an image. */
+  image: (/** @type {string} */ name, /** @type {number} */ width, /** @type {number} */ height) =>
+    `(Attached image: ${name}${width && height ? `, ${width}×${height}` : ""}.)`,
   /** Sent as your message when you attach something and type nothing. */
   attachedOnly: "(See what I've attached.)",
   undid: (/** @type {string} */ file, /** @type {string} */ step) => `(I undid your change to ${file}: ${step}.)`,
