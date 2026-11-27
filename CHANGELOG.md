@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.20 (2026-11-27)
 
 - **More in the Command Palette.** Type *Solder* in the Command Palette for what the slash commands and the panel's bar do: **Rename**, **Fork** and **Summarise this chat**, **Review changes since the last commit**, **Attach files to the next message**, **Switch this chat's model** and **Set this chat's effort** (each a list to pick from), **Open settings**, **Projects**, and for the pet, **Show or hide the pet** and **Choose a pet** (Bit, Flux or Wisp, its corner on or off, or hiding it). Each brings Solder's panel up first, so you see what it did.
 
