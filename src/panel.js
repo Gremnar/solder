@@ -29,6 +29,8 @@ const { documentText, isOffice, decodeText, withoutSignatures } = require("./doc
 const os = require("node:os");
 /** The pets' names (the panel's own script, media/pet.js, has the pets), and where your choice of one is kept. */
 const PET_NAMES = /** @type {string[]} */ (require("../media/pet.js").NAMES);
+/** Each pet's own name ("Bit"), for the Command Palette. */
+const PET_TITLES = /** @type {Record<string, string>} */ (Object.fromEntries(Object.entries(require("../media/pet.js").PETS).map(([key, p]) => [key, /** @type {any} */ (p).name])));
 const PET_KEY = "solder.pet";
 
 const READ_ONLY_LOCKED = "Your organization keeps Solder in read-only mode, so it can't change files.";
@@ -1563,6 +1565,19 @@ class SolderPanel {
     }
   }
 
+  /** The Command Palette's Choose a pet: each pet, its corner on or off, and hiding it. */
+  async choosePet() {
+    const now = this.pet();
+    const about = /** @type {Record<string, string>} */ ({ bit: "a robot at a workbench", flux: "a cat on a shelf", wisp: "a ghost in a night sky" });
+    /** @type {(vscode.QuickPickItem & {word?: string})[]} */
+    const items = PET_NAMES.map((name) => ({ label: PET_TITLES[name] || name, description: (about[name] || "") + (now.on && now.pet === name ? " · showing" : ""), word: name }));
+    items.push({ label: "", kind: vscode.QuickPickItemKind.Separator },
+      { label: now.corner ? "Take its corner away" : "Give it its corner back", description: "the little scene behind it", word: "corner" });
+    if (now.on) items.push({ label: "Hide the pet", word: "off" });
+    const picked = await vscode.window.showQuickPick(items, { title: "Solder's pet: a small companion over the chat's top right corner" });
+    if (picked?.word) await this.command("pet", picked.word);
+  }
+
   /**
    * The pet (/pet): whether it's showing, which one, and whether it has its corner. Yours on this machine, in every
    * window; off until you ask for it. @returns {{ on: boolean, pet: string, corner: boolean }}
@@ -1630,6 +1645,17 @@ class SolderPanel {
         return;
       }
       case "model": {
+        // No name (from the Command Palette: the panel opens its own menu for a bare /model): a list to pick from.
+        if (!arg) {
+          const settings = this.settings();
+          if (settings.modelLocked) return info("Your organization sets Solder's model, so it can't be changed here.");
+          if (!this.models.length) return info("No models are listed yet. Check the connection (Solder: Check connection), or refresh the models from the panel's … menu.");
+          const current = this.chat.model || settings.model;
+          const picked = await vscode.window.showQuickPick(this.models.map((m) => ({ label: m.name, description: [m.id !== m.name ? m.id : "",
+            laneOf(m.id, settings) === "assist" ? "Assist: free, slower, no thinking level" : "", m.id === current ? "(this chat's)" : ""].filter(Boolean).join(" · "), id: m.id })),
+          { title: "This chat's model", matchOnDescription: true });
+          return picked ? this.onMessage({ type: "model", id: picked.id }) : undefined;
+        }
         const wanted = arg.toLowerCase();
         const exact = this.models.filter((m) => m.id.toLowerCase() === wanted || m.name.toLowerCase() === wanted);
         const partial = this.models.filter((m) => m.id.toLowerCase().includes(wanted) || m.name.toLowerCase().includes(wanted));

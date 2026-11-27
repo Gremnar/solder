@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **More in the Command Palette.** Type *Solder* in the Command Palette for what the slash commands and the panel's bar do: **Rename**, **Fork** and **Summarise this chat**, **Review changes since the last commit**, **Attach files to the next message**, **Switch this chat's model** and **Set this chat's effort** (each a list to pick from), **Open settings**, **Projects**, and for the pet, **Show or hide the pet** and **Choose a pet** (Bit, Flux or Wisp, its corner on or off, or hiding it). Each brings Solder's panel up first, so you see what it did.
+
 - **Images, for Tool models.** Paste a screenshot into the box, or attach a PNG or JPEG with the paperclip, and the model sees it with your message. Every image costs about 1,100 tokens whatever its size, and is sent again with each step like the rest of the chat; it goes at full detail during the task it came with, and at low detail (about 300 tokens) in later ones. A big screenshot is made smaller (a JPEG no more than 2,560 pixels across) before it goes, which only makes it quicker to send. Assist models read text only, so Solder won't send an image to one: it says so and puts your words back in the box. Images are kept in Solder's storage, not in the chat file, and removed 90 days after they were last attached; one that's gone is named in its place. While Solder is working, an image waits above the box for your next message (what you add mid-reply goes as text).
 
 ## 0.3.19 (2026-11-26)

@@ -134,6 +134,24 @@ async function activate(context) {
       await vscode.commands.executeCommand("solder.chat.focus");
       await panel.onMessage({ type: "new" });
     }),
+    // What the panel's slash commands and buttons do, from the Command Palette too. Each brings the panel up first,
+    // so what it does is in sight.
+    ...Object.entries({
+      "solder.togglePet": () => panel.command("pet", ""),
+      "solder.choosePet": () => panel.choosePet(),
+      "solder.openSettings": () => panel.command("settings", ""),
+      "solder.openProjects": () => panel.onMessage({ type: "projects" }),
+      "solder.attachFiles": () => panel.onMessage({ type: "attach" }),
+      "solder.switchModel": () => panel.command("model", ""),
+      "solder.setEffort": () => panel.command("effort", ""),
+      "solder.renameChat": () => panel.command("rename", ""),
+      "solder.forkChat": () => panel.command("fork", ""),
+      "solder.compactChat": () => panel.command("compact", ""),
+      "solder.reviewChanges": () => panel.command("review", ""),
+    }).map(([id, run]) => vscode.commands.registerCommand(id, async () => {
+      await vscode.commands.executeCommand("solder.chat.focus");
+      await run();
+    })),
   );
 }
 

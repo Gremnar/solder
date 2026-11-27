@@ -149,6 +149,36 @@ async function main() {
         !!nonce && page.includes(`<script nonce="${nonce[1]}" src="`) && /src="[^"]*media\/pet[.]js"><\/script>/.test(page) && !page.includes("{{"), page.slice(-400));
     }
 
+    // ---- The Command Palette: every command Solder lists is one it has, and the pet's work through the real panel.
+    {
+      const listed = ext.packageJSON.contributes.commands.map((c) => c.command);
+      const have = new Set(await vscode.commands.getCommands(true));
+      const missing = listed.filter((id) => !have.has(id));
+      check("every command in Solder's list is registered", missing.length === 0, missing);
+      const realPick = own.window.showQuickPick;
+      const shown = [];
+      let answer = (items) => items.find((i) => i.word === "flux");
+      own.window.showQuickPick = async (items, options) => { const list = await items; shown.push({ list, options }); return answer(list); };
+      try {
+        await vscode.commands.executeCommand("solder.choosePet");
+        answer = () => undefined;
+        await vscode.commands.executeCommand("solder.choosePet");
+        const picked = shown[1]?.list || [];
+        check("Choose a pet lists the three, and shows the one picked as showing, with Hide the pet",
+          ["Bit", "Flux", "Wisp"].every((n) => picked.some((i) => i.label === n)) && /showing/.test(picked.find((i) => i.label === "Flux")?.description || "")
+            && picked.some((i) => i.label === "Hide the pet"), picked.map((i) => `${i.label} ${i.description || ""}`));
+        await vscode.commands.executeCommand("solder.togglePet");
+        await vscode.commands.executeCommand("solder.choosePet");
+        const after = shown[2]?.list || [];
+        check("Show or hide the pet hides it", after.length > 0 && !after.some((i) => /showing/.test(i.description || "")) && !after.some((i) => i.label === "Hide the pet"),
+          after.map((i) => `${i.label} ${i.description || ""}`));
+        await vscode.commands.executeCommand("solder.setEffort");
+        check("Set this chat's effort offers the levels", JSON.stringify(shown[3]?.list) === JSON.stringify(["default", "low", "medium", "high"]), shown[3]?.list);
+      } finally {
+        own.window.showQuickPick = realPick;
+      }
+    }
+
     // ---- Images: pasted (a data URL from the panel) or attached (the paperclip), kept in Solder's storage, sent with
     // the message for a Tool model; refused for an Assist model, whose words go back in the box.
     {
